@@ -45,6 +45,7 @@ prop_servo.actuation_range = 180
 #pwm = pwmio.PWMOut(board.EXTERNAL_SERVO, frequency=50)
 #prop_servo = servo.ContinousServo(pwm, min_pulse = 700, max_pulse = 2300)
 #prop_servo = servo.ContinuousServo(pwm, min_pulse = 700, max_pulse = 2300)
+# use prop_servo.throttle = 0.0 to stop
 
 
 wavfiles = [
@@ -72,6 +73,59 @@ def play_Wav(filename):
     #led.duty_cycle = 65535  # Back to full brightness
     return
 
+def s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk):
+    t = [i * (total_time / (num_points - 1)) for i in range(num_points)]
+    dt = t[1] - t[0]
+
+    global max_vel
+    global max_pos
+    global velocity
+    global position
+
+    jerk = [0] * num_points
+    accel = [0] * num_points
+    velocity = [0] * num_points
+    position = [0] * num_points
+
+    phase_time = total_time / 7
+
+    for i in range(num_points):
+        if t[i] < phase_time:  # Phase 1
+            jerk[i] = max_jerk
+        elif t[i] < 2 * phase_time:  # Phase 2
+            jerk[i] = 0
+        elif t[i] < 3 * phase_time:  # Phase 3
+            jerk[i] = -max_jerk
+        elif t[i] < 4 * phase_time:  # Phase 4
+            jerk[i] = 0
+        elif t[i] < 5 * phase_time:  # Phase 5
+            jerk[i] = -max_jerk
+        elif t[i] < 6 * phase_time:  # Phase 6
+            jerk[i] = 0
+        else:  # Phase 7
+            jerk[i] = max_jerk
+
+        if i > 0:
+            accel[i] = accel[i-1] + jerk[i] * dt
+            velocity[i] = velocity[i-1] + accel[i] * dt
+            position[i] = position[i-1] + velocity[i] * dt
+
+    # Normalize profiles
+    max_vel = max(velocity)
+    max_pos = max(position)
+    velocity = [max_velocity * v / max_vel for v in velocity]
+    position = [max_velocity * total_time * p / max_pos for p in position]
+    
+set_once = 1
+
+if set_once == 1:
+    max_vel = 0
+    max_pos = 0
+    velocity = 0
+    position = []
+    
+
+
 play_once = 1
 
 while True:
@@ -97,21 +151,54 @@ while True:
         play_Wav(random.choice(wavfiles))
         #play_Wav(wavfiles[0])
         #time.sleep(10)
-        
-        
 
-    print("forward")
-    #prop_servo.throttle = 0.1
-    time.sleep(2)
-    print("stop")
-    #prop_servo.throttle = 0.0
-    time.sleep(2)
-    print("reverse")
-   # prop_servo.throttle = -0.1
-    time.sleep(2)
-    print("stop")
-    #prop_servo.throttle = 0.0
-    time.sleep(2)
+    #s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk): 
+    print("S curve")   
+    # Assuming you've calculated position[] from your S-curve profile
+    #print(max_vel)
+    #print("max position ", max_pos) 
+    #print(velocity)
+    #print(position)
+    if set_once == 1:
+        s_curve_profile(10, 2000, 0.5, 0.2, 0.1)
+        set_once = 0
+    #print(max_vel)
+    print(max_pos) 
+    #print(velocity)
+    print(position)
+    #for p in position:
+         # Map position to servo angle (0° to 180°)
+        #servo_angle = int((p / max_pos) * 90)
+        #print("max position ", max_pos) 
+        #print("servo angle ", servo_angle)
+        #if servo_angle > 90:
+            #print("here")
+            #time.sleep(10)
+        #else:
+            #prop_servo.angle = servo_angle
+            #time.sleep(10)
+    
+
+    #print("0")
+    #prop_servo.angle = 0
+    #time.sleep(10)
+    #print("90")
+    #prop_servo.angle = 90
+    #time.sleep(10)
+
+    #continous servo
+    #print("forward")
+    ##prop_servo.throttle = 0.1
+    #time.sleep(2)
+    #print("stop")
+    ##prop_servo.throttle = 0.0
+    #time.sleep(2)
+    #print("reverse")
+   ## prop_servo.throttle = -0.1
+    #time.sleep(2)
+    #print("stop")
+    ##prop_servo.throttle = 0.0
+    #time.sleep(2)
     
     
 
