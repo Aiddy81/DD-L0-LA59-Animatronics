@@ -9,6 +9,7 @@ import os
 import random
 from adafruit_motor import servo 
 import adafruit_lis3dh
+import classDef as classDef
 
 led = DigitalInOut(board.LED)
 led.direction = Direction.OUTPUT
@@ -115,6 +116,8 @@ def s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_
     max_pos = max(position)
     velocity = [max_velocity * v / max_vel for v in velocity]
     position = [max_velocity * total_time * p / max_pos for p in position]
+
+
     
 set_once = 1
 
@@ -124,7 +127,18 @@ if set_once == 1:
     velocity = 0
     position = []
     
+# s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk):
+# 10, 2000, 0.5, 0.2, 0.1)
+angryEmo =  classDef.emotion(10, 2000, 0.2, 0.2, 0.1, None, 1, 0, 0)
+angryEmo.totTime = 10
+angryEmo.numPoints = 2000
+angryEmo.maxVelocity = 0.2
+angryEmo.maxAcceleration = 0.2
+angryEmo.maxAcceleration = 0.1
+angryEmo.emotionType = 1
+angryEmo.position = angryEmo.sCurveProfile()
 
+#print(angryEmo.position)
 
 play_once = 1
 
@@ -153,19 +167,19 @@ while True:
         #time.sleep(10)
 
     #s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk): 
-    print("S curve")   
+    #print("S curve")   
     # Assuming you've calculated position[] from your S-curve profile
     #print(max_vel)
     #print("max position ", max_pos) 
     #print(velocity)
     #print(position)
     if set_once == 1:
-        s_curve_profile(10, 2000, 0.5, 0.2, 0.1)
+        #s_curve_profile(10, 2000, 0.5, 0.2, 0.1)
         set_once = 0
     #print(max_vel)
-    print(max_pos) 
+    #print(max_pos) 
     #print(velocity)
-    print(position)
+    #print(position)
     #for p in position:
          # Map position to servo angle (0° to 180°)
         #servo_angle = int((p / max_pos) * 90)
@@ -177,7 +191,17 @@ while True:
         #else:
             #prop_servo.angle = servo_angle
             #time.sleep(10)
-    
+    for p in angryEmo.position:
+        # Map position to servo angle (0° to 180°)
+        servo_angle = int((p / angryEmo.max_pos) * 90)
+        print("max position ", angryEmo.max_pos) 
+        print("servo angle ", servo_angle)
+        if servo_angle > 90:
+            print("here")
+            #time.sleep(10)
+        else:
+            prop_servo.angle = servo_angle
+            #time.sleep(10)
 
     #print("0")
     #prop_servo.angle = 0
