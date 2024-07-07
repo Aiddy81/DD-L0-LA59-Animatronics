@@ -128,13 +128,12 @@ if set_once == 1:
     position = []
     
 # s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk):
-# 10, 2000, 0.5, 0.2, 0.1)
-angryEmo =  classDef.emotion(10, 2000, 0.2, 0.2, 0.1, None, 1, 0, 0)
-angryEmo.totTime = 10
+angryEmo =  classDef.emotion(0, 0, 0.0, 0.0, 0.0, None, 1, 0, 0)
+angryEmo.totTime = 15
 angryEmo.numPoints = 2000
-angryEmo.maxVelocity = 0.2
-angryEmo.maxAcceleration = 0.2
+angryEmo.maxVelocity = 0.1
 angryEmo.maxAcceleration = 0.1
+angryEmo.maxJerk = 0.1
 angryEmo.emotionType = 1
 angryEmo.position = angryEmo.sCurveProfile()
 
@@ -193,15 +192,18 @@ while True:
             #time.sleep(10)
     for p in angryEmo.position:
         # Map position to servo angle (0° to 180°)
-        servo_angle = int((p / angryEmo.max_pos) * 90)
+        max_angle = 90
+        servo_angle = int((p / angryEmo.max_pos) * max_angle)
         print("max position ", angryEmo.max_pos) 
         print("servo angle ", servo_angle)
         if servo_angle > 90:
             print("here")
-            #time.sleep(10)
+            #time.sleep(2)
+        elif servo_angle < 0:
+            print("here2")
         else:
             prop_servo.angle = servo_angle
-            #time.sleep(10)
+            #time.sleep(2)
 
     #print("0")
     #prop_servo.angle = 0
