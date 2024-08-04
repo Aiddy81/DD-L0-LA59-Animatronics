@@ -74,70 +74,116 @@ def play_Wav(filename):
     #led.duty_cycle = 65535  # Back to full brightness
     return
 
-def s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk):
-    t = [i * (total_time / (num_points - 1)) for i in range(num_points)]
-    dt = t[1] - t[0]
+#def s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk):
+#    t = [i * (total_time / (num_points - 1)) for i in range(num_points)]
+#    dt = t[1] - t[0]
+#
+#    global max_vel
+#    global max_pos
+#    global velocity
+#    global position
+#
+#    jerk = [0] * num_points
+#    accel = [0] * num_points
+#    velocity = [0] * num_points
+#    position = [0] * num_points
+#
+#    phase_time = total_time / 7
+#
+#    for i in range(num_points):
+#        if t[i] < phase_time:  # Phase 1
+#            jerk[i] = max_jerk
+#        elif t[i] < 2 * phase_time:  # Phase 2
+#            jerk[i] = 0
+#        elif t[i] < 3 * phase_time:  # Phase 3
+#            jerk[i] = -max_jerk
+#        elif t[i] < 4 * phase_time:  # Phase 4
+#            jerk[i] = 0
+#        elif t[i] < 5 * phase_time:  # Phase 5
+#            jerk[i] = -max_jerk
+#        elif t[i] < 6 * phase_time:  # Phase 6
+#            jerk[i] = 0
+#        else:  # Phase 7
+#            jerk[i] = max_jerk
+#
+#        if i > 0:
+#            accel[i] = accel[i-1] + jerk[i] * dt
+#            velocity[i] = velocity[i-1] + accel[i] * dt
+#            position[i] = position[i-1] + velocity[i] * dt
+#
+#    # Normalize profiles
+#    max_vel = max(velocity)
+#    max_pos = max(position)
+#    velocity = [max_velocity * v / max_vel for v in velocity]
+#    position = [max_velocity * total_time * p / max_pos for p in position]
 
-    global max_vel
-    global max_pos
-    global velocity
-    global position
+#def calculate_s_curve_angles_orig():
+#    global time_list, theta_list
+#
+#    for i in range(num_points + 1):
+#        t = i * dt  # Current time
+#        time_list.append(t)
+#
+#        # Normalized time
+#        s = t / T
+#
+#        # Quintic polynomial for smooth S-curve
+#        # P(s) = 10s^3 - 15s^4 + 6s^5
+#        P = 10 * s**3 - 15 * s**4 + 6 * s**5
+#
+#        # Calculate the actual angle
+#        angle = theta_min + (theta_max - theta_min) * P
+#        theta_list.append(angle)
+#
+#    # Print the time and angle lists
+#    print("Time (s):", time_list)
+#    print("Angles (degrees):", theta_list)
 
-    jerk = [0] * num_points
-    accel = [0] * num_points
-    velocity = [0] * num_points
-    position = [0] * num_points
+def move_servo(servo):
 
-    phase_time = total_time / 7
+    # Move the servo according to the calculated angles
+    for angle in servo.theta_list:
+        prop_servo.angle = angle
+        time.sleep(servo.dt)
 
-    for i in range(num_points):
-        if t[i] < phase_time:  # Phase 1
-            jerk[i] = max_jerk
-        elif t[i] < 2 * phase_time:  # Phase 2
-            jerk[i] = 0
-        elif t[i] < 3 * phase_time:  # Phase 3
-            jerk[i] = -max_jerk
-        elif t[i] < 4 * phase_time:  # Phase 4
-            jerk[i] = 0
-        elif t[i] < 5 * phase_time:  # Phase 5
-            jerk[i] = -max_jerk
-        elif t[i] < 6 * phase_time:  # Phase 6
-            jerk[i] = 0
-        else:  # Phase 7
-            jerk[i] = max_jerk
-
-        if i > 0:
-            accel[i] = accel[i-1] + jerk[i] * dt
-            velocity[i] = velocity[i-1] + accel[i] * dt
-            position[i] = position[i-1] + velocity[i] * dt
-
-    # Normalize profiles
-    max_vel = max(velocity)
-    max_pos = max(position)
-    velocity = [max_velocity * v / max_vel for v in velocity]
-    position = [max_velocity * total_time * p / max_pos for p in position]
-
+    for angle in reversed(servo.theta_list):
+        prop_servo.angle = angle
+        time.sleep(servo.dt)
+    
 
     
 set_once = 1
 
 if set_once == 1:
-    max_vel = 0
-    max_pos = 0
-    velocity = 0
-    position = []
+    #here
+    print("")
+
     
 # s_curve_profile(total_time, num_points, max_velocity, max_acceleration, max_jerk):
-angryEmo =  classDef.emotion(0, 0, 0.0, 0.0, 0.0, None, 1, 0, 0)
-angryEmo.totTime = 15
-angryEmo.numPoints = 2000
-angryEmo.maxVelocity = 0.1
-angryEmo.maxAcceleration = 0.1
-angryEmo.maxJerk = 0.1
-angryEmo.emotionType = 1
-angryEmo.position = angryEmo.sCurveProfile()
+wingLeft =  classDef.servoMotion(0, 90, 10, 100, 10, 10, [], [])
+# Define the parameters
+wingLeft.theta_min = 0  # Minimum angle (in degrees)
+wingLeft.theta_max = 90  # Maximum angle (in degrees)
+wingLeft.T = 20  # Total duration of the motion (in seconds)
+wingLeft.num_points = 100  # Number of points to calculate in the trajectory
+wingLeft.acceleration = 10  # Acceleration (degrees/second^2)
+wingLeft.jerk = 10  # Jerk (degrees/second^3)
+
+wingLeft.calculate_s_curve_angles()
+
+#scurve(wingLeft.min_angle,wingLeft.max_angle, wingLeft.totTime, wingLeft.maxAcceleration) 
 
 #print(angryEmo.position)
+
+
+
+# Time step based on the number of points
+#dt = T / num_points
+
+# Define global variables
+#time_list = []
+#theta_list = []
+
 
 play_once = 1
 
@@ -173,15 +219,51 @@ while True:
     #print(velocity)
     #print(position)
     if set_once == 1:
-        #s_curve_profile(10, 2000, 0.5, 0.2, 0.1)
+        #wingLeft.s_curve_profile(10, 2000, 0.5, 0.2, 0.1)
         set_once = 0
     #print(max_vel)
     #print(max_pos) 
     #print(velocity)
     #print(position)
-    #for p in position:
-         # Map position to servo angle (0° to 180°)
-        #servo_angle = int((p / max_pos) * 90)
+    #for p in wingLeft.position:
+    #    # Map position to servo angle (0° to 180°)
+    #    #servo_angle = int((p / max_pos) * 90)
+    #    lServoAngle = wingLeft.min_angle + (wingLeft.max_angle - wingLeft.min_angle) * p
+    #    print(lServoAngle)
+
+    # First calculate the S-curve angles
+    #calculate_s_curve_angles()
+
+    # Then move the servo using the calculated angles
+    #move_servo(wingLeft)
+    #wingLeft.time_list = []
+    #wingLeft.theta_list = []
+
+    prop_servo.angle = 0
+    prop_servo.angle = 90
+    time.sleep(1)
+    prop_servo.angle = 70
+    time.sleep(1)
+    prop_servo.angle = 0
+
+
+
+    #wingLeft.position =[]
+    #prop_servo.angle = lServoAngle
+    #wingLeft.totTime = 2
+    #wingLeft.numPoints = 100
+    #wingLeft.maxVelocity = 1
+    #wingLeft.maxAcceleration = 1
+    #wingLeft.maxJerk = 1
+    #wingLeft.emotionType = 1
+    #wingLeft.min_angle = 0
+    #wingLeft.max_angle = 50 #FIXME 180 scales to 90 degrees
+    #wingLeft.position = wingLeft.sCurveProfile()
+    #for p in wingLeft.position:
+    #    # Map position to servo angle (0° to 180°)
+    #    #servo_angle = int((p / max_pos) * 90)
+    #    lServoAngle = wingLeft.min_angle + (wingLeft.max_angle - wingLeft.min_angle) * p
+    #    print("M2 " + str(lServoAngle))
         #print("max position ", max_pos) 
         #print("servo angle ", servo_angle)
         #if servo_angle > 90:
@@ -190,20 +272,28 @@ while True:
         #else:
             #prop_servo.angle = servo_angle
             #time.sleep(10)
-    for p in angryEmo.position:
+    #print(wingLeft.position)
+    #for a in angles:
+        #prop_servo.angle = a
+        #time.sleep(1)
+   # for p in wingLeft.position:
         # Map position to servo angle (0° to 180°)
-        max_angle = 90
-        servo_angle = int((p / angryEmo.max_pos) * max_angle)
-        print("max position ", angryEmo.max_pos) 
-        print("servo angle ", servo_angle)
-        if servo_angle > 90:
-            print("here")
-            #time.sleep(2)
-        elif servo_angle < 0:
-            print("here2")
-        else:
-            prop_servo.angle = servo_angle
-            #time.sleep(2)
+        #max_angle = 30
+        #servo_angle = int((p / wingLeft.max_pos) * max_angle)
+   #     servo_angle = int(p / wingLeft.max_angle)
+        #print(servo_angle)
+   #     prop_servo.angle =  servo_angle
+        #time.sleep(10)
+    #    print("max position ", wingLeft.max_pos) 
+    #    print("servo angle ", servo_angle)
+        #if servo_angle > max_angle:
+        #    print("here")
+        #    #time.sleep(2)
+        #elif servo_angle < min_angle:
+        #    print("here2")
+        #else:
+        #    prop_servo.angle = servo_angle
+        #    #time.sleep(2)
 
     #print("0")
     #prop_servo.angle = 0
