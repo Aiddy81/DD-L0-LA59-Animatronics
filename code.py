@@ -48,6 +48,8 @@ lis3dh.range = adafruit_lis3dh.RANGE_2_G
 pause_breathing = asyncio.Event()
 pause_breathing.clear()  # Start with breathing enabled
 
+motion_count = 0  # Add this global variable at the top
+
 wavfiles = [
     file
     for file in os.listdir("sounds/")
@@ -74,20 +76,25 @@ async def play_Wav(filename):
     return
 
 async def motion_sense():
-    """Detects motion and plays a sound when motion is detected."""
+    global motion_count
     while True:
         x, y, z = [
             value / adafruit_lis3dh.STANDARD_GRAVITY for value in lis3dh.acceleration
         ]
-        if z < 0 or z > 1.1:
-            print("Motion detected! Playing sound.")
-            pause_breathing.set()  # Pause ambient breathing
-            await play_Wav(random.choice(wavfiles))
-            await asyncio.gather(
-                move_s1(2),
-                move_s2(2)
-            )
-            pause_breathing.clear()  # Resume ambient breathing
+        hard_motion = abs(z) > 2.5
+
+        if z < 0 or z > 1.1 or hard_motion:
+            motion_count += 1
+            print(f"Motion detected! Count: {motion_count}")
+            pause_breathing.set()
+
+            if motion_count >= 3 or hard_motion:
+                await angry_animation()
+                motion_count = 0
+            else:
+                await loving_boops()  
+
+            pause_breathing.clear()
         await asyncio.sleep(0.1)
 
 
@@ -127,6 +134,29 @@ async def ambient_breathing(period=4, angle_min=20, angle_max=70):
         kit.servo[1].angle = angle
         await asyncio.sleep(0.1)
         t += 0.05
+
+async def angry_animation():
+    """Moves servos in an 'angry' rapid flapping pattern."""
+    print("ANGRY ANIMATION!")
+    for _ in range(6):  # 3 fast up/down cycles
+        kit.servo[0].angle = 90
+        kit.servo[1].angle = 90
+        await asyncio.sleep(0.1)
+        kit.servo[0].angle = 0
+        kit.servo[1].angle = 0
+        await asyncio.sleep(0.1)
+
+async def loving_boops():
+    """Moves servos in a gentle, cuddly 'boop' animation."""
+    print("LOVING BOOP ANIMATION!")
+    # Wings gently open, pause, then close
+    for _ in range(2):  # Two gentle boops
+        kit.servo[0].angle = 70
+        kit.servo[1].angle = 70
+        await asyncio.sleep(0.3)
+        kit.servo[0].angle = 20
+        kit.servo[1].angle = 20
+        await asyncio.sleep(0.3)
 
 async def main():
     """Main function to run all tasks concurrently."""
