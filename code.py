@@ -14,6 +14,7 @@ import adafruit_lis3dh
 import classDef as classDef
 import asyncio
 import math
+import random
 from adafruit_servokit import ServoKit
 kit = ServoKit(channels=8)
 kit.servo[0].set_pulse_width_range(544, 2400)
@@ -47,8 +48,15 @@ lis3dh.range = adafruit_lis3dh.RANGE_2_G
 
 pause_breathing = asyncio.Event()
 pause_breathing.clear()  # Start with breathing enabled
+reset_idle_event = asyncio.Event()
 
-motion_count = 0  # Add this global variable at the top
+# Global Variables for functions
+motion_count = 0  # This variable counts the number of motion events detected, 
+                  # and is used to trigger angry animation. 
+IDLE_MIN_SECONDS = 5 * 60    # 5 minutes # Minimum idle time before triggering idle animation
+IDLE_MAX_SECONDS = 30 * 60   # 30 minutes # Maximum idle time before triggering idle animation
+ANGRY_MIN_WINDOW = 1 * 60    # 1 minute (in seconds)
+ANGRY_MAX_WINDOW = 3 * 60    # 3 minutes (in seconds)
 
 wavfiles = [
     file
@@ -77,13 +85,25 @@ async def play_Wav(filename):
 
 async def motion_sense():
     global motion_count
+    angry_window_start = time.monotonic()
+    angry_window_length = random.uniform(ANGRY_MIN_WINDOW, ANGRY_MAX_WINDOW)
+    print(f"Angry window starts at {angry_window_start} for {angry_window_length:.2f} seconds")
     while True:
         x, y, z = [
             value / adafruit_lis3dh.STANDARD_GRAVITY for value in lis3dh.acceleration
         ]
         hard_motion = abs(z) > 2.5
 
+        now = time.monotonic()
+        # Reset the angry window if time expired
+        if now - angry_window_start > angry_window_length:
+            motion_count = 0
+            angry_window_start = now
+            angry_window_length = random.uniform(ANGRY_MIN_WINDOW, ANGRY_MAX_WINDOW)
+            print("Angry window expired, motion_count reset.")
+
         if z < 0 or z > 1.1 or hard_motion:
+            reset_idle_event.set()  # <-- Reset idle timer!
             motion_count += 1
             print(f"Motion detected! Count: {motion_count}")
             pause_breathing.set()
@@ -91,36 +111,40 @@ async def motion_sense():
             if motion_count >= 3 or hard_motion:
                 await angry_animation()
                 motion_count = 0
+                # Reset the angry window after triggering
+                angry_window_start = time.monotonic()
+                angry_window_length = random.uniform(ANGRY_MIN_WINDOW, ANGRY_MAX_WINDOW)
+                print("Angry animation triggered, motion_count reset and window restarted.")
             else:
                 await loving_boops()  
 
             pause_breathing.clear()
         await asyncio.sleep(0.1)
 
-
-async def move_s1(duration):
-    """Moves servo 1 in a breath motion."""
-    wingLeft = classDef.servoMotion(0, 90, 0.5, 1, 10, 10, [], [])
-    wingLeft.calculate_s_curve_angles()
-    while duration > 0:
-        for angle in wingLeft.theta_list:
-            kit.servo[0].angle = angle
-            await asyncio.sleep(wingLeft.dt)
-            duration -= 1
-        if duration <= 0:
-            break
-
-async def move_s2(duration):
-    """Moves servo 2 in a breath motion."""
-    wingRight = classDef.servoMotion(0, 90, 0.5, 1, 10, 10, [], [])
-    wingRight.calculate_s_curve_angles()
-    while duration > 0:
-        for angle in wingRight.theta_list:
-            kit.servo[1].angle = angle
-            await asyncio.sleep(wingRight.dt)
-            duration -= 1
-        if duration <= 0:
-            break
+# For Debugging and experimention
+#async def move_s1(duration):
+#    """Moves servo 1 in a breath motion."""
+#    wingLeft = classDef.servoMotion(0, 90, 0.5, 1, 10, 10, [], [])
+#    wingLeft.calculate_s_curve_angles()
+#    while duration > 0:
+#        for angle in wingLeft.theta_list:
+#            kit.servo[0].angle = angle
+#            await asyncio.sleep(wingLeft.dt)
+#            duration -= 1
+#        if duration <= 0:
+#            break
+#
+#async def move_s2(duration):
+#    """Moves servo 2 in a breath motion."""
+#    wingRight = classDef.servoMotion(0, 90, 0.5, 1, 10, 10, [], [])
+#    wingRight.calculate_s_curve_angles()
+#    while duration > 0:
+#        for angle in wingRight.theta_list:
+#            kit.servo[1].angle = angle
+#            await asyncio.sleep(wingRight.dt)
+#            duration -= 1
+#        if duration <= 0:
+#            break
 
 async def ambient_breathing(period=4, angle_min=20, angle_max=70):
     """Smoothly moves both wings up and down in a breathing pattern, pausing when needed."""
@@ -149,6 +173,7 @@ async def angry_animation():
 async def loving_boops():
     """Moves servos in a gentle, cuddly 'boop' animation."""
     print("LOVING BOOP ANIMATION!")
+    await play_Wav("006.wav")
     # Wings gently open, pause, then close
     for _ in range(2):  # Two gentle boops
         kit.servo[0].angle = 70
@@ -158,16 +183,46 @@ async def loving_boops():
         kit.servo[1].angle = 20
         await asyncio.sleep(0.3)
 
+async def attention_animation():
+    """Moves servos and plays a sound to grab attention when idle."""
+    print("ATTENTION ANIMATION!")
+    await play_Wav("002.wav") 
+    for _ in range(4):
+        kit.servo[0].angle = 90
+        kit.servo[1].angle = 0
+        await asyncio.sleep(0.2)
+        kit.servo[0].angle = 0
+        kit.servo[1].angle = 90
+        await asyncio.sleep(0.2)
+    kit.servo[0].angle = 45
+    kit.servo[1].angle = 45
+
+async def idle_attention():
+    """Waits for a random idle period, then grabs attention if no interaction."""
+    while True:
+        wait_time = random.uniform(IDLE_MIN_SECONDS, IDLE_MAX_SECONDS)
+        print(f"Waiting for idle period: {wait_time:.2f} seconds")
+        try:
+            # Wait for either the timer or a reset event
+            await asyncio.wait_for(reset_idle_event.wait(), timeout=wait_time)
+            reset_idle_event.clear()  # Reset for next cycle
+        except asyncio.TimeoutError:
+            # Timer expired: do the attention animation
+            pause_breathing.set()
+            await attention_animation()
+            pause_breathing.clear()
+
 async def main():
     """Main function to run all tasks concurrently."""
-    # Create tasks for each function
+    # Create tasks for each animation/function
     motion_sense_task = asyncio.create_task(motion_sense())
     play_Wav_task = asyncio.create_task(play_Wav(random.choice(wavfiles)))
     ambient_breathing_task = asyncio.create_task(ambient_breathing())
+    idle_attention_task = asyncio.create_task(idle_attention())
     #move_s1_task = asyncio.create_task(move_s1())
     #move_s2_task = asyncio.create_task(move_s2())
     
     # This will run forever, because no tasks ever finish.
-    await asyncio.gather(motion_sense_task, play_Wav_task, ambient_breathing_task)#, move_s1_task, move_s2_task)
+    await asyncio.gather(motion_sense_task, ambient_breathing_task, idle_attention_task)
 
 asyncio.run(main())
