@@ -146,7 +146,7 @@ async def motion_sense():
 #        if duration <= 0:
 #            break
 
-async def ambient_breathing(period=4, angle_min=20, angle_max=70):
+async def ambient_breathing(period=10, angle_min=50, angle_max=70):
     """Smoothly moves both wings up and down in a breathing pattern, pausing when needed."""
     t = 0
     while True:
@@ -155,7 +155,7 @@ async def ambient_breathing(period=4, angle_min=20, angle_max=70):
             continue
         angle = (angle_max - angle_min) / 2 * math.sin(2 * math.pi * t / period) + (angle_max + angle_min) / 2
         kit.servo[0].angle = angle
-        kit.servo[1].angle = angle
+        kit.servo[1].angle = angle_max + angle_min - angle  # Invert direction
         await asyncio.sleep(0.1)
         t += 0.05
 
@@ -163,11 +163,11 @@ async def angry_animation():
     """Moves servos in an 'angry' rapid flapping pattern."""
     print("ANGRY ANIMATION!")
     for _ in range(6):  # 3 fast up/down cycles
-        kit.servo[0].angle = 90
-        kit.servo[1].angle = 90
+        kit.servo[0].angle = 45
+        kit.servo[1].angle = 0
         await asyncio.sleep(0.1)
         kit.servo[0].angle = 0
-        kit.servo[1].angle = 0
+        kit.servo[1].angle = 45
         await asyncio.sleep(0.1)
 
 async def loving_boops():
@@ -177,10 +177,10 @@ async def loving_boops():
     # Wings gently open, pause, then close
     for _ in range(2):  # Two gentle boops
         kit.servo[0].angle = 70
-        kit.servo[1].angle = 70
+        kit.servo[1].angle = 20
         await asyncio.sleep(0.3)
         kit.servo[0].angle = 20
-        kit.servo[1].angle = 20
+        kit.servo[1].angle = 70
         await asyncio.sleep(0.3)
 
 async def attention_animation():
