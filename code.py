@@ -6,6 +6,7 @@ import time
 import audiocore
 import audiobusio
 import audiomixer
+import busio
 import pwmio
 import os
 import random
@@ -15,10 +16,45 @@ import classDef as classDef
 import asyncio
 import math
 import random
+import adafruit_register
 from adafruit_servokit import ServoKit
-kit = ServoKit(channels=8)
+
+# onboard LIS3DH
+#i2c = board.I2C()  # uses board.SCL and board.SDA
+i2c = busio.I2C(board.SCL, board.SDA)  # Create an I2C bus instance
+int1 = DigitalInOut(board.ACCELEROMETER_INTERRUPT)
+lis3dh = adafruit_lis3dh.LIS3DH_I2C(i2c, int1=int1)
+lis3dh.range = adafruit_lis3dh.RANGE_2_G
+
+#kit = ServoKit(channels=8)
+kit = ServoKit(channels=8, i2c=i2c)  # Reuse the same PCA9685 object
 kit.servo[0].set_pulse_width_range(544, 2400)
 kit.servo[1].set_pulse_width_range(544, 2400)
+
+mainEye_red = kit.servo[2]
+mainEye_green = kit.servo[3]
+mainEye_blue = kit.servo[4]
+mainEye_red.actuation_range = 360
+mainEye_green.actuation_range = 360
+mainEye_blue.actuation_range = 360
+
+smallEye_red = kit.servo[5]
+smallEye_green = kit.servo[6]
+smallEye_blue = kit.servo[7]
+smallEye_red.actuation_range = 360
+smallEye_green.actuation_range = 360
+smallEye_blue.actuation_range = 360
+
+#mainEye_red.set_pulse_width_range(0,6550)
+#mainEye_red.duty_cycle = 6550 # 10% duty cycle
+#mainEye_red.angle = 0 #turns on and off + brightness, at 0 its off, then from 1 upto 360 increases in brightness
+#mainEye_green.set_pulse_width_range(0,6550)
+#mainEye_green.duty_cycle =  6550 # 10% duty cycle
+#mainEye_green.angle = 0#turns on and off + brightness, at 0 its off, then from 1 upto 360 increases in brightness
+#mainEye_blue.set_pulse_width_range(0,6550)
+#mainEye_blue.duty_cycle =  6550 # 10% duty cycle
+#mainEye_blue.angle = 0 #turns on and off + brightness, at 0 its off, then from 1 upto 360 increases in brightness
+
 
 led = DigitalInOut(board.LED)
 led.direction = Direction.OUTPUT
@@ -34,12 +70,6 @@ mixer = audiomixer.Mixer(voice_count=1, sample_rate=22050, channel_count=2,
                          bits_per_sample=16, samples_signed=True)
 
 
-# onboard LIS3DH
-i2c = board.I2C()
-int1 = DigitalInOut(board.ACCELEROMETER_INTERRUPT)
-lis3dh = adafruit_lis3dh.LIS3DH_I2C(i2c, int1=int1)
-lis3dh.range = adafruit_lis3dh.RANGE_2_G
-
 
 #pwm = pwmio.PWMOut(board.EXTERNAL_SERVO, frequency=50)
 #prop_servo = servo.Servo(pwm, min_pulse=750, max_pulse=2250)
@@ -49,6 +79,8 @@ lis3dh.range = adafruit_lis3dh.RANGE_2_G
 pause_breathing = asyncio.Event()
 pause_breathing.clear()  # Start with breathing enabled
 reset_idle_event = asyncio.Event()
+
+
 
 # Global Variables for functions
 motion_count = 0  # This variable counts the number of motion events detected, 
@@ -83,6 +115,41 @@ async def play_Wav(filename):
     #led.duty_cycle = 65535  # Back to full brightness
     return
 
+async def boot_sequence():
+    # Move servo[0] from 10 to 45 degrees twice
+    for _ in range(2):
+        kit.servo[0].angle = 10
+        await asyncio.sleep(0.3)
+        kit.servo[0].angle = 45
+        await asyncio.sleep(0.3)
+    kit.servo[0].angle = 10  # Return to start
+
+    # Move servo[1] from 10 to 45 degrees twice
+    for _ in range(2):
+        kit.servo[1].angle = 45
+        await asyncio.sleep(0.3)
+        kit.servo[1].angle = 10
+        await asyncio.sleep(0.3)
+    kit.servo[1].angle = 10  # Return to start
+
+    # Main eye red: angle 1, 180, 360
+    mainEye_red.angle = 1
+    await asyncio.sleep(0.2)
+    mainEye_red.angle = 180
+    await asyncio.sleep(0.2)
+    mainEye_red.angle = 360
+    await asyncio.sleep(0.2)
+    mainEye_red.angle = 0
+
+    # Secondary eye (smallEye_red): angle 1, 180, 360
+    smallEye_red.angle = 1
+    await asyncio.sleep(0.2)
+    smallEye_red.angle = 180
+    await asyncio.sleep(0.2)
+    smallEye_red.angle = 360
+    await asyncio.sleep(0.2)
+    smallEye_red.angle = 0
+
 async def motion_sense():
     global motion_count
     angry_window_start = time.monotonic()
@@ -116,7 +183,7 @@ async def motion_sense():
                 angry_window_length = random.uniform(ANGRY_MIN_WINDOW, ANGRY_MAX_WINDOW)
                 print("Angry animation triggered, motion_count reset and window restarted.")
             else:
-                await loving_boops()  
+                await nose_boops()  
 
             pause_breathing.clear()
         await asyncio.sleep(0.1)
@@ -156,6 +223,23 @@ async def ambient_breathing(period=10, angle_min=50, angle_max=70):
         angle = (angle_max - angle_min) / 2 * math.sin(2 * math.pi * t / period) + (angle_max + angle_min) / 2
         kit.servo[0].angle = angle
         kit.servo[1].angle = angle_max + angle_min - angle  # Invert direction
+        
+        # Update main eye colors based on the angle
+        # Normalized value (0 = min angle, 1 = max angle)
+        norm = (angle - angle_min) / (angle_max - angle_min)
+        norm = max(0.0, min(1.0, norm))
+        norm = norm ** 2
+
+        min_brightness = 60
+        max_brightness = 360
+
+        # Inverted: Blue is max at norm=0, Red is max at norm=1
+        blue_brightness = int(min_brightness + (max_brightness - min_brightness) * (1 - norm))
+        red_brightness = int(min_brightness + (max_brightness - min_brightness) * norm)
+
+        mainEye_blue.angle = blue_brightness
+        mainEye_red.angle = red_brightness
+        
         await asyncio.sleep(0.1)
         t += 0.05
 
@@ -170,7 +254,7 @@ async def angry_animation():
         kit.servo[1].angle = 45
         await asyncio.sleep(0.1)
 
-async def loving_boops():
+async def nose_boops():
     """Moves servos in a gentle, cuddly 'boop' animation."""
     print("LOVING BOOP ANIMATION!")
     await play_Wav("006.wav")
@@ -214,6 +298,7 @@ async def idle_attention():
 
 async def main():
     """Main function to run all tasks concurrently."""
+    #await boot_sequence()
     # Create tasks for each animation/function
     motion_sense_task = asyncio.create_task(motion_sense())
     play_Wav_task = asyncio.create_task(play_Wav(random.choice(wavfiles)))
@@ -223,6 +308,6 @@ async def main():
     #move_s2_task = asyncio.create_task(move_s2())
     
     # This will run forever, because no tasks ever finish.
-    await asyncio.gather(motion_sense_task, ambient_breathing_task, idle_attention_task)
+    await asyncio.gather(motion_sense_task, ambient_breathing_task, idle_attention_task) 
 
 asyncio.run(main())
