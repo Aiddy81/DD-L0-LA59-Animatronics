@@ -1,5 +1,12 @@
 # Using CircuitPython 9.x
-
+# Notes
+# Servo's 
+#           - Servo[0] 
+#                   - ngle_min=40 = heighst point
+#                   - Servoangle_max = lowest point
+#           - Servo[1]
+#                   - Servo2_min = lowest point
+#                   - Servo2_max = heighst point
 import board
 from digitalio import DigitalInOut, Direction, Pull 
 import time
@@ -18,6 +25,7 @@ import math
 import random
 import adafruit_register
 from adafruit_servokit import ServoKit
+import colorsys
 
 # onboard LIS3DH
 #i2c = board.I2C()  # uses board.SCL and board.SDA
@@ -31,12 +39,18 @@ kit = ServoKit(channels=8, i2c=i2c)  # Reuse the same PCA9685 object
 kit.servo[0].set_pulse_width_range(544, 2400)
 kit.servo[1].set_pulse_width_range(544, 2400)
 
+SERVO2_MIN = 40   # Adjust until both wings close equally, used to adjust the left wing as mounted inverted
+SERVO2_MAX = 60   # Adjust until both wings close equally, used to adjust the left wing as mounted inverted
+
 mainEye_red = kit.servo[2]
 mainEye_green = kit.servo[3]
 mainEye_blue = kit.servo[4]
 mainEye_red.actuation_range = 360
 mainEye_green.actuation_range = 360
 mainEye_blue.actuation_range = 360
+mainEye_red.set_pulse_width_range(0,6550)
+mainEye_green.set_pulse_width_range(0,6550)
+mainEye_blue.set_pulse_width_range(0,6550)
 
 smallEye_red = kit.servo[5]
 smallEye_green = kit.servo[6]
@@ -44,17 +58,20 @@ smallEye_blue = kit.servo[7]
 smallEye_red.actuation_range = 360
 smallEye_green.actuation_range = 360
 smallEye_blue.actuation_range = 360
+smallEye_red.set_pulse_width_range(0,6550)
+smallEye_green.set_pulse_width_range(0,6550)
+smallEye_blue.set_pulse_width_range(0,6550)
 
-#mainEye_red.set_pulse_width_range(0,6550)
+
 #mainEye_red.duty_cycle = 6550 # 10% duty cycle
 #mainEye_red.angle = 0 #turns on and off + brightness, at 0 its off, then from 1 upto 360 increases in brightness
-#mainEye_green.set_pulse_width_range(0,6550)
 #mainEye_green.duty_cycle =  6550 # 10% duty cycle
 #mainEye_green.angle = 0#turns on and off + brightness, at 0 its off, then from 1 upto 360 increases in brightness
-#mainEye_blue.set_pulse_width_range(0,6550)
 #mainEye_blue.duty_cycle =  6550 # 10% duty cycle
 #mainEye_blue.angle = 0 #turns on and off + brightness, at 0 its off, then from 1 upto 360 increases in brightness
-
+smallEye_red.angle = 0  
+smallEye_green.angle = 0
+smallEye_blue.angle = 0
 
 led = DigitalInOut(board.LED)
 led.direction = Direction.OUTPUT
@@ -115,22 +132,23 @@ async def play_Wav(filename):
     #led.duty_cycle = 65535  # Back to full brightness
     return
 
-async def boot_sequence():
-    # Move servo[0] from 10 to 45 degrees twice
-    for _ in range(2):
-        kit.servo[0].angle = 10
-        await asyncio.sleep(0.3)
-        kit.servo[0].angle = 45
-        await asyncio.sleep(0.3)
-    kit.servo[0].angle = 10  # Return to start
+async def boot_sequence(angle_min=10, angle_max=60, cycles=2, duration=1):
+    """Smooth boot sequence for both wings and eyes."""
+    steps = 60  # Number of steps for smoothness
 
-    # Move servo[1] from 10 to 45 degrees twice
-    for _ in range(2):
-        kit.servo[1].angle = 45
-        await asyncio.sleep(0.3)
-        kit.servo[1].angle = 10
-        await asyncio.sleep(0.3)
-    kit.servo[1].angle = 10  # Return to start
+    # Smoothly move servo[0] and servo[1] up and down, cycles times
+    for _ in range(cycles):
+        for i in range(steps + 1):
+            phase = 2 * math.pi * i / steps  # 0 to 2π
+            # Sine wave from angle_min (down) to angle_max (up) and back
+            norm = (math.sin(phase - math.pi/2) + 1) / 2  # 0 to 1 to 0
+            angle0 = angle_min + (angle_max - angle_min) * norm
+            angle1 = SERVO2_MIN + (SERVO2_MAX - SERVO2_MIN) * (1 - norm)
+            kit.servo[0].angle = angle0
+            kit.servo[1].angle = angle1
+            await asyncio.sleep(duration / steps)
+    kit.servo[0].angle = angle_max
+    kit.servo[1].angle = SERVO2_MIN
 
     # Main eye red: angle 1, 180, 360
     mainEye_red.angle = 1
@@ -141,6 +159,23 @@ async def boot_sequence():
     await asyncio.sleep(0.2)
     mainEye_red.angle = 0
 
+    # Main eye green: angle 1, 180, 360
+    mainEye_green.angle = 1
+    await asyncio.sleep(0.2)
+    mainEye_green.angle = 180
+    await asyncio.sleep(0.2)
+    mainEye_green.angle = 360
+    await asyncio.sleep(0.2)
+    mainEye_green.angle = 0
+    # Main eye blue: angle 1, 180, 360
+    mainEye_blue.angle = 1
+    await asyncio.sleep(0.2)
+    mainEye_blue.angle = 180
+    await asyncio.sleep(0.2)
+    mainEye_blue.angle = 360
+    await asyncio.sleep(0.2)
+    mainEye_blue.angle = 0
+
     # Secondary eye (smallEye_red): angle 1, 180, 360
     smallEye_red.angle = 1
     await asyncio.sleep(0.2)
@@ -149,6 +184,22 @@ async def boot_sequence():
     smallEye_red.angle = 360
     await asyncio.sleep(0.2)
     smallEye_red.angle = 0
+    # Secondary eye (smallEye_green): angle 1, 180, 360
+    smallEye_green.angle = 1
+    await asyncio.sleep(0.2)
+    smallEye_green.angle = 180
+    await asyncio.sleep(0.2)
+    smallEye_green.angle = 360
+    await asyncio.sleep(0.2)
+    smallEye_green.angle = 0
+    # Secondary eye (smallEye_blue): angle 1, 180, 360
+    smallEye_blue.angle = 1
+    await asyncio.sleep(0.2)
+    smallEye_blue.angle = 180
+    await asyncio.sleep(0.2)
+    smallEye_blue.angle = 360
+    await asyncio.sleep(0.2)
+    smallEye_blue.angle = 0
 
 async def motion_sense():
     global motion_count
@@ -215,6 +266,10 @@ async def motion_sense():
 
 async def ambient_breathing(period=10, angle_min=50, angle_max=70):
     """Smoothly moves both wings up and down in a breathing pattern, pausing when needed."""
+    print("ambient_breathing started")
+    SERVO2_MIN = 30  
+    SERVO2_MAX = 68
+
     t = 0
     while True:
         if pause_breathing.is_set():
@@ -222,7 +277,8 @@ async def ambient_breathing(period=10, angle_min=50, angle_max=70):
             continue
         angle = (angle_max - angle_min) / 2 * math.sin(2 * math.pi * t / period) + (angle_max + angle_min) / 2
         kit.servo[0].angle = angle
-        kit.servo[1].angle = angle_max + angle_min - angle  # Invert direction
+        #kit.servo[1].angle = angle_max + angle_min - angle  # Invert direction
+        kit.servo[1].angle = SERVO2_MAX + SERVO2_MIN - angle
         
         # Update main eye colors based on the angle
         # Normalized value (0 = min angle, 1 = max angle)
@@ -233,72 +289,168 @@ async def ambient_breathing(period=10, angle_min=50, angle_max=70):
         min_brightness = 60
         max_brightness = 360
 
+        # Blue is max at norm=1, min at norm=0
+        blue_brightness = int(min_brightness + (max_brightness - min_brightness) * norm)
+        # Red is max at norm=0, min at norm=1 (inverse)
+        red_brightness = int(min_brightness + (max_brightness - min_brightness) * (1 - norm))
+         
         # Inverted: Blue is max at norm=0, Red is max at norm=1
-        blue_brightness = int(min_brightness + (max_brightness - min_brightness) * (1 - norm))
-        red_brightness = int(min_brightness + (max_brightness - min_brightness) * norm)
+        #blue_brightness = int(min_brightness + (max_brightness - min_brightness) * (1 - norm))
+        #red_brightness = int(min_brightness + (max_brightness - min_brightness) * norm)
 
         mainEye_blue.angle = blue_brightness
         mainEye_red.angle = red_brightness
+        smallEye_blue.angle = blue_brightness
         
         await asyncio.sleep(0.1)
         t += 0.05
 
-async def angry_animation():
-    """Moves servos in an 'angry' rapid flapping pattern."""
+#async def angry_animation():
+#    """Moves servos in an 'angry' rapid flapping pattern."""
+#    print("ANGRY ANIMATION!")
+#    for _ in range(6):  # 3 fast up/down cycles
+#        kit.servo[0].angle = 45
+#        kit.servo[1].angle = 0
+#        await asyncio.sleep(0.1)
+#        kit.servo[0].angle = 0
+#        kit.servo[1].angle = 45
+#        await asyncio.sleep(0.1)
+
+async def angry_animation(flaps=3, angle_min=30, angle_max=90, duration=0.4):
+    mainEye_red.angle = 360  # Set main eye to red
+    mainEye_green.angle = 0  # Turn off green
+    mainEye_blue.angle = 0   # Turn off blue
+    smallEye_red.angle = 360  # Set small eye to red
+    smallEye_green.angle = 0  # Turn off green
+    smallEye_blue.angle = 0   # Turn off blue
     print("ANGRY ANIMATION!")
-    for _ in range(6):  # 3 fast up/down cycles
-        kit.servo[0].angle = 45
-        kit.servo[1].angle = 0
-        await asyncio.sleep(0.1)
-        kit.servo[0].angle = 0
-        kit.servo[1].angle = 45
-        await asyncio.sleep(0.1)
+    await play_Wav("angry.wav")
+    """Smooth, rapid angry flapping using a sine wave."""
+    steps = 20  # Number of steps per flap
+    for _ in range(flaps):
+        for i in range(steps + 1):  
+            # Sine wave for smooth up/down
+            phase = math.pi * i / steps  # 0 to pi
+            angle = angle_min + (angle_max - angle_min) * math.sin(phase)
+            kit.servo[0].angle = angle
+            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
+            await asyncio.sleep(duration / steps)
+        for i in range(steps + 1):
+            phase = math.pi * i / steps  # 0 to pi
+            angle = angle_max - (angle_max - angle_min) * math.sin(phase)
+            kit.servo[0].angle = angle
+            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
+            await asyncio.sleep(duration / steps)
+    # Return to neutral
+    kit.servo[0].angle = angle_min
+    kit.servo[1].angle = angle_max
 
-async def nose_boops():
-    """Moves servos in a gentle, cuddly 'boop' animation."""
-    print("LOVING BOOP ANIMATION!")
-    await play_Wav("006.wav")
-    # Wings gently open, pause, then close
-    for _ in range(2):  # Two gentle boops
-        kit.servo[0].angle = 70
-        kit.servo[1].angle = 20
-        await asyncio.sleep(0.3)
-        kit.servo[0].angle = 20
-        kit.servo[1].angle = 70
-        await asyncio.sleep(0.3)
+#async def nose_boops():
+#    """Moves servos in a gentle, cuddly 'boop' animation."""
+#    print("LOVING BOOP ANIMATION!")
+#    await play_Wav("006.wav")
+#    # Wings gently open, pause, then close
+#    for _ in range(2):  # Two gentle boops
+#        kit.servo[0].angle = 70
+#        kit.servo[1].angle = 20
+#        await asyncio.sleep(0.3)
+#        kit.servo[0].angle = 20
+#        kit.servo[1].angle = 70
+#        await asyncio.sleep(0.3)
 
-async def attention_animation():
-    """Moves servos and plays a sound to grab attention when idle."""
-    print("ATTENTION ANIMATION!")
-    await play_Wav("002.wav") 
-    for _ in range(4):
-        kit.servo[0].angle = 90
-        kit.servo[1].angle = 0
-        await asyncio.sleep(0.2)
-        kit.servo[0].angle = 0
-        kit.servo[1].angle = 90
-        await asyncio.sleep(0.2)
-    kit.servo[0].angle = 45
-    kit.servo[1].angle = 45
+async def nose_boops(boops=2, angle_min=20, angle_max=70, duration=0.8):
+    await play_Wav("noseBoops.wav")
+    """Smooth, gentle 'boop' animation using a sine wave."""
+    steps = 30  # More steps for extra smoothness
+    for _ in range(boops):
+        for i in range(steps + 1):
+            phase = math.pi * i / steps  # 0 to pi
+            angle = angle_min + (angle_max - angle_min) * math.sin(phase)
+            kit.servo[0].angle = angle
+            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
+            await asyncio.sleep(duration / steps)
+        for i in range(steps + 1):
+            phase = math.pi * i / steps  # 0 to pi
+            angle = angle_max - (angle_max - angle_min) * math.sin(phase)
+            kit.servo[0].angle = angle
+            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
+            await asyncio.sleep(duration / steps)
+    # Return to neutral
+    kit.servo[0].angle = angle_min
+    kit.servo[1].angle = angle_max
+
+    # Update main eye colors based on the angle
+    # Normalized value (0 = min angle, 1 = max angle)
+    norm = (angle - angle_min) / (angle_max - angle_min)
+    norm = max(0.0, min(1.0, norm))
+    norm = norm ** 2
+    min_brightness = 60
+    max_brightness = 360
+    # Blue is max at norm=1, min at norm=0
+    blue_brightness = int(min_brightness + (max_brightness - min_brightness) * norm)
+    # Red is max at norm=0, min at norm=1 (inverse)
+    red_brightness = int(min_brightness + (max_brightness - min_brightness) * (1 - norm))
+     
+    # Inverted: Blue is max at norm=0, Red is max at norm=1
+    #blue_brightness = int(min_brightness + (max_brightness - min_brightness) * (1 - norm))
+    #red_brightness = int(min_brightness + (max_brightness - min_brightness) * norm)
+    mainEye_blue.angle = blue_brightness
+    mainEye_red.angle = red_brightness
+    smallEye_blue.angle = blue_brightness
+
+#async def attention_animation():
+#    """Moves servos and plays a sound to grab attention when idle."""
+#    print("ATTENTION ANIMATION!")
+#    await play_Wav("002.wav") 
+#    for _ in range(4):
+#        kit.servo[0].angle = 90
+#        kit.servo[1].angle = 0
+#        await asyncio.sleep(0.2)
+#        kit.servo[0].angle = 0
+#        kit.servo[1].angle = 90
+#        await asyncio.sleep(0.2)
+#    kit.servo[0].angle = 45
+#    kit.servo[1].angle = 45
+
+async def attention_animation(flaps=2, angle_min=10, angle_max=100, duration=1.0):
+    await play_Wav("youWho.wav")
+    """Smooth, attention-grabbing wing motion using a sine wave."""
+    steps = 40  # More steps for smoothness
+    for _ in range(flaps):
+        for i in range(steps + 1):
+            phase = math.pi * i / steps  # 0 to pi
+            angle = angle_min + (angle_max - angle_min) * math.sin(phase)
+            kit.servo[0].angle = angle
+            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
+            await asyncio.sleep(duration / steps)
+        for i in range(steps + 1):
+            phase = math.pi * i / steps  # 0 to pi
+            angle = angle_max - (angle_max - angle_min) * math.sin(phase)
+            kit.servo[0].angle = angle
+            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
+            await asyncio.sleep(duration / steps)
+    # Return to neutral
+    kit.servo[0].angle = angle_min
+    kit.servo[1].angle = angle_max
 
 async def idle_attention():
-    """Waits for a random idle period, then grabs attention if no interaction."""
-    while True:
-        wait_time = random.uniform(IDLE_MIN_SECONDS, IDLE_MAX_SECONDS)
-        print(f"Waiting for idle period: {wait_time:.2f} seconds")
-        try:
-            # Wait for either the timer or a reset event
-            await asyncio.wait_for(reset_idle_event.wait(), timeout=wait_time)
-            reset_idle_event.clear()  # Reset for next cycle
-        except asyncio.TimeoutError:
-            # Timer expired: do the attention animation
-            pause_breathing.set()
-            await attention_animation()
-            pause_breathing.clear()
+     """Waits for a random idle period, then grabs attention if no interaction."""
+     while True:
+         wait_time = random.uniform(IDLE_MIN_SECONDS, IDLE_MAX_SECONDS)
+         print(f"Waiting for idle period: {wait_time:.2f} seconds")
+         try:
+             # Wait for either the timer or a reset event
+             await asyncio.wait_for(reset_idle_event.wait(), timeout=wait_time)
+             reset_idle_event.clear()  # Reset for next cycle
+         except asyncio.TimeoutError:
+             # Timer expired: do the attention animation
+             pause_breathing.set()
+             await attention_animation()
+             pause_breathing.clear()
 
 async def main():
     """Main function to run all tasks concurrently."""
-    #await boot_sequence()
+    await boot_sequence()
     # Create tasks for each animation/function
     motion_sense_task = asyncio.create_task(motion_sense())
     play_Wav_task = asyncio.create_task(play_Wav(random.choice(wavfiles)))
@@ -308,6 +460,6 @@ async def main():
     #move_s2_task = asyncio.create_task(move_s2())
     
     # This will run forever, because no tasks ever finish.
-    await asyncio.gather(motion_sense_task, ambient_breathing_task, idle_attention_task) 
+    await asyncio.gather(motion_sense_task, ambient_breathing_task, idle_attention_task)  # 
 
 asyncio.run(main())
