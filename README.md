@@ -13,18 +13,15 @@ This project implements interactive animatronic behaviors for a custom device us
 - **Async Architecture**: Uses CircuitPython's `asyncio` for concurrent, non-blocking behaviors.
 
 ## Hardware Requirements
-- Adafruit PropMaker Feather (with I2C, PWM, and I2S support)
-- PCA9685 PWM driver (for servos and LEDs)
-- LIS3DH accelerometer
+- Adafruit PropMaker Feather (with I2C, PWM, and I2S support, accelerometer, audio amplifier) - [https://www.adafruit.com/product/5768](https://www.adafruit.com/product/5768)
+- 8-Channel PWM or Servo FeatherWing Add-on For All Feather Boards (for servos and LEDs) - [https://www.adafruit.com/product/2928](https://www.adafruit.com/product/2928)
 - Servos (x2, for wing movement)
-- RGB LEDs (main and small "eyes")
-- I2S audio output (for sound playback)
+- RGB LEDs (main and small "eyes"))
 
 ## File Structure
 - `PropMaker_Feather/code.py` — Main firmware controlling all hardware and behaviors
 - `PropMaker_Feather/sounds/` — WAV files for sound effects
 - `PropMaker_Feather/lib/` — CircuitPython libraries (Adafruit drivers, etc.)
-- `Archive/` — Older or backup code versions
 
 ## Main Behaviors
 - **Boot Sequence**: Smooth startup animation for wings and eyes, with LED and audio effects.
