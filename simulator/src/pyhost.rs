@@ -117,6 +117,11 @@ mod simhw {
     }
 
     #[pyfunction]
+    fn strict() -> bool {
+        hw().strict
+    }
+
+    #[pyfunction]
     fn take_idle_trigger() -> bool {
         std::mem::take(&mut hw().idle_trigger)
     }

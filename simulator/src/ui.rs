@@ -156,6 +156,14 @@ fn panels(mut contexts: EguiContexts, mut ui: ResMut<UiState>, mut host: ResMut<
                 hw().idle_trigger = true;
             }
             row.separator();
+            let mut strict = hw().strict;
+            if row
+                .checkbox(&mut strict, "CircuitPython strict")
+                .on_hover_text("Only CircuitPython 9 modules and APIs, and its float precision for time.monotonic(). Applies on restart.")
+                .changed()
+            {
+                hw().strict = strict;
+            }
             row.checkbox(&mut ui.auto_reload, "Restart when code.py is saved");
             row.label(format!("sim time {:.1} s", hw().clock.now()));
         });

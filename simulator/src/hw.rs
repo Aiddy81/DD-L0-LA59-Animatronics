@@ -37,6 +37,8 @@ pub struct HwState {
     pub clock: SimClock,
     pub stop_requested: bool,
     pub idle_trigger: bool,
+    /// Hold code.py to what CircuitPython 9 offers (imports, APIs, float precision).
+    pub strict: bool,
 }
 
 impl HwState {
@@ -54,6 +56,7 @@ impl HwState {
             clock: SimClock::new(),
             stop_requested: false,
             idle_trigger: false,
+            strict: true,
         }
     }
 
@@ -62,10 +65,12 @@ impl HwState {
     pub fn reset_for_run(&mut self) {
         let accel = self.accel_g;
         let speed = self.clock.speed;
+        let strict = self.strict;
         let log = std::mem::take(&mut self.log);
         *self = Self::new();
         self.accel_g = accel;
         self.clock.speed = speed;
+        self.strict = strict;
         self.log = log;
     }
 

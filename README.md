@@ -74,6 +74,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 - **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Tipped over* holds z at -1 g.
 - **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation plays.
 - **Edit and save `code.py`** and the simulator restarts with the change. Errors show as a traceback in the log.
+- **CircuitPython strict** (on by default) holds `code.py` to what the board has. Imports outside CircuitPython 9 and `lib/` fail, as do APIs CircuitPython lacks (`random.choices`, `os.path`, `asyncio.TaskGroup`...). `time.monotonic()` gets the board's reduced float precision, so long-uptime timer drift shows when you fast-forward. Untick it to run with full desktop Python; the change applies on the next restart.
 - **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom.
 - The side panel shows every PCA9685 channel's duty and pulse width, plus a 20 s plot of wing angles and LED levels.
 
