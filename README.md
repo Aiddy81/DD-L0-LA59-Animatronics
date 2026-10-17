@@ -55,5 +55,36 @@ This project implements interactive animatronic behaviors for a custom device us
 
 Place these files in `PropMaker_Feather/sounds/` with the exact names above. You can add or replace WAV files for custom effects, but ensure the filenames match those referenced in the code or update the code accordingly.
 
+## Simulator
+
+`simulator/` is a Windows desktop app that runs `PropMaker_Feather/code.py` **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
+
+### Build and run
+
+Needs Docker Desktop only; nothing is installed on the host.
+
+```powershell
+.\simulator\build.ps1 -Run
+```
+
+The first build takes a while. Output goes to `simulator\dist\`, a self-contained folder with the bundled Python. Run `simulator\dist\ddl0-sim.exe` directly after that. It finds `PropMaker_Feather\code.py` by walking up from the exe, or takes a path as its first argument.
+
+### Using it
+
+- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Tipped over* holds z at -1 g.
+- **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation plays.
+- **Edit and save `code.py`** and the simulator restarts with the change. Errors show as a traceback in the log.
+- **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom.
+- The side panel shows every PCA9685 channel's duty and pulse width, plus a 20 s plot of wing angles and LED levels.
+
+The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and the LIS3DH clipping at its configured range. So it shows what the robot will really do, including:
+- The eye channels peak at 32.8% duty, because `set_pulse_width_range(0, 6550)` is about a third of the 20 ms period.
+- With `RANGE_2_G` the accelerometer never reports more than about 2 g, so `abs(z) > 2.5` (hard motion) can't fire.
+- `data_processing_led()` uses blocking `time.sleep()`, which freezes every other behaviour while it runs.
+
+### Your own 3D model
+
+Put a `simulator/assets/droid.glb` in place and it replaces the placeholder droid. Name the nodes `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white`. `simulator/sim.toml` sets how servo angles map onto wing rotation: neutral angle, direction, linkage gain and hinge axis per wing.
+
 ## License
 See `LICENSE` file if present, or contact the author for usage terms.

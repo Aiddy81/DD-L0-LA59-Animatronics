@@ -4,3 +4,8 @@
 /PropMaker_Feather/boot_out.txt
 /.vscode
 **/.vscode/
+
+# Simulator build output
+/simulator/dist/
+/simulator/target/
+__pycache__/

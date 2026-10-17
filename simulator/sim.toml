@@ -1,0 +1,29 @@
+# How the simulator maps PCA9685 outputs onto the 3D droid.
+# Edit and restart the simulator to apply.
+
+# The physical wing servos: pulse width range that covers their full travel.
+[servo]
+min_pulse_us = 544
+max_pulse_us = 2400
+range_deg = 180
+
+# Channel 0. In code.py a *lower* servo angle raises this wing.
+[wing_right]
+channel = 0
+neutral_deg = 60      # servo angle at which the wing is level
+direction = -1.0      # +1 if a larger angle raises the wing
+gain = 1.5            # wing degrees per servo degree (linkage ratio)
+hinge_axis = [0.0, 0.0, 1.0]
+
+# Channel 1, mounted inverted: a *higher* servo angle raises this wing.
+[wing_left]
+channel = 1
+neutral_deg = 40
+direction = 1.0
+gain = 1.5
+hinge_axis = [0.0, 0.0, -1.0]
+
+# PCA9685 channels for each eye's red, green, blue.
+[eyes]
+main = [2, 3, 4]
+small = [5, 6, 7]

@@ -1,0 +1,44 @@
+[package]
+name = "ddl0-sim"
+version = "0.1.0"
+edition = "2021"
+description = "3D desktop simulator that runs the DD-L0-LA59 CircuitPython firmware unmodified"
+publish = false
+
+[dependencies]
+bevy = { version = "=0.16.1", default-features = false, features = [
+    "std",
+    "bevy_asset",
+    "bevy_audio",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_gltf",
+    "bevy_log",
+    "bevy_mesh_picking_backend",
+    "bevy_pbr",
+    "bevy_picking",
+    "bevy_render",
+    "bevy_scene",
+    "bevy_state",
+    "bevy_window",
+    "bevy_winit",
+    "multi_threaded",
+    "png",
+    "tonemapping_luts",
+    "ktx2",
+    "zstd",
+    "wav",
+] }
+bevy_egui = { version = "=0.34.1", default-features = false, features = ["render", "default_fonts"] }
+pyo3 = { version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+
+# Keep dependency builds optimised in dev too; Bevy is unusably slow otherwise.
+[profile.dev.package."*"]
+opt-level = 2
