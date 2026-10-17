@@ -7,9 +7,9 @@ min_pulse_us = 544
 max_pulse_us = 2400
 range_deg = 180
 
-# The wings are the two rear white panels. On the Lola model each hinges along
-# its front edge (the Y-shaped groove), so the back of the panel lifts; the
-# primitive model hinges them on the spine instead.
+# The wings are the two rear white panels. Each hinges along its front edge
+# (the Y-shaped groove), so the back of the panel lifts. hinge_axis below is
+# for droid.glb; the primitive model computes its own matching hinge.
 # Panel angle = (servo angle - neutral_deg) * direction * gain, clamped to
 # min_deg..max_deg, where 0 is closed flush on the head.
 # hinge_axis is the hinge direction in droid.glb's wing node space (Y up, Z

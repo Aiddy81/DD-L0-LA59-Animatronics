@@ -86,8 +86,8 @@ pub struct WingCfg {
     /// Wing degrees per servo degree (the linkage ratio).
     pub gain: f32,
     /// Hinge axis in the glTF wing node's local space (Y up, Z forward),
-    /// oriented so a positive angle lifts the panel. The primitive model uses
-    /// its own spine hinge instead.
+    /// oriented so a positive angle lifts the panel. The primitive model
+    /// computes its own matching hinge.
     pub hinge_axis: [f32; 3],
     /// Travel limits of the panel; 0 = closed flush on the head.
     pub min_deg: f32,
