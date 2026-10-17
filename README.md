@@ -84,7 +84,7 @@ The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and 
 
 ### Your own 3D model
 
-Put a `simulator/assets/droid.glb` in place and it replaces the placeholder droid. Name the nodes `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white`. `simulator/sim.toml` sets how servo angles map onto wing rotation: neutral angle, direction, linkage gain and hinge axis per wing.
+The built-in model is a primitive L0-LA59: red saucer head, the two white top panels as the servo-driven wings hinged on the centre spine, main and small eyes, gear ring, stem and base. Put a `simulator/assets/droid.glb` in place and it replaces that model. Name the nodes `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white`. `simulator/sim.toml` sets how servo angles map onto wing rotation: neutral angle, direction, linkage gain and hinge axis per wing.
 
 ## License
 See `LICENSE` file if present, or contact the author for usage terms.

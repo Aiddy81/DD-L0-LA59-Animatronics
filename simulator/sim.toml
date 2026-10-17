@@ -7,21 +7,30 @@ min_pulse_us = 544
 max_pulse_us = 2400
 range_deg = 180
 
-# Channel 0. In code.py a *lower* servo angle raises this wing.
+# The wings are the two white top panels, hinged along the centre spine.
+# Panel angle = (servo angle - neutral_deg) * direction * gain, clamped to
+# min_deg..max_deg, where 0 is closed flush on the head.
+
+# Channel 0. In code.py a *lower* servo angle raises this panel.
 [wing_right]
 channel = 0
-neutral_deg = 60      # servo angle at which the wing is level
-direction = -1.0      # +1 if a larger angle raises the wing
-gain = 1.5            # wing degrees per servo degree (linkage ratio)
+neutral_deg = 90      # servo angle at which the panel is closed
+direction = -1.0      # +1 if a larger angle raises the panel
+gain = 0.45           # panel degrees per servo degree (linkage ratio)
 hinge_axis = [0.0, 0.0, 1.0]
+min_deg = 0
+max_deg = 75
 
-# Channel 1, mounted inverted: a *higher* servo angle raises this wing.
+# Channel 1, mounted inverted: a *higher* servo angle raises this panel.
+# Breathing pairs ch0 65/50 with ch1 35/50, i.e. ch1 ~ 100 - ch0, hence 10.
 [wing_left]
 channel = 1
-neutral_deg = 40
+neutral_deg = 10
 direction = 1.0
-gain = 1.5
+gain = 0.45
 hinge_axis = [0.0, 0.0, -1.0]
+min_deg = 0
+max_deg = 75
 
 # PCA9685 channels for each eye's red, green, blue.
 [eyes]

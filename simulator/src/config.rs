@@ -35,6 +35,9 @@ pub struct WingCfg {
     pub gain: f32,
     /// Hinge axis in the wing node's local space.
     pub hinge_axis: [f32; 3],
+    /// Travel limits of the panel; 0 = closed flush on the head.
+    pub min_deg: f32,
+    pub max_deg: f32,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -50,17 +53,21 @@ impl Default for SimConfig {
             servo: ServoCfg::default(),
             wing_right: WingCfg {
                 channel: 0,
-                neutral_deg: 60.0,
+                neutral_deg: 90.0,
                 direction: -1.0,
-                gain: 1.5,
+                gain: 0.45,
                 hinge_axis: [0.0, 0.0, 1.0],
+                min_deg: 0.0,
+                max_deg: 75.0,
             },
             wing_left: WingCfg {
                 channel: 1,
-                neutral_deg: 40.0,
+                neutral_deg: 10.0,
                 direction: 1.0,
-                gain: 1.5,
+                gain: 0.45,
                 hinge_axis: [0.0, 0.0, -1.0],
+                min_deg: 0.0,
+                max_deg: 75.0,
             },
             eyes: EyesCfg::default(),
         }
@@ -102,7 +109,8 @@ impl ServoCfg {
 
 impl WingCfg {
     pub fn elevation_deg(&self, servo_deg: f32) -> f32 {
-        (servo_deg - self.neutral_deg) * self.direction * self.gain
+        ((servo_deg - self.neutral_deg) * self.direction * self.gain)
+            .clamp(self.min_deg, self.max_deg)
     }
 }
 

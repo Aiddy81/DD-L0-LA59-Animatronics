@@ -21,8 +21,8 @@ pub enum Side {
 
 #[derive(Component)]
 pub struct Wing {
-    side: Side,
-    rest: Quat,
+    pub side: Side,
+    pub rest: Quat,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,13 +41,23 @@ pub struct Glow {
     adopted: bool,
 }
 
+impl Glow {
+    pub fn placeholder(source: GlowSource, material: Handle<StandardMaterial>) -> Self {
+        Self {
+            source,
+            materials: vec![material],
+            adopted: true,
+        }
+    }
+}
+
 #[derive(Component)]
-struct GlowLight(GlowSource);
+pub struct GlowLight(pub GlowSource);
 
 /// How far the mouse has moved since the last button press, so a drag to orbit
 /// the camera that starts on the head isn't mistaken for a boop.
 #[derive(Resource, Default)]
-struct DragDistance(f32);
+pub(crate) struct DragDistance(f32);
 
 #[derive(Component)]
 pub struct OrbitCam {
@@ -99,10 +109,10 @@ fn setup(
         Bloom::NATURAL,
         Transform::default(),
         OrbitCam {
-            yaw: 0.5,
-            pitch: 0.25,
-            distance: 5.5,
-            focus: Vec3::new(0.0, 1.3, 0.0),
+            yaw: 0.35,
+            pitch: 0.38,
+            distance: 5.2,
+            focus: Vec3::new(0.0, 1.05, 0.0),
         },
     ));
     commands.spawn((
@@ -127,150 +137,16 @@ fn setup(
             asset_server.load(GltfAssetLabel::Scene(0).from_asset(MODEL_FILE)),
         ));
     } else {
-        spawn_placeholder(&mut commands, &mut meshes, &mut materials);
+        crate::droid::spawn(&mut commands, &mut meshes, &mut materials);
     }
 }
 
-fn spawn_placeholder(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-) {
-    let shell = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.85, 0.84, 0.8),
-        perceptual_roughness: 0.45,
-        ..default()
-    });
-    let dark = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.12, 0.12, 0.13),
-        perceptual_roughness: 0.6,
-        ..default()
-    });
-    let accent = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.75, 0.35, 0.12),
-        perceptual_roughness: 0.5,
-        ..default()
-    });
-
-    // Base and body.
-    commands.spawn((
-        Mesh3d(meshes.add(Cylinder::new(0.55, 0.2))),
-        MeshMaterial3d(dark.clone()),
-        Transform::from_xyz(0.0, 0.1, 0.0),
-    ));
-    commands.spawn((
-        Mesh3d(meshes.add(Capsule3d::new(0.42, 0.7))),
-        MeshMaterial3d(shell.clone()),
-        Transform::from_xyz(0.0, 0.95, 0.0),
-    ));
-    commands.spawn((
-        Mesh3d(meshes.add(Cylinder::new(0.44, 0.08))),
-        MeshMaterial3d(accent.clone()),
-        Transform::from_xyz(0.0, 1.25, 0.0),
-    ));
-
-    // Head; clicking it is a nose boop (a gentle nudge on the accelerometer).
-    commands
-        .spawn((
-            Mesh3d(meshes.add(Sphere::new(0.4).mesh().uv(48, 24))),
-            MeshMaterial3d(shell.clone()),
-            Transform::from_xyz(0.0, 1.72, 0.0),
-        ))
-        .observe(|_: Trigger<Pointer<Click>>, drag: Res<DragDistance>| {
-            if drag.0 < 4.0 {
-                crate::ui::nudge();
-            }
-        });
-
-    spawn_light_part(
-        commands,
-        meshes,
-        materials,
-        GlowSource::MainEye,
-        Vec3::new(0.0, 1.8, 0.36),
-        0.11,
-    );
-    spawn_light_part(
-        commands,
-        meshes,
-        materials,
-        GlowSource::SmallEye,
-        Vec3::new(0.2, 1.64, 0.32),
-        0.055,
-    );
-    spawn_light_part(
-        commands,
-        meshes,
-        materials,
-        GlowSource::WhiteLed,
-        Vec3::new(-0.2, 1.64, 0.32),
-        0.035,
-    );
-
-    // Wings: a pivot at each shoulder with the panel hanging off it.
-    let panel = meshes.add(Cuboid::new(1.1, 0.04, 0.55));
-    for (side, x) in [(Side::Right, 1.0_f32), (Side::Left, -1.0)] {
-        commands
-            .spawn((
-                Transform::from_xyz(0.42 * x, 1.1, -0.05),
-                Visibility::default(),
-                Wing {
-                    side,
-                    rest: Quat::IDENTITY,
-                },
-            ))
-            .with_children(|pivot| {
-                pivot.spawn((
-                    Mesh3d(panel.clone()),
-                    MeshMaterial3d(accent.clone()),
-                    Transform::from_xyz(0.55 * x, 0.0, 0.0),
-                ));
-                pivot.spawn((
-                    Mesh3d(meshes.add(Cylinder::new(0.05, 0.6))),
-                    MeshMaterial3d(dark.clone()),
-                    Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
-                ));
-            });
+/// Clicking the droid is a nose boop: one gentle accelerometer nudge. A drag
+/// to orbit the camera that happens to start on it doesn't count.
+pub(crate) fn boop(_: Trigger<Pointer<Click>>, drag: Res<DragDistance>) {
+    if drag.0 < 4.0 {
+        crate::ui::nudge();
     }
-}
-
-fn spawn_light_part(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    source: GlowSource,
-    at: Vec3,
-    radius: f32,
-) {
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.05, 0.05, 0.06),
-        perceptual_roughness: 0.2,
-        ..default()
-    });
-    commands
-        .spawn((
-            Mesh3d(meshes.add(Sphere::new(radius).mesh().uv(32, 16))),
-            MeshMaterial3d(material.clone()),
-            Transform::from_translation(at),
-            Glow {
-                source,
-                materials: vec![material],
-                adopted: true,
-            },
-        ))
-        .with_children(|p| {
-            p.spawn((
-                PointLight {
-                    intensity: 0.0,
-                    range: 3.0,
-                    radius,
-                    shadows_enabled: false,
-                    ..default()
-                },
-                Transform::from_xyz(0.0, 0.0, radius * 1.5),
-                GlowLight(source),
-            ));
-        });
 }
 
 /// glTF models: attach behaviour to nodes by name once the scene spawns.

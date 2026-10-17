@@ -4,6 +4,7 @@
 
 mod audio;
 mod config;
+mod droid;
 mod hw;
 mod pyhost;
 mod scene;
