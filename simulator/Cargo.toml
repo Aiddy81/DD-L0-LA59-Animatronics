@@ -3,6 +3,7 @@ name = "ddl0-sim"
 version = "0.1.0"
 edition = "2021"
 description = "3D desktop simulator that runs the DD-L0-LA59 CircuitPython firmware unmodified"
+license = "AGPL-3.0-or-later"
 publish = false
 
 [dependencies]

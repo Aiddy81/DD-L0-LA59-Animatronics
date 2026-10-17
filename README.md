@@ -87,4 +87,12 @@ The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and 
 The built-in model is a primitive L0-LA59: red saucer head, the two white top panels as the servo-driven wings hinged on the centre spine, main and small eyes, gear ring, stem and base. Put a `simulator/assets/droid.glb` in place and it replaces that model. Name the nodes `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white`. `simulator/sim.toml` sets how servo angles map onto wing rotation: neutral angle, direction, linkage gain and hinge axis per wing.
 
 ## License
-See `LICENSE` file if present, or contact the author for usage terms.
+
+Copyright (C) 2026 Adriano Cafarella.
+
+This project (the firmware in `PropMaker_Feather/code.py` and everything in `simulator/`) is licensed under the **GNU Affero General Public License v3.0 or later**. See [`LICENSE`](LICENSE).
+
+Third-party components keep their own licenses:
+- The Adafruit CircuitPython libraries in `PropMaker_Feather/lib/` are MIT-licensed by Adafruit Industries.
+- The embeddable Python that `simulator/build.ps1` bundles into `simulator/dist/` is under the PSF License; its `LICENSE.txt` ships alongside it.
+- Rust crates used by the simulator are under their own licenses (mostly MIT/Apache-2.0).
