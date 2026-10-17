@@ -9,7 +9,7 @@ with a camera and lights) next to the exported model.
 
 Modelled from photos of the real prop. The simulator drives these nodes by
 name: wing_right and wing_left (the two rear white panels, origin on their
-hinge along the spine), eye_main, eye_small and led_white (glowing lenses).
+hinge line along their front edge), eye_main, eye_small and led_white (glowing lenses).
 Blender is Z-up with the droid facing -Y; the glTF exporter converts that to
 the simulator's Y-up, facing +Z.
 """
@@ -261,10 +261,30 @@ def build_upper_shell():
     return spine
 
 
+def hinge_line(sign, lift=0.045):
+    """Each panel hinges along its front edge: the straight line from where the
+    Y groove leaves the spine to where it meets the rim. Returns (start, end)."""
+    rim_x = half_width(WING_FRONT_AT_RIM, WHITE_R2)
+    start = Vector((sign * SPINE, SPINE_FRONT, top_z(SPINE, SPINE_FRONT) + lift))
+    end = Vector((sign * rim_x, WING_FRONT_AT_RIM, top_z(rim_x, WING_FRONT_AT_RIM) + lift))
+    return start, end
+
+
+def hinge_axis_gltf(sign):
+    """Hinge direction in glTF space (x, z, -y), oriented so a positive angle
+    lifts the back of the panel. This is what sim.toml's hinge_axis needs."""
+    start, end = hinge_line(sign)
+    d = (end - start).normalized() if sign > 0 else (start - end).normalized()
+    return (round(d.x, 3), round(d.z, 3), round(-d.y, 3))
+
+
 def build_wings():
     back = R * math.sqrt(WHITE_R2)
     for name, sign in (("wing_right", 1.0), ("wing_left", -1.0)):
-        pivot = Vector((sign * SPINE, 0.0, top_z(SPINE, 0.0) + 0.03))
+        start, end = hinge_line(sign)
+        # Origin on the hinge line, about halfway out (where the real hinge is).
+        pivot = start.lerp(end, 0.45)
+        print("hinge", name, "pivot", tuple(round(v, 3) for v in pivot), "gltf axis", hinge_axis_gltf(sign))
 
         def span(y, sign=sign):
             # Behind the Y groove: in front of the fork, only outboard of it.

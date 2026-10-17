@@ -85,7 +85,9 @@ pub struct WingCfg {
     pub direction: f32,
     /// Wing degrees per servo degree (the linkage ratio).
     pub gain: f32,
-    /// Hinge axis in the wing node's local space.
+    /// Hinge axis in the glTF wing node's local space (Y up, Z forward),
+    /// oriented so a positive angle lifts the panel. The primitive model uses
+    /// its own spine hinge instead.
     pub hinge_axis: [f32; 3],
     /// Travel limits of the panel; 0 = closed flush on the head.
     pub min_deg: f32,
@@ -108,7 +110,7 @@ impl Default for SimConfig {
                 neutral_deg: 90.0,
                 direction: -1.0,
                 gain: 0.45,
-                hinge_axis: [0.0, 0.0, 1.0],
+                hinge_axis: [0.924, -0.296, 0.244],
                 min_deg: 0.0,
                 max_deg: 75.0,
             },
@@ -117,7 +119,7 @@ impl Default for SimConfig {
                 neutral_deg: 10.0,
                 direction: 1.0,
                 gain: 0.45,
-                hinge_axis: [0.0, 0.0, -1.0],
+                hinge_axis: [0.924, 0.296, -0.244],
                 min_deg: 0.0,
                 max_deg: 75.0,
             },

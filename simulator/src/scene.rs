@@ -23,6 +23,8 @@ pub enum Side {
 pub struct Wing {
     pub side: Side,
     pub rest: Quat,
+    /// The model's own hinge axis; `None` uses `hinge_axis` from sim.toml.
+    pub axis: Option<Vec3>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -199,6 +201,7 @@ fn bind_gltf_nodes(mut commands: Commands, named: Query<(Entity, &Name, &Transfo
                 commands.entity(entity).insert(Wing {
                     side,
                     rest: transform.rotation,
+                    axis: None,
                 });
                 continue;
             }
@@ -282,9 +285,11 @@ fn drive_wings(cfg: Res<SimConfig>, mut wings: Query<(&Wing, &mut Transform)>) {
         } else {
             &cfg.wing_left
         };
-        let axis = Vec3::from(wing_cfg.hinge_axis)
-            .try_normalize()
-            .unwrap_or(Vec3::Z);
+        let axis = wing.axis.unwrap_or_else(|| {
+            Vec3::from(wing_cfg.hinge_axis)
+                .try_normalize()
+                .unwrap_or(Vec3::Z)
+        });
         transform.rotation = wing.rest * Quat::from_axis_angle(axis, elevation.to_radians());
     }
 }

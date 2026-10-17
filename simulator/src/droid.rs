@@ -338,6 +338,12 @@ fn spawn_wings(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) 
                 Wing {
                     side,
                     rest: Quat::IDENTITY,
+                    // The primitive's panels are whole halves hinged on the spine.
+                    axis: Some(if side == Side::Right {
+                        Vec3::Z
+                    } else {
+                        Vec3::NEG_Z
+                    }),
                 },
             ))
             .with_children(|hinge| {
