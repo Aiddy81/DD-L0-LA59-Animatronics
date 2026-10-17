@@ -37,9 +37,7 @@ $ErrorActionPreference = 'Stop'
 $sim = $PSScriptRoot
 $repo = (Resolve-Path (Join-Path $sim '..')).Path
 $dist = Join-Path $sim 'dist'
-$target = 'x86_64-pc-windows-gnu'
 $profileDir = if ($DebugBuild) { 'debug' } else { 'release' }
-$profileFlag = if ($DebugBuild) { '' } else { '--release' }
 
 docker info *> $null
 if ($LASTEXITCODE -ne 0) {
@@ -59,29 +57,17 @@ if ($RebuildImage -or $LASTEXITCODE -ne 0) {
 # A running simulator locks its exe; the copy would then fail.
 Get-Process ddl0-sim -ErrorAction SilentlyContinue | Stop-Process -Force
 
-$locked = if (Test-Path (Join-Path $sim 'Cargo.lock')) { '--locked' } else { '' }
-
-# Single-quoted: these are bash variables, expanded in the container.
-$script = 'set -e
-cargo build $PROFILE_FLAG $LOCKED --target $TARGET
-rm -rf dist && mkdir -p dist
-cp "/target/$TARGET/$PROFILE_DIR/ddl0-sim.exe" dist/
-cp -r /opt/python-embed/. dist/
-for f in /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll \
-         /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libgcc_s_seh-1.dll \
-         /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll; do
-  cp "$f" dist/
-done'
+$locked = if (Test-Path (Join-Path $sim 'Cargo.lock')) { '1' } else { '0' }
 
 Write-Host "== Cross-compiling in $Image ($profileDir; first build takes a while)" -ForegroundColor Cyan
+# docker/build.sh does the build and staging; CI runs the same script.
 docker run --rm `
     -v "${repo}:/workspace" `
     -v ddl0-sim-cargo-registry:/usr/local/cargo/registry `
     -v ddl0-sim-target:/target `
     -e CARGO_TARGET_DIR=/target `
-    -e "TARGET=$target" -e "PROFILE_DIR=$profileDir" `
-    -e "PROFILE_FLAG=$profileFlag" -e "LOCKED=$locked" `
-    -w /workspace/simulator $Image bash -c $script
+    -e "PROFILE=$profileDir" -e "LOCKED=$locked" `
+    -w /workspace/simulator $Image bash docker/build.sh
 if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
 $exe = Join-Path $dist 'ddl0-sim.exe'

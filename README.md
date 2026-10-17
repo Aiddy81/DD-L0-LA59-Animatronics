@@ -97,6 +97,12 @@ The timing and memory figures in `simulator/sim.toml` `[board]` start as estimat
 2. In the serial console press Ctrl-C, then Enter, and type `import board_bench`. Only the main eye's red LED flickers dimly; the wings don't move.
 3. Paste the `[board]` block it prints over the one in `simulator/sim.toml`, then delete `board_bench.py` from the drive.
 
+### Tests and CI
+
+`python simulator/tests/headless.py` runs the real `code.py` headless, with CircuitPython strict mode and board speed on. It scripts a nudge, an idle trigger and repeated nudges, and fails on any traceback or if the boop, attention or angry behaviour doesn't happen. It needs Python 3.11+ (CI uses 3.13).
+
+GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download.
+
 ### Your own 3D model
 
 The built-in model is a primitive L0-LA59: red saucer head, the two white top panels as the servo-driven wings hinged on the centre spine, main and small eyes, gear ring, stem and base. Put a `simulator/assets/droid.glb` in place and it replaces that model. Name the nodes `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white`. `simulator/sim.toml` sets how servo angles map onto wing rotation: neutral angle, direction, linkage gain and hinge axis per wing.

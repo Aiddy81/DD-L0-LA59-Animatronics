@@ -1,0 +1,56 @@
+name: Simulator
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev, Documentation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: code.py headless (CircuitPython strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run code.py against the simulator's hardware stand-ins
+        run: python simulator/tests/headless.py
+
+  build:
+    name: Simulator build (Windows exe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the dev image
+        run: docker build -t ddl0-sim-dev simulator/docker
+      - name: Restore cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ci-cache/registry
+            .ci-cache/target
+          key: sim-${{ runner.os }}-${{ hashFiles('simulator/Cargo.lock', 'simulator/docker/Dockerfile') }}
+          restore-keys: sim-${{ runner.os }}-
+      - name: Format, lint and build
+        run: |
+          mkdir -p .ci-cache/registry .ci-cache/target
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$PWD/.ci-cache/registry:/usr/local/cargo/registry" \
+            -v "$PWD/.ci-cache/target:/target" \
+            -e CARGO_TARGET_DIR=/target -e CHECK=1 -e LOCKED=1 \
+            -w /workspace/simulator ddl0-sim-dev bash docker/build.sh
+          sudo chown -R "$(id -u):$(id -g)" .ci-cache simulator/dist
+      - name: Upload the simulator
+        uses: actions/upload-artifact@v4
+        with:
+          name: ddl0-sim-windows
+          path: simulator/dist/
+          retention-days: 14
