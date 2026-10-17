@@ -323,8 +323,8 @@ def build_middle_and_lower():
                       segments=64, ring_count=32, radius=0.9, location=(0, 0, UNDERSIDE_Z + 0.03))
     plate.scale = (1.0, 1.0, 0.07)
 
-    # White "data processing" LED, peeking out of the gap at the front.
-    n = Vector((0.3, -0.95, 0.0)).normalized()
+    # White "data processing" LED, in the gap at the front-left.
+    n = Vector((-0.39, -0.92, 0.0)).normalized()
     led = primitive(bpy.ops.mesh.primitive_uv_sphere_add, "led_white", lens_material("led_lens"),
                     segments=24, ring_count=12, radius=0.04,
                     location=n * 1.06 + Vector((0, 0, CZ - 0.09)), rotation=facing(n))
@@ -346,8 +346,10 @@ def build_antenna():
 
 
 def build_plug_arm():
-    a = Vector((1.0, -0.3, CZ - 0.1))
-    b = Vector((1.78, -0.48, CZ - 0.16))
+    # Comes out of the gap at the front-right and points outward from there.
+    out = Vector((0.69, -0.73, 0.0)).normalized()
+    a = out * 0.98 + Vector((0, 0, CZ - 0.1))
+    b = out * 1.75 + Vector((0, 0, CZ - 0.16))
     rod("arm", a, b, 0.028, M["iron"])
     d = (b - a).normalized()
     primitive(bpy.ops.mesh.primitive_cone_add, "arm_bulb", M["iron"], vertices=24,
