@@ -1,0 +1,50 @@
+# How the simulator maps PCA9685 outputs onto the 3D droid.
+# Edit and restart the simulator to apply.
+
+# The physical wing servos: pulse width range that covers their full travel.
+[servo]
+min_pulse_us = 544
+max_pulse_us = 2400
+range_deg = 180
+
+# The wings are the two white top panels, hinged along the centre spine.
+# Panel angle = (servo angle - neutral_deg) * direction * gain, clamped to
+# min_deg..max_deg, where 0 is closed flush on the head.
+
+# Channel 0. In code.py a *lower* servo angle raises this panel.
+[wing_right]
+channel = 0
+neutral_deg = 90      # servo angle at which the panel is closed
+direction = -1.0      # +1 if a larger angle raises the panel
+gain = 0.45           # panel degrees per servo degree (linkage ratio)
+hinge_axis = [0.0, 0.0, 1.0]
+min_deg = 0
+max_deg = 75
+
+# Channel 1, mounted inverted: a *higher* servo angle raises this panel.
+# Breathing pairs ch0 65/50 with ch1 35/50, i.e. ch1 ~ 100 - ch0, hence 10.
+[wing_left]
+channel = 1
+neutral_deg = 10
+direction = 1.0
+gain = 0.45
+hinge_axis = [0.0, 0.0, -1.0]
+min_deg = 0
+max_deg = 75
+
+# PCA9685 channels for each eye's red, green, blue.
+[eyes]
+main = [2, 3, 4]
+small = [5, 6, 7]
+
+# Costs on the real PropMaker Feather. These are estimates until you run
+# simulator/board_bench.py on the robot and paste the [board] block it prints
+# over this one. Toggle their effect with "Board speed" in the toolbar.
+[board]
+measured = false
+pca_write_ms = 2.0      # one servo/LED angle write over I2C
+pwm_write_ms = 0.05     # one white LED duty_cycle write
+accel_read_ms = 1.5     # one LIS3DH acceleration read
+loop_ms = 0.25          # asyncio overhead per scheduler pass
+heap_budget_kb = 130    # heap left for code.py after its imports
+heap_scale = 0.45       # CircuitPython bytes per desktop-Python byte

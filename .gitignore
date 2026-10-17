@@ -5,3 +5,7 @@
 /.vscode
 **/.vscode/
 
+# Simulator build output
+/simulator/dist/
+/simulator/target/
+__pycache__/
