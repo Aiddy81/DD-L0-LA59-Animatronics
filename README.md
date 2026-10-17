@@ -114,6 +114,8 @@ There are two models, switchable live with **Model** in the toolbar (`[model] ki
   ```
 
   (adjust the path to your `blender.exe`). The simulator loads `droid.glb` at start-up, so no rebuild of the app is needed.
+
+  `simulator/assets/src/lola.blend` is the same model as an editable Blender file, with modifiers still live and a camera and lights. It's generated too: add its path as a second argument after `droid.glb` to regenerate it. If you edit the `.blend` by hand, export it to `droid.glb` with *+Y Up* and *Apply Modifiers* ticked, keeping the node names above. The script's output would overwrite those hand edits.
 - **Primitive**: the simple built-in version (`simulator/src/droid.rs`), always available.
 
 Any model can drive the simulator if it has nodes named `wing_right` and `wing_left` (the white top panels, with their origin on the hinge along the spine), plus `eye_main`, `eye_small` and `led_white` (the lenses). The meshes inside them must have different names. `simulator/sim.toml` sets how servo angles map onto panel rotation: neutral angle, direction, linkage gain, travel limits and hinge axis per wing.

@@ -2,7 +2,10 @@
 
 Run with Blender 5.x (no other setup needed):
 
-    blender --background --factory-startup --python simulator/assets/src/build_lola.py -- simulator/assets/droid.glb
+    blender --background --factory-startup --python simulator/assets/src/build_lola.py -- simulator/assets/droid.glb [simulator/assets/src/lola.blend]
+
+The optional second path also saves an editable .blend (modifiers kept live,
+with a camera and lights) next to the exported model.
 
 Modelled from photos of the real prop. The simulator drives these nodes by
 name: wing_right and wing_left (the two rear white panels, origin on their
@@ -17,7 +20,9 @@ import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
-OUT = sys.argv[sys.argv.index("--") + 1] if "--" in sys.argv else "droid.glb"
+ARGS = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+OUT = ARGS[0] if ARGS else "droid.glb"
+BLEND = ARGS[1] if len(ARGS) > 1 else None
 
 # Upper shell: an ellipsoid dome over a shallow underside, rim at height CZ.
 R = 1.25
@@ -449,6 +454,34 @@ def main():
     build_legs()
     bpy.ops.export_scene.gltf(filepath=OUT, export_format="GLB", export_yup=True, export_apply=True)
     print("wrote", OUT)
+    if BLEND:
+        add_stage()
+        bpy.ops.wm.save_as_mainfile(filepath=BLEND, compress=True)
+        print("wrote", BLEND)
+
+
+def add_stage():
+    """Camera, lights and a dark world, added after export so they stay out of droid.glb."""
+    scene = bpy.context.scene
+    cam = bpy.data.objects.new("camera", bpy.data.cameras.new("camera"))
+    scene.collection.objects.link(cam)
+    cam.location = (2.4, -5.6, 3.6)
+    cam.rotation_euler = (Vector((0, 0, 1.0)) - cam.location).to_track_quat("-Z", "Y").to_euler()
+    scene.camera = cam
+    sun = bpy.data.objects.new("sun", bpy.data.lights.new("sun", "SUN"))
+    sun.data.energy = 3.5
+    sun.rotation_euler = (math.radians(50), math.radians(10), math.radians(30))
+    scene.collection.objects.link(sun)
+    fill = bpy.data.objects.new("fill", bpy.data.lights.new("fill", "AREA"))
+    fill.data.energy = 600
+    fill.data.size = 4
+    fill.location = (-4, -4, 4)
+    fill.rotation_euler = (Vector((0, 0, 1)) - fill.location).to_track_quat("-Z", "Y").to_euler()
+    scene.collection.objects.link(fill)
+    if scene.world is None:
+        scene.world = bpy.data.worlds.new("World")
+    scene.world.color = (0.05, 0.055, 0.065)
+    scene.render.engine = "BLENDER_EEVEE"
 
 
 main()
