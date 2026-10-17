@@ -10,6 +10,8 @@ time.monotonic() has CircuitPython's reduced float precision.
 """
 import asyncio
 import builtins
+import gc as _real_gc
+import marshal
 import struct
 import importlib.abc
 import importlib.util
@@ -18,6 +20,7 @@ import selectors
 import sys
 import time as _real_time
 import traceback
+import tracemalloc
 import types
 
 import simhw
@@ -39,7 +42,11 @@ class _ShimLoader(importlib.abc.Loader):
         return None
 
     def exec_module(self, module):
+        # What a stand-in allocates while importing is library code, which the
+        # board's heap budget already excludes.
+        before = _heap.stand_in_bytes()
         exec(compile(self._source, "<sim>/" + module.__name__ + ".py", "exec"), module.__dict__)
+        _heap.import_bytes += _heap.stand_in_bytes() - before
 
 
 class _ShimFinder(importlib.abc.MetaPathFinder):
@@ -112,6 +119,8 @@ class _ScaledSelector(selectors.SelectSelector):
         # code.py does I/O through the loop, so sleeping first loses nothing.
         if timeout > 0:
             _real_time.sleep(timeout)
+        simhw.charge("loop")
+        _heap.sample()
         return super().select(0)
 
 
@@ -199,23 +208,173 @@ def _cp_view(module, allowed):
     return view
 
 
-def _strict_builtins(code_path):
-    """Builtins for code.py whose import only allows CircuitPython modules."""
-    allowed = set(_CP_MODULES)
+class _HeapMeter:
+    """Estimates code.py's heap: live objects allocated by code.py itself and by
+    the hardware stand-ins it drives, plus code.py's compiled bytecode (which
+    CircuitPython also keeps in RAM). Desktop-only overhead (imports, the event
+    loop, text codecs) is left out, since the board's budget is measured after
+    its libraries load. Rust scales the result to CircuitPython's smaller
+    objects. Good for spotting "this won't fit", not for the last few KB."""
+
+    def __init__(self):
+        self.code_path = None
+        self.code_bytes = 0
+        self.import_bytes = 0
+        self._last = 0.0
+
+    def start(self, code_path, code_obj):
+        self.code_path = code_path
+        self.code_bytes = len(marshal.dumps(code_obj))
+        self.import_bytes = 0
+        self._last = 0.0
+        tracemalloc.start(1)
+
+    def _bytes(self):
+        """(code.py bytes, stand-in bytes) currently live."""
+        code = sim = 0
+        for stat in tracemalloc.take_snapshot().statistics("filename"):
+            name = stat.traceback[0].filename
+            if name == self.code_path:
+                code += stat.size
+            elif name.startswith("<sim>/"):
+                sim += stat.size
+        return code, sim
+
+    def stand_in_bytes(self):
+        return self._bytes()[1] if self.code_path else 0
+
+    def stop(self):
+        self.code_path = None
+        tracemalloc.stop()
+
+    def sample(self, force=False):
+        if self.code_path is None:
+            return
+        now = _real_time.monotonic()
+        if not force and now - self._last < 2.0:
+            return
+        self._last = now
+        code, sim = self._bytes()
+        used = self.code_bytes + code + max(0, sim - self.import_bytes)
+        simhw.set_heap(float(used))
+
+
+_heap = _HeapMeter()
+
+
+def _gc_module():
+    """CircuitPython's gc, with mem_free()/mem_alloc() from the heap estimate."""
+    module = types.ModuleType("gc")
+
+    def collect():
+        _real_gc.collect()
+        _heap.sample(force=True)
+
+    def mem_alloc():
+        return int(simhw.heap()[0])
+
+    def mem_free():
+        used, budget = simhw.heap()
+        return max(0, int(budget - used))
+
+    module.collect = collect
+    module.mem_alloc = mem_alloc
+    module.mem_free = mem_free
+    module.enable = _real_gc.enable
+    module.disable = _real_gc.disable
+    module.isenabled = _real_gc.isenabled
+    module.threshold = lambda *args: None
+    return module
+
+
+class _NotSimulated:
+    """Stands in for any object from a library the simulator doesn't model:
+    accepts every call and attribute so the rest of code.py keeps running."""
+
+    def __init__(self, path):
+        object.__setattr__(self, "_path", path)
+
+    def __getattr__(self, name):
+        return _NotSimulated(self._path + "." + name)
+
+    def __setattr__(self, name, value):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        return _NotSimulated(self._path + "()")
+
+    def __getitem__(self, key):
+        return _NotSimulated("{}[{!r}]".format(self._path, key))
+
+    def __setitem__(self, key, value):
+        pass
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self):
+        return 0
+
+    def __bool__(self):
+        return False
+
+    def __int__(self):
+        return 0
+
+    def __float__(self):
+        return 0.0
+
+    def __index__(self):
+        return 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __repr__(self):
+        return "<not simulated: {}>".format(self._path)
+
+
+def _not_simulated_module(name):
+    module = types.ModuleType(name)
+    module.__getattr__ = lambda attr: _NotSimulated(name + "." + attr)
+    return module
+
+
+def _code_builtins(code_path, strict):
+    """Builtins for code.py. Its imports get CircuitPython's gc, a stand-in for
+    board libraries the simulator doesn't model, and, in strict mode, only
+    CircuitPython 9's modules and APIs."""
+    board_modules = set(_CP_MODULES)
     lib = os.path.join(os.path.dirname(code_path), "lib")
     if os.path.isdir(lib):
         for entry in os.listdir(lib):
-            allowed.add(entry.split(".")[0])
-    views = {}
+            board_modules.add(entry.split(".")[0])
+    views = {"gc": _gc_module()}
+    stubs = {}
 
     def cp_import(name, globals=None, locals=None, fromlist=(), level=0):
         top = name.split(".")[0]
-        if level == 0 and top not in allowed:
+        if level == 0 and name == "gc":
+            return views["gc"]
+        if strict and level == 0 and top not in board_modules:
             raise ImportError(
                 "no module named '{}' (not in CircuitPython 9 or lib/; "
                 "simulator strict mode)".format(name))
-        module = builtins.__import__(name, globals, locals, fromlist, level)
-        if name in _CP_SURFACE and level == 0:
+        try:
+            module = builtins.__import__(name, globals, locals, fromlist, level)
+        except ModuleNotFoundError as e:
+            missing = (e.name or "").split(".")[0]
+            if level != 0 or missing != top or top not in board_modules:
+                raise
+            simhw.unsimulated(top)
+            wanted = name if fromlist else top
+            if wanted not in stubs:
+                stubs[wanted] = _not_simulated_module(wanted)
+            return stubs[wanted]
+        if strict and name in _CP_SURFACE and level == 0:
             if name not in views:
                 views[name] = _cp_view(module, _CP_SURFACE[name])
             for wanted in fromlist or ():
@@ -267,10 +426,11 @@ def run(code_path, shims):
         print("[sim] running", code_path, "(CircuitPython strict)" if strict else "")
         with open(code_path, encoding="utf-8") as f:
             source = f.read()
-        env = {"__name__": "__main__", "__file__": code_path}
-        if strict:
-            env["__builtins__"] = _strict_builtins(code_path)
-        exec(compile(source, code_path, "exec"), env)
+        env = {"__name__": "__main__", "__file__": code_path,
+               "__builtins__": _code_builtins(code_path, strict)}
+        code_obj = compile(source, code_path, "exec")
+        _heap.start(code_path, code_obj)
+        exec(code_obj, env)
         print("\nCode done running.")
     except (SimStop, asyncio.CancelledError, KeyboardInterrupt):
         print("[sim] stopped")
@@ -278,6 +438,7 @@ def run(code_path, shims):
         traceback.print_exc()
         print("\nCode done running.")
     finally:
+        _heap.stop()
         asyncio.wait_for = _original_wait_for
         asyncio.set_event_loop_policy(saved["policy"])
         if saved["time"] is not None:

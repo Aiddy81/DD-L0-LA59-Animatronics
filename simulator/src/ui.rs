@@ -164,6 +164,14 @@ fn panels(mut contexts: EguiContexts, mut ui: ResMut<UiState>, mut host: ResMut<
             {
                 hw().strict = strict;
             }
+            let mut board_speed = hw().board_speed;
+            if row
+                .checkbox(&mut board_speed, "Board speed")
+                .on_hover_text("Each servo/LED write, accelerometer read and scheduler pass takes as long as on the robot ([board] in sim.toml).")
+                .changed()
+            {
+                hw().board_speed = board_speed;
+            }
             row.checkbox(&mut ui.auto_reload, "Restart when code.py is saved");
             row.label(format!("sim time {:.1} s", hw().clock.now()));
         });
@@ -250,6 +258,10 @@ fn panels(mut contexts: EguiContexts, mut ui: ResMut<UiState>, mut host: ResMut<
                 .small()
                 .weak(),
             );
+
+            side.separator();
+            side.heading("Board");
+            board_panel(side);
 
             side.separator();
             side.heading(format!("Last {PLOT_SECONDS:.0} s"));
@@ -349,4 +361,52 @@ fn plot(ui: &mut egui::Ui, history: &VecDeque<Sample>) {
         font,
         Color32::GRAY,
     );
+}
+
+fn board_panel(ui: &mut egui::Ui) {
+    let s = hw();
+    let b = &s.board;
+    let source = if b.measured {
+        "measured on the robot"
+    } else {
+        "estimates; run board_bench.py on the robot"
+    };
+    ui.label(format!("Timing: {source}"));
+    ui.label(
+        egui::RichText::new(format!(
+            "servo/LED write {:.2} ms, accel read {:.2} ms, scheduler {:.2} ms",
+            b.pca_write_ms, b.accel_read_ms, b.loop_ms
+        ))
+        .small()
+        .weak(),
+    );
+
+    let budget = s.heap_budget();
+    let used = (s.heap_bytes / budget) as f32;
+    let colour = if used >= 1.0 {
+        Color32::from_rgb(220, 60, 60)
+    } else if used >= 0.8 {
+        Color32::from_rgb(230, 170, 40)
+    } else {
+        Color32::from_rgb(70, 170, 90)
+    };
+    ui.add(
+        egui::ProgressBar::new(used.min(1.0))
+            .fill(colour)
+            .text(format!(
+                "heap ~{:.0} of {:.0} KB (peak {:.0})",
+                s.heap_bytes / 1024.0,
+                b.heap_budget_kb,
+                s.heap_peak / 1024.0
+            )),
+    )
+    .on_hover_text("Estimated from what code.py allocates, scaled to CircuitPython's smaller objects. Catches clear overruns, not the last few KB.");
+
+    if !s.unsimulated.is_empty() {
+        ui.label(
+            egui::RichText::new(format!("Not simulated: {}", s.unsimulated.join(", ")))
+                .color(Color32::from_rgb(230, 170, 40)),
+        )
+        .on_hover_text("These libraries are stand-ins that accept every call and do nothing.");
+    }
 }

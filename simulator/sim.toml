@@ -36,3 +36,15 @@ max_deg = 75
 [eyes]
 main = [2, 3, 4]
 small = [5, 6, 7]
+
+# Costs on the real PropMaker Feather. These are estimates until you run
+# simulator/board_bench.py on the robot and paste the [board] block it prints
+# over this one. Toggle their effect with "Board speed" in the toolbar.
+[board]
+measured = false
+pca_write_ms = 2.0      # one servo/LED angle write over I2C
+pwm_write_ms = 0.05     # one white LED duty_cycle write
+accel_read_ms = 1.5     # one LIS3DH acceleration read
+loop_ms = 0.25          # asyncio overhead per scheduler pass
+heap_budget_kb = 130    # heap left for code.py after its imports
+heap_scale = 0.45       # CircuitPython bytes per desktop-Python byte

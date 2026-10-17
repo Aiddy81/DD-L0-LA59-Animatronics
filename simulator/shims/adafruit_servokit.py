@@ -24,6 +24,7 @@ class _Channel:
         # The PCA9685 only has 12-bit resolution; 0xFFFF means fully on.
         self._duty = 0xFFFF if value == 0xFFFF else (value >> 4) << 4
         simhw.set_pca(self._index, self._duty)
+        simhw.charge("pca")
 
 
 class _PCA9685:

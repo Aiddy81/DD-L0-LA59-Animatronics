@@ -19,6 +19,7 @@ class PWMOut:
             raise ValueError("duty_cycle must be 0-65535")
         self._duty = value
         simhw.set_pwm_pin(self._pin.name, value)
+        simhw.charge("pwm")
 
     def deinit(self):
         pass

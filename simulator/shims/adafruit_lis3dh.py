@@ -46,6 +46,7 @@ class LIS3DH:
     def acceleration(self):
         # The sensor saturates one LSB below full scale.
         limit = _FULL_SCALE_G[self._range] * (1 - 1 / 32768)
+        simhw.charge("accel")
         x, y, z = simhw.accel()
         return tuple(max(-limit, min(limit, v)) * STANDARD_GRAVITY for v in (x, y, z))
 

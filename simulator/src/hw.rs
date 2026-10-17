@@ -5,6 +5,8 @@ use std::collections::VecDeque;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::Instant;
 
+use crate::config::BoardCfg;
+
 /// PCA9685 runs the servo FeatherWing at 50 Hz, so one period is 20 ms.
 pub const PWM_PERIOD_US: f32 = 20_000.0;
 const LOG_CAP: usize = 4000;
@@ -39,6 +41,17 @@ pub struct HwState {
     pub idle_trigger: bool,
     /// Hold code.py to what CircuitPython 9 offers (imports, APIs, float precision).
     pub strict: bool,
+    /// Make hardware calls take as long as on the robot.
+    pub board_speed: bool,
+    pub board: BoardCfg,
+    /// Board time owed but not yet slept, in virtual seconds.
+    debt_s: f64,
+    /// Estimated CircuitPython heap used by code.py, in bytes.
+    pub heap_bytes: f64,
+    pub heap_peak: f64,
+    heap_warned: u8,
+    /// Libraries code.py imported that the simulator only stubs out.
+    pub unsimulated: Vec<String>,
 }
 
 impl HwState {
@@ -57,6 +70,13 @@ impl HwState {
             stop_requested: false,
             idle_trigger: false,
             strict: true,
+            board_speed: true,
+            board: BoardCfg::default(),
+            debt_s: 0.0,
+            heap_bytes: 0.0,
+            heap_peak: 0.0,
+            heap_warned: 0,
+            unsimulated: Vec::new(),
         }
     }
 
@@ -66,12 +86,66 @@ impl HwState {
         let accel = self.accel_g;
         let speed = self.clock.speed;
         let strict = self.strict;
+        let board_speed = self.board_speed;
+        let board = self.board.clone();
         let log = std::mem::take(&mut self.log);
         *self = Self::new();
         self.accel_g = accel;
         self.clock.speed = speed;
         self.strict = strict;
+        self.board_speed = board_speed;
+        self.board = board;
         self.log = log;
+    }
+
+    /// Books the board's cost for one hardware call. Returns real seconds to
+    /// sleep now; small costs build up until they're worth a sleep.
+    pub fn charge(&mut self, kind: &str) -> Option<f64> {
+        if !self.board_speed {
+            return None;
+        }
+        let ms = match kind {
+            "pca" => self.board.pca_write_ms,
+            "pwm" => self.board.pwm_write_ms,
+            "accel" => self.board.accel_read_ms,
+            "loop" => self.board.loop_ms,
+            _ => return None,
+        };
+        self.debt_s += ms / 1000.0;
+        let real = self.debt_s / self.clock.speed;
+        if real < 0.001 {
+            return None;
+        }
+        self.debt_s = 0.0;
+        Some(real)
+    }
+
+    pub fn heap_budget(&self) -> f64 {
+        self.board.heap_budget_kb * 1024.0
+    }
+
+    /// Records a new heap estimate and warns once each at 80% and 100%.
+    pub fn set_heap(&mut self, desktop_bytes: f64) {
+        self.heap_bytes = desktop_bytes * self.board.heap_scale;
+        self.heap_peak = self.heap_peak.max(self.heap_bytes);
+        let used = self.heap_bytes / self.heap_budget();
+        let level = if used >= 1.0 {
+            2
+        } else if used >= 0.8 {
+            1
+        } else {
+            0
+        };
+        if level > self.heap_warned {
+            self.heap_warned = level;
+            let kb = self.heap_bytes / 1024.0;
+            let budget = self.board.heap_budget_kb;
+            self.push_line(if level == 2 {
+                format!("[sim] estimated heap {kb:.0} KB exceeds the board's {budget:.0} KB: likely MemoryError on the robot")
+            } else {
+                format!("[sim] estimated heap {kb:.0} KB is over 80% of the board's {budget:.0} KB")
+            });
+        }
     }
 
     pub fn duty_fraction(&self, channel: usize) -> Option<f32> {

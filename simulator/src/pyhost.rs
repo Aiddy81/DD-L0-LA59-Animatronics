@@ -117,6 +117,37 @@ mod simhw {
     }
 
     #[pyfunction]
+    fn charge(kind: &str) {
+        let sleep = hw().charge(kind);
+        if let Some(secs) = sleep {
+            std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+        }
+    }
+
+    #[pyfunction]
+    fn set_heap(desktop_bytes: f64) {
+        hw().set_heap(desktop_bytes);
+    }
+
+    /// (estimated CircuitPython bytes used, board budget in bytes)
+    #[pyfunction]
+    fn heap() -> (f64, f64) {
+        let s = hw();
+        (s.heap_bytes, s.heap_budget())
+    }
+
+    #[pyfunction]
+    fn unsimulated(name: String) {
+        let mut s = hw();
+        if !s.unsimulated.contains(&name) {
+            s.push_line(format!(
+                "[sim] {name} is not simulated; calls to it do nothing"
+            ));
+            s.unsimulated.push(name);
+        }
+    }
+
+    #[pyfunction]
     fn strict() -> bool {
         hw().strict
     }

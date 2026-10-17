@@ -83,6 +83,20 @@ The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and 
 - With `RANGE_2_G` the accelerometer never reports more than about 2 g, so `abs(z) > 2.5` (hard motion) can't fire.
 - `data_processing_led()` uses blocking `time.sleep()`, which freezes every other behaviour while it runs.
 
+### Matching the real board
+
+The RP2040 is much slower than a PC and has far less memory, so the simulator models both:
+
+- **Board speed** (toolbar, on by default): every servo/LED write, accelerometer read and scheduler pass takes as long as it does on the robot. So an animation runs at the speed the robot will really manage, not just the speed the code asks for.
+- **Heap gauge** (Board panel): an estimate of how much of the board's free memory `code.py` uses. It warns in the log at 80% and 100%. `gc.mem_free()` and `gc.mem_alloc()` return the estimate too. It's approximate: it catches "this clearly won't fit", not the last few KB.
+- **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel.
+
+The timing and memory figures in `simulator/sim.toml` `[board]` start as estimates. To measure your robot:
+
+1. Copy `simulator/board_bench.py` to the root of the CIRCUITPY drive.
+2. In the serial console press Ctrl-C, then Enter, and type `import board_bench`. Only the main eye's red LED flickers dimly; the wings don't move.
+3. Paste the `[board]` block it prints over the one in `simulator/sim.toml`, then delete `board_bench.py` from the drive.
+
 ### Your own 3D model
 
 The built-in model is a primitive L0-LA59: red saucer head, the two white top panels as the servo-driven wings hinged on the centre spine, main and small eyes, gear ring, stem and base. Put a `simulator/assets/droid.glb` in place and it replaces that model. Name the nodes `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white`. `simulator/sim.toml` sets how servo angles map onto wing rotation: neutral angle, direction, linkage gain and hinge axis per wing.

@@ -12,6 +12,42 @@ pub struct SimConfig {
     pub wing_right: WingCfg,
     pub wing_left: WingCfg,
     pub eyes: EyesCfg,
+    pub board: BoardCfg,
+}
+
+/// Costs on the real PropMaker Feather, from `simulator/board_bench.py` run on
+/// the robot, or estimates until then.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct BoardCfg {
+    /// True once the numbers come from board_bench.py rather than estimates.
+    pub measured: bool,
+    /// One servo/LED write through ServoKit to the PCA9685 over I2C.
+    pub pca_write_ms: f64,
+    /// One `pwmio.PWMOut.duty_cycle` write.
+    pub pwm_write_ms: f64,
+    /// One LIS3DH `acceleration` read over I2C.
+    pub accel_read_ms: f64,
+    /// asyncio overhead per scheduler pass.
+    pub loop_ms: f64,
+    /// Heap left for code.py once its libraries are imported.
+    pub heap_budget_kb: f64,
+    /// CircuitPython bytes per desktop-Python byte allocated (objects are smaller there).
+    pub heap_scale: f64,
+}
+
+impl Default for BoardCfg {
+    fn default() -> Self {
+        Self {
+            measured: false,
+            pca_write_ms: 2.0,
+            pwm_write_ms: 0.05,
+            accel_read_ms: 1.5,
+            loop_ms: 0.25,
+            heap_budget_kb: 130.0,
+            heap_scale: 0.45,
+        }
+    }
 }
 
 /// The physical servo: which pulse widths it maps onto its travel.
@@ -70,6 +106,7 @@ impl Default for SimConfig {
                 max_deg: 75.0,
             },
             eyes: EyesCfg::default(),
+            board: BoardCfg::default(),
         }
     }
 }

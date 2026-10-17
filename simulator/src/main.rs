@@ -86,6 +86,7 @@ fn main() {
     if let Some(w) = cfg_warning {
         hw().push_line(w);
     }
+    hw().board = cfg.board.clone();
 
     pyhost::init_python();
     let mut host = PyHost::new(paths.code.clone());
