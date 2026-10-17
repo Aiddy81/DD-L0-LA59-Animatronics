@@ -1,0 +1,120 @@
+"""Pure-Python stand-in for the simulator's Rust `simhw` module, so the shims
+and code.py can run headless (in CI) without the desktop app.
+
+It records what code.py does to the hardware; headless.py drives the
+scenario (nudges, idle trigger) and checks the result.
+"""
+import sys
+import time
+
+SPEED = 40.0
+DURATION = 120.0
+STRICT = True
+BOARD = {"pca": 2.0, "pwm": 0.05, "accel": 1.5, "loop": 0.25}
+HEAP_SCALE = 0.45
+HEAP_BUDGET = 130 * 1024.0
+
+pca = {}
+pins = {}
+white = [0]
+audio = []
+log_lines = []
+heap_peak = [0.0]
+unsimulated_libs = []
+# (virtual time, (x, y, z) in g) readings queued for the accelerometer.
+scheduled_accel = []
+idle_trigger_at = []
+
+_t0 = [time.monotonic()]
+_debt = [0.0]
+_partial = [""]
+_heap_now = [0.0]
+
+
+def reset():
+    _t0[0] = time.monotonic()
+    _debt[0] = 0.0
+
+
+def now():
+    return (time.monotonic() - _t0[0]) * SPEED
+
+
+def speed():
+    return SPEED
+
+
+def stopping():
+    return now() >= DURATION
+
+
+def strict():
+    return STRICT
+
+
+def take_idle_trigger():
+    if idle_trigger_at and now() >= idle_trigger_at[0]:
+        idle_trigger_at.pop(0)
+        return True
+    return False
+
+
+def set_pca(channel, duty):
+    pca[channel] = duty
+
+
+def set_pwm_pin(name, duty):
+    if name == "EXTERNAL_NEOPIXELS":
+        white[0] = duty
+
+
+def set_pin(name, value):
+    pins[name] = value
+
+
+def accel():
+    if scheduled_accel and now() >= scheduled_accel[0][0]:
+        return scheduled_accel.pop(0)[1]
+    return (0.0, 0.0, 1.0)
+
+
+def log(text):
+    _partial[0] += text
+    while "\n" in _partial[0]:
+        line, _partial[0] = _partial[0].split("\n", 1)
+        log_lines.append(line)
+        sys.__stdout__.write(line + "\n")
+
+
+def play_wav(path, level, looped):
+    audio.append((round(now(), 1), path.replace("\\", "/").rsplit("/", 1)[-1]))
+
+
+def stop_audio():
+    pass
+
+
+def set_volume(level):
+    pass
+
+
+def charge(kind):
+    _debt[0] += BOARD.get(kind, 0.0) / 1000.0
+    real = _debt[0] / SPEED
+    if real >= 0.001:
+        _debt[0] = 0.0
+        time.sleep(real)
+
+
+def set_heap(desktop_bytes):
+    _heap_now[0] = desktop_bytes * HEAP_SCALE
+    heap_peak[0] = max(heap_peak[0], _heap_now[0])
+
+
+def heap():
+    return (_heap_now[0], HEAP_BUDGET)
+
+
+def unsimulated(name):
+    if name not in unsimulated_libs:
+        unsimulated_libs.append(name)

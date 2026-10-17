@@ -10,7 +10,7 @@ use bevy_egui::EguiContexts;
 use crate::config::SimConfig;
 use crate::hw::hw;
 use crate::pyhost::PyHost;
-use crate::scene::{glow_rgb, GlowSource};
+use crate::scene::{glow_rgb, GlowSource, ModelChoice};
 
 /// A gentle bump: one accelerometer read above code.py's 1.1 g threshold.
 const NUDGE_G: f32 = 1.3;
@@ -115,7 +115,12 @@ fn stop_on_exit(mut exits: EventReader<AppExit>, mut host: ResMut<Host>) {
     }
 }
 
-fn panels(mut contexts: EguiContexts, mut ui: ResMut<UiState>, mut host: ResMut<Host>) {
+fn panels(
+    mut contexts: EguiContexts,
+    mut ui: ResMut<UiState>,
+    mut host: ResMut<Host>,
+    model: Option<ResMut<ModelChoice>>,
+) {
     let Some(ctx) = contexts.try_ctx_mut() else {
         return;
     };
@@ -173,6 +178,20 @@ fn panels(mut contexts: EguiContexts, mut ui: ResMut<UiState>, mut host: ResMut<
                 hw().board_speed = board_speed;
             }
             row.checkbox(&mut ui.auto_reload, "Restart when code.py is saved");
+            if let Some(mut model) = model {
+                row.separator();
+                row.label("Model");
+                let mut use_gltf = model.use_gltf;
+                row.add_enabled_ui(model.gltf_available, |r| {
+                    r.selectable_value(&mut use_gltf, true, "Lola")
+                        .on_disabled_hover_text("Build simulator/assets/droid.glb first (see README)");
+                });
+                row.selectable_value(&mut use_gltf, false, "Primitive");
+                // Only touch the resource on a real change, so the model isn't rebuilt every frame.
+                if use_gltf != model.use_gltf {
+                    model.use_gltf = use_gltf;
+                }
+            }
             row.label(format!("sim time {:.1} s", hw().clock.now()));
         });
     });

@@ -9,3 +9,6 @@
 /simulator/dist/
 /simulator/target/
 __pycache__/
+/.ci-cache/
+# Blender backups
+*.blend1

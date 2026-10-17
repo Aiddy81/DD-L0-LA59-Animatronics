@@ -343,11 +343,12 @@ def _not_simulated_module(name):
     return module
 
 
-def _code_builtins(code_path, strict):
+def _code_builtins(code_path, strict, shims):
     """Builtins for code.py. Its imports get CircuitPython's gc, a stand-in for
     board libraries the simulator doesn't model, and, in strict mode, only
     CircuitPython 9's modules and APIs."""
-    board_modules = set(_CP_MODULES)
+    # Stand-ins model libraries the board has, so they're always importable.
+    board_modules = set(_CP_MODULES) | {name.split(".")[0] for name in shims}
     lib = os.path.join(os.path.dirname(code_path), "lib")
     if os.path.isdir(lib):
         for entry in os.listdir(lib):
@@ -427,7 +428,7 @@ def run(code_path, shims):
         with open(code_path, encoding="utf-8") as f:
             source = f.read()
         env = {"__name__": "__main__", "__file__": code_path,
-               "__builtins__": _code_builtins(code_path, strict)}
+               "__builtins__": _code_builtins(code_path, strict, shims)}
         code_obj = compile(source, code_path, "exec")
         _heap.start(code_path, code_obj)
         exec(code_obj, env)

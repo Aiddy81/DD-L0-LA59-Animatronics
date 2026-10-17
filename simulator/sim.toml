@@ -7,9 +7,13 @@ min_pulse_us = 544
 max_pulse_us = 2400
 range_deg = 180
 
-# The wings are the two white top panels, hinged along the centre spine.
+# The wings are the two rear white panels. Each hinges along its front edge
+# (the Y-shaped groove), so the back of the panel lifts. hinge_axis below is
+# for droid.glb; the primitive model computes its own matching hinge.
 # Panel angle = (servo angle - neutral_deg) * direction * gain, clamped to
 # min_deg..max_deg, where 0 is closed flush on the head.
+# hinge_axis is the hinge direction in droid.glb's wing node space (Y up, Z
+# forward); build_lola.py prints the values for its model.
 
 # Channel 0. In code.py a *lower* servo angle raises this panel.
 [wing_right]
@@ -17,7 +21,7 @@ channel = 0
 neutral_deg = 90      # servo angle at which the panel is closed
 direction = -1.0      # +1 if a larger angle raises the panel
 gain = 0.45           # panel degrees per servo degree (linkage ratio)
-hinge_axis = [0.0, 0.0, 1.0]
+hinge_axis = [0.924, -0.296, 0.244]
 min_deg = 0
 max_deg = 75
 
@@ -28,7 +32,7 @@ channel = 1
 neutral_deg = 10
 direction = 1.0
 gain = 0.45
-hinge_axis = [0.0, 0.0, -1.0]
+hinge_axis = [0.924, 0.296, -0.244]
 min_deg = 0
 max_deg = 75
 
@@ -48,3 +52,8 @@ accel_read_ms = 1.5     # one LIS3DH acceleration read
 loop_ms = 0.25          # asyncio overhead per scheduler pass
 heap_budget_kb = 130    # heap left for code.py after its imports
 heap_scale = 0.45       # CircuitPython bytes per desktop-Python byte
+
+# Which droid to show at start-up: "gltf" (assets/droid.glb, built by
+# assets/src/build_lola.py) or "primitive". Switch live with Model in the toolbar.
+[model]
+kind = "gltf"
