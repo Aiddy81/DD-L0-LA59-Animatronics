@@ -13,6 +13,22 @@ pub struct SimConfig {
     pub wing_left: WingCfg,
     pub eyes: EyesCfg,
     pub board: BoardCfg,
+    pub model: ModelCfg,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct ModelCfg {
+    /// "gltf" (assets/droid.glb, the default) or "primitive". Switchable in the app.
+    pub kind: String,
+}
+
+impl Default for ModelCfg {
+    fn default() -> Self {
+        Self {
+            kind: "gltf".into(),
+        }
+    }
 }
 
 /// Costs on the real PropMaker Feather, from `simulator/board_bench.py` run on
@@ -107,6 +123,7 @@ impl Default for SimConfig {
             },
             eyes: EyesCfg::default(),
             board: BoardCfg::default(),
+            model: ModelCfg::default(),
         }
     }
 }

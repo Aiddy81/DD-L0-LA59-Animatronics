@@ -67,6 +67,18 @@ pub struct OrbitCam {
     focus: Vec3,
 }
 
+/// Which droid model is shown. Switching it swaps the model live.
+#[derive(Resource)]
+pub struct ModelChoice {
+    pub use_gltf: bool,
+    /// Whether `assets/droid.glb` exists.
+    pub gltf_available: bool,
+}
+
+/// Parent of everything that makes up the droid model.
+#[derive(Component)]
+struct DroidRoot;
+
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
@@ -81,6 +93,7 @@ impl Plugin for ScenePlugin {
             .add_systems(
                 Update,
                 (
+                    spawn_model.run_if(resource_changed::<ModelChoice>),
                     bind_gltf_nodes,
                     adopt_glow_materials,
                     drive_wings,
@@ -95,9 +108,14 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
     paths: Res<Paths>,
+    cfg: Res<SimConfig>,
 ) {
+    let gltf_available = paths.assets.join(MODEL_FILE).exists();
+    commands.insert_resource(ModelChoice {
+        use_gltf: gltf_available && cfg.model.kind != "primitive",
+        gltf_available,
+    });
     commands.spawn((
         Camera3d::default(),
         Camera {
@@ -131,19 +149,38 @@ fn setup(
             ..default()
         })),
     ));
+}
 
-    if paths.assets.join(MODEL_FILE).exists() {
-        commands.spawn(SceneRoot(
+/// (Re)builds the droid as the chosen model: the real one from droid.glb or
+/// the primitive one from droid.rs.
+fn spawn_model(
+    mut commands: Commands,
+    choice: Res<ModelChoice>,
+    existing: Query<Entity, With<DroidRoot>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+) {
+    for root in &existing {
+        commands.entity(root).despawn();
+    }
+    let root = commands
+        .spawn((DroidRoot, Transform::default(), Visibility::default()))
+        .observe(boop)
+        .id();
+    if choice.use_gltf && choice.gltf_available {
+        commands.entity(root).insert(SceneRoot(
             asset_server.load(GltfAssetLabel::Scene(0).from_asset(MODEL_FILE)),
         ));
     } else {
-        crate::droid::spawn(&mut commands, &mut meshes, &mut materials);
+        crate::droid::spawn(&mut commands, &mut meshes, &mut materials, root);
     }
 }
 
 /// Clicking the droid is a nose boop: one gentle accelerometer nudge. A drag
-/// to orbit the camera that happens to start on it doesn't count.
-pub(crate) fn boop(_: Trigger<Pointer<Click>>, drag: Res<DragDistance>) {
+/// to orbit the camera that happens to start on it doesn't count. Clicks on
+/// any part bubble up to the model's root, which has this observer.
+fn boop(_: Trigger<Pointer<Click>>, drag: Res<DragDistance>) {
     if drag.0 < 4.0 {
         crate::ui::nudge();
     }

@@ -7,7 +7,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
-use crate::scene::{boop, Glow, GlowLight, GlowSource, Side, Wing};
+use crate::scene::{Glow, GlowLight, GlowSource, Side, Wing};
 
 // The head is an ellipsoid: radii RX (side), RY (height), RZ (front-back).
 const RX: f32 = 1.25;
@@ -118,6 +118,8 @@ fn rod(a: Vec3, b: Vec3) -> Transform {
 }
 
 struct Palette {
+    /// Everything spawns under this, so the model can be swapped out whole.
+    root: Entity,
     red: Handle<StandardMaterial>,
     white: Handle<StandardMaterial>,
     black: Handle<StandardMaterial>,
@@ -145,8 +147,10 @@ pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    root: Entity,
 ) {
     let p = Palette {
+        root,
         red: matte(materials, 0.5, 0.1, 0.08, 0.6),
         white: matte(materials, 0.86, 0.85, 0.81, 0.55),
         black: matte(materials, 0.05, 0.05, 0.055, 0.5),
@@ -190,6 +194,7 @@ pub fn spawn(
         commands,
         meshes,
         materials,
+        root,
         GlowSource::WhiteLed,
         led_at,
         led_at.with_y(0.0).normalize(),
@@ -199,22 +204,26 @@ pub fn spawn(
 
 fn spawn_base(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(1.05, 0.12))),
         MeshMaterial3d(p.black.clone()),
         Transform::from_xyz(0.0, 0.06, 0.0),
     ));
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(0.97, 0.2))),
         MeshMaterial3d(p.wood.clone()),
         Transform::from_xyz(0.0, 0.22, 0.0),
     ));
     // The white emblem, simplified to its outer ring and central shield.
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Torus::new(0.66, 0.72))),
         MeshMaterial3d(p.white.clone()),
         Transform::from_xyz(0.0, 0.32, 0.0).with_scale(Vec3::new(1.0, 0.25, 1.0)),
     ));
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Sphere::new(0.17))),
         MeshMaterial3d(p.wood.clone()),
         Transform::from_xyz(0.0, 0.32, 0.12).with_scale(Vec3::new(1.0, 0.15, 1.35)),
@@ -222,6 +231,7 @@ fn spawn_base(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
 
     // Stem and its fins.
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(0.17, CY - 0.69))),
         MeshMaterial3d(p.black.clone()),
         Transform::from_xyz(0.0, (CY - 0.69) / 2.0 + 0.32, 0.0),
@@ -231,6 +241,7 @@ fn spawn_base(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
         let angle = std::f32::consts::FRAC_PI_4 + k as f32 * std::f32::consts::FRAC_PI_2;
         let dir = Vec3::new(angle.sin(), 0.0, angle.cos());
         commands.spawn((
+            ChildOf(p.root),
             Mesh3d(fin.clone()),
             MeshMaterial3d(p.black.clone()),
             Transform::from_translation(Vec3::new(0.0, 0.6, 0.0) + dir * 0.25)
@@ -241,39 +252,36 @@ fn spawn_base(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
 
 fn spawn_head(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
     // Red saucer: a domed top over a flatter underside.
-    commands
-        .spawn((
-            Mesh3d(meshes.add(shell_patch(0.0, Vec3::ZERO, -RZ, RZ, |z| {
-                let w = half_width(z, 1.0);
-                Some((-w, w))
-            }))),
-            MeshMaterial3d(p.red.clone()),
-        ))
-        .observe(boop);
-    commands
-        .spawn((
-            Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(96, 48))),
-            MeshMaterial3d(p.red.clone()),
-            Transform::from_xyz(0.0, CY, 0.0).with_scale(Vec3::new(
-                RX * 0.998,
-                RY_BOTTOM,
-                RZ * 0.998,
-            )),
-        ))
-        .observe(boop);
+    commands.spawn((
+        ChildOf(p.root),
+        Mesh3d(meshes.add(shell_patch(0.0, Vec3::ZERO, -RZ, RZ, |z| {
+            let w = half_width(z, 1.0);
+            Some((-w, w))
+        }))),
+        MeshMaterial3d(p.red.clone()),
+    ));
+    commands.spawn((
+        ChildOf(p.root),
+        Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(96, 48))),
+        MeshMaterial3d(p.red.clone()),
+        Transform::from_xyz(0.0, CY, 0.0).with_scale(Vec3::new(RX * 0.998, RY_BOTTOM, RZ * 0.998)),
+    ));
 
     // Underside: black lip, grey band, and the exposed gear ring.
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(1.02, 0.1))),
         MeshMaterial3d(p.black.clone()),
         Transform::from_xyz(0.0, CY - 0.18, 0.0),
     ));
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Torus::new(0.97, 1.03))),
         MeshMaterial3d(p.steel.clone()),
         Transform::from_xyz(0.0, CY - 0.24, 0.0).with_scale(Vec3::new(1.0, 0.6, 1.0)),
     ));
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(0.86, 0.12))),
         MeshMaterial3d(p.black.clone()),
         Transform::from_xyz(0.0, CY - 0.31, 0.0),
@@ -282,6 +290,7 @@ fn spawn_head(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
     for k in 0..56 {
         let angle = k as f32 / 56.0 * std::f32::consts::TAU;
         commands.spawn((
+            ChildOf(p.root),
             Mesh3d(tooth.clone()),
             MeshMaterial3d(p.black.clone()),
             Transform::from_xyz(angle.sin() * 0.88, CY - 0.31, angle.cos() * 0.88)
@@ -292,21 +301,20 @@ fn spawn_head(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
     // Raised centre spine, running front to back and stopping at the eye.
     let w = SPINE - 0.025;
     let spine_front = MAIN_EYE.y - (EYE_CLEAR * EYE_CLEAR - w * w).sqrt();
-    commands
-        .spawn((
-            Mesh3d(meshes.add(shell_patch(
-                0.035,
-                Vec3::ZERO,
-                -RZ * 0.92,
-                spine_front,
-                |z| {
-                    let edge = half_width(z, 0.86).min(w);
-                    Some((-edge, edge))
-                },
-            ))),
-            MeshMaterial3d(p.white.clone()),
-        ))
-        .observe(boop);
+    commands.spawn((
+        ChildOf(p.root),
+        Mesh3d(meshes.add(shell_patch(
+            0.035,
+            Vec3::ZERO,
+            -RZ * 0.92,
+            spine_front,
+            |z| {
+                let edge = half_width(z, 0.86).min(w);
+                Some((-edge, edge))
+            },
+        ))),
+        MeshMaterial3d(p.white.clone()),
+    ));
 }
 
 fn spawn_wings(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) {
@@ -324,6 +332,7 @@ fn spawn_wings(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) 
         });
         commands
             .spawn((
+                ChildOf(p.root),
                 Transform::from_translation(pivot),
                 Visibility::default(),
                 Wing {
@@ -332,9 +341,7 @@ fn spawn_wings(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette) 
                 },
             ))
             .with_children(|hinge| {
-                hinge
-                    .spawn((Mesh3d(meshes.add(panel)), MeshMaterial3d(p.white.clone())))
-                    .observe(boop);
+                hinge.spawn((Mesh3d(meshes.add(panel)), MeshMaterial3d(p.white.clone())));
             });
     }
 }
@@ -343,18 +350,21 @@ fn spawn_details(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette
     // Antenna at the back of the spine, red sleeve near the tip.
     let (root, _) = on_shell(Vec2::new(0.0, -0.86), 0.04);
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cuboid::new(0.14, 0.09, 0.22))),
         MeshMaterial3d(p.white.clone()),
         Transform::from_translation(root),
     ));
     let tip = root + Vec3::new(0.0, 0.55, -0.12);
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(0.012, root.distance(tip)))),
         MeshMaterial3d(p.steel.clone()),
         rod(root, tip),
     ));
     let sleeve_a = root.lerp(tip, 0.72);
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(0.028, sleeve_a.distance(tip)))),
         MeshMaterial3d(p.red.clone()),
         rod(sleeve_a, tip),
@@ -364,16 +374,19 @@ fn spawn_details(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette
     let top = Vec3::new(0.8, CY - 0.2, 0.42);
     let bottom = Vec3::new(1.0, 0.95, 0.6);
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cylinder::new(0.03, top.distance(bottom)))),
         MeshMaterial3d(p.black.clone()),
         rod(top, bottom),
     ));
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cone::new(0.09, 0.2))),
         MeshMaterial3d(p.black.clone()),
         Transform::from_translation(bottom + Vec3::new(0.0, -0.06, 0.0)),
     ));
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Cuboid::new(0.1, 0.3, 0.07))),
         MeshMaterial3d(p.black.clone()),
         Transform::from_translation(bottom + Vec3::new(0.0, -0.32, 0.0)),
@@ -381,6 +394,7 @@ fn spawn_details(commands: &mut Commands, meshes: &mut Assets<Mesh>, p: &Palette
     let prong = meshes.add(Cylinder::new(0.008, 0.14));
     for dx in [-0.025_f32, 0.025] {
         commands.spawn((
+            ChildOf(p.root),
             Mesh3d(prong.clone()),
             MeshMaterial3d(p.steel.clone()),
             Transform::from_translation(bottom + Vec3::new(dx, -0.53, 0.0)),
@@ -403,20 +417,25 @@ fn spawn_eye(
     let (centre, normal) = on_shell(at, 0.0);
     let facing = Quat::from_rotation_arc(Vec3::Y, normal);
     commands.spawn((
+        ChildOf(p.root),
         Mesh3d(meshes.add(Torus::new(lens, bezel))),
         MeshMaterial3d(p.steel.clone()),
         Transform::from_translation(centre + normal * 0.02)
             .with_rotation(facing)
             .with_scale(Vec3::new(1.0, 0.8, 1.0)),
     ));
-    spawn_lamp(commands, meshes, materials, source, centre, normal, lens);
+    spawn_lamp(
+        commands, meshes, materials, p.root, source, centre, normal, lens,
+    );
 }
 
 /// A glowing dome with a point light in front of it.
+#[allow(clippy::too_many_arguments)]
 fn spawn_lamp(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    root: Entity,
     source: GlowSource,
     at: Vec3,
     normal: Vec3,
@@ -430,6 +449,7 @@ fn spawn_lamp(
     });
     commands
         .spawn((
+            ChildOf(root),
             Mesh3d(meshes.add(Sphere::new(radius).mesh().uv(32, 16))),
             MeshMaterial3d(material.clone()),
             Transform::from_translation(at)
@@ -437,7 +457,6 @@ fn spawn_lamp(
                 .with_scale(Vec3::new(1.0, 0.55, 1.0)),
             Glow::placeholder(source, material),
         ))
-        .observe(boop)
         .with_children(|lamp| {
             lamp.spawn((
                 PointLight {

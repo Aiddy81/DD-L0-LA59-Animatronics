@@ -48,3 +48,8 @@ accel_read_ms = 1.5     # one LIS3DH acceleration read
 loop_ms = 0.25          # asyncio overhead per scheduler pass
 heap_budget_kb = 130    # heap left for code.py after its imports
 heap_scale = 0.45       # CircuitPython bytes per desktop-Python byte
+
+# Which droid to show at start-up: "gltf" (assets/droid.glb, built by
+# assets/src/build_lola.py) or "primitive". Switch live with Model in the toolbar.
+[model]
+kind = "gltf"
