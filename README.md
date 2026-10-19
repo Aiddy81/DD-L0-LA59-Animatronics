@@ -19,7 +19,11 @@ This project implements interactive animatronic behaviors for a custom device us
 - RGB LEDs (main and small "eyes"))
 
 ## File Structure
-- `PropMaker_Feather/code.py` — Main firmware controlling all hardware and behaviors
+- `PropMaker_Feather/code.py` — Entry point: runs the boot sequence, then starts every behaviour as an `asyncio` task
+- `PropMaker_Feather/hardware.py` — Board setup: accelerometer, PCA9685 channel map, LEDs, audio, shared events
+- `PropMaker_Feather/config.py` — Reads the tunables from `settings.toml`, with built-in defaults
+- `PropMaker_Feather/settings.toml` — Tunables (see [Tuning](#tuning))
+- `PropMaker_Feather/behaviours/` — One module per behaviour: `boot`, `breathing`, `motion` (boops and angry), `attention`, `leds`
 - `PropMaker_Feather/sounds/` — WAV files for sound effects
 - `PropMaker_Feather/lib/` — CircuitPython libraries (Adafruit drivers, etc.)
 
@@ -31,14 +35,33 @@ This project implements interactive animatronic behaviors for a custom device us
 - **Random LED Effects**: White LED flashes at random intervals to simulate data processing.
 
 ## Setup & Usage
-1. Copy all files to your CIRCUITPY drive, preserving the folder structure.
+1. Copy the contents of `PropMaker_Feather/` (`code.py`, `config.py`, `hardware.py`, `settings.toml`, `behaviours/`, `lib/`, `sounds/`) to the root of your CIRCUITPY drive, preserving the folder structure.
 2. Ensure all required libraries are present in `PropMaker_Feather/lib/`.
 3. Place WAV files in `PropMaker_Feather/sounds/` and name them correctly.
 4. Power the device. The firmware will run automatically.
 
 ## Customization
 - Add or replace WAV files in the `sounds/` directory for new sound effects.
-- Adjust servo and LED parameters in `code.py` for different movement or color effects.
+- Tune timings, thresholds and calibration in `settings.toml` (below). No code change needed.
+- Change how a behaviour moves or lights up in its module under `behaviours/`.
+
+### Tuning
+
+`settings.toml` is read at boot. Edit it on the CIRCUITPY drive, save, and the board restarts with the new values. CircuitPython only reads whole numbers and quoted strings from it, so each name carries its unit: `_S` seconds, `_MG` milli-g (1000 = 1 g). A missing line falls back to the default in `config.py`. A value that isn't a whole number prints a warning on the serial console and uses the default. The file is committed to git, so never put Wi-Fi passwords or other secrets in it.
+
+| Key | Default | What it does |
+|---|---|---|
+| `IDLE_MIN_S`, `IDLE_MAX_S` | 900, 7200 | Quiet spell (random, between these) before seeking attention |
+| `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
+| `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
+| `MOTION_Z_MIN_MG`, `MOTION_Z_MAX_MG` | 0, 1100 | A z reading outside this range is a nudge |
+| `HARD_MOTION_MG` | 2500 | A z reading above this is a shake (straight to angry) |
+| `BREATH_PERIOD_S` | 4 | Breathing period |
+| `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
+| `SERVO2_MIN`, `SERVO2_MAX` | 40, 60 | Left-wing calibration (mounted inverted) for boot and attention |
+| `BREATH_SERVO2_MIN`, `BREATH_SERVO2_MAX` | 35, 50 | Left-wing calibration while breathing |
+| `EYE_MIN_BRIGHTNESS`, `EYE_MAX_BRIGHTNESS` | 60, 360 | Eye brightness range for breathing and boops (0–360) |
+| `WHITE_LED_IDLE_DUTY` | 1000 | White LED glow between effects (0–65535) |
 
 ## Sound Files and Their Functions
 
@@ -57,7 +80,7 @@ Place these files in `PropMaker_Feather/sounds/` with the exact names above. You
 
 ## Simulator
 
-`simulator/` is a Windows desktop app that runs `PropMaker_Feather/code.py` **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
+`simulator/` is a Windows desktop app that runs `PropMaker_Feather/code.py` (with its modules and `settings.toml`) **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
 
 ### Build and run
 
@@ -73,8 +96,9 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 
 - **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Tipped over* holds z at -1 g.
 - **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation plays.
-- **Edit and save `code.py`** and the simulator restarts with the change. Errors show as a traceback in the log.
-- **CircuitPython strict** (on by default) holds `code.py` to what the board has. Imports outside CircuitPython 9 and `lib/` fail, as do APIs CircuitPython lacks (`random.choices`, `os.path`, `asyncio.TaskGroup`...). `time.monotonic()` gets the board's reduced float precision, so long-uptime timer drift shows when you fast-forward. Untick it to run with full desktop Python; the change applies on the next restart.
+- **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log.
+- **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.
+- **CircuitPython strict** (on by default) holds `code.py` and its modules to what the board has. Imports outside CircuitPython 9 and `lib/` fail, as do APIs CircuitPython lacks (`random.choices`, `os.path`, `asyncio.TaskGroup`...). `time.monotonic()` gets the board's reduced float precision, so long-uptime timer drift shows when you fast-forward. Untick it to run with full desktop Python; the change applies on the next restart.
 - **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom.
 - The side panel shows every PCA9685 channel's duty and pulse width, plus a 20 s plot of wing angles and LED levels.
 
@@ -88,7 +112,7 @@ The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and 
 The RP2040 is much slower than a PC and has far less memory, so the simulator models both:
 
 - **Board speed** (toolbar, on by default): every servo/LED write, accelerometer read and scheduler pass takes as long as it does on the robot. So an animation runs at the speed the robot will really manage, not just the speed the code asks for.
-- **Heap gauge** (Board panel): an estimate of how much of the board's free memory `code.py` uses. It warns in the log at 80% and 100%. `gc.mem_free()` and `gc.mem_alloc()` return the estimate too. It's approximate: it catches "this clearly won't fit", not the last few KB.
+- **Heap gauge** (Board panel): an estimate of how much of the board's free memory the firmware (`code.py` and its modules, bytecode included) uses. It warns in the log at 80% and 100%. `gc.mem_free()` and `gc.mem_alloc()` return the estimate too. It's approximate: it catches "this clearly won't fit", not the last few KB.
 - **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel.
 
 The timing and memory figures in `simulator/sim.toml` `[board]` start as estimates. To measure your robot:
@@ -99,7 +123,7 @@ The timing and memory figures in `simulator/sim.toml` `[board]` start as estimat
 
 ### Tests and CI
 
-`python simulator/tests/headless.py` runs the real `code.py` headless, with CircuitPython strict mode and board speed on. It scripts a nudge, an idle trigger and repeated nudges, and fails on any traceback or if the boop, attention or angry behaviour doesn't happen. It needs Python 3.11+ (CI uses 3.13).
+`python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a nudge, an idle trigger and repeated nudges, and fails on any traceback or if the boop, attention or angry behaviour doesn't happen. It needs Python 3.11+ (CI uses 3.13).
 
 GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download.
 
@@ -124,7 +148,7 @@ Any model can drive the simulator if it has nodes named `wing_right` and `wing_l
 
 Copyright (C) 2026 Adriano Cafarella.
 
-This project (the firmware in `PropMaker_Feather/code.py` and everything in `simulator/`) is licensed under the **GNU Affero General Public License v3.0 or later**. See [`LICENSE`](LICENSE).
+This project (the firmware in `PropMaker_Feather/` outside `lib/`, and everything in `simulator/`) is licensed under the **GNU Affero General Public License v3.0 or later**. See [`LICENSE`](LICENSE).
 
 Third-party components keep their own licenses:
 - The Adafruit CircuitPython libraries in `PropMaker_Feather/lib/` are MIT-licensed by Adafruit Industries.

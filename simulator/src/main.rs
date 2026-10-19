@@ -91,9 +91,7 @@ fn main() {
     pyhost::init_python();
     let mut host = PyHost::new(paths.code.clone());
     host.start();
-    let code_mtime = std::fs::metadata(&paths.code)
-        .and_then(|m| m.modified())
-        .ok();
+    let code_mtime = ui::firmware_mtime(&paths.code);
 
     App::new()
         .add_plugins(

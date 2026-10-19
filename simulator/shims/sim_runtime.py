@@ -11,6 +11,7 @@ time.monotonic() has CircuitPython's reduced float precision.
 import asyncio
 import builtins
 import gc as _real_gc
+import json
 import marshal
 import struct
 import importlib.abc
@@ -59,6 +60,104 @@ class _ShimFinder(importlib.abc.MetaPathFinder):
             return None
         source, is_pkg = entry
         return importlib.util.spec_from_loader(name, _ShimLoader(source), is_package=is_pkg)
+
+
+class _FirmwareLoader(importlib.abc.Loader):
+    """Runs a firmware module (a .py next to code.py) the way code.py runs:
+    with CircuitPython's builtins, and counted on the heap gauge."""
+
+    def __init__(self, path, builtins_):
+        self._path = path
+        self._builtins = builtins_
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        with open(self._path, encoding="utf-8") as f:
+            code_obj = compile(f.read(), self._path, "exec")
+        _heap.code_bytes += len(marshal.dumps(code_obj))
+        module.__dict__["__builtins__"] = self._builtins
+        exec(code_obj, module.__dict__)
+
+
+class _FirmwareFinder(importlib.abc.MetaPathFinder):
+    """Finds modules and packages in the firmware folder, as CircuitPython
+    does from the drive root. Remembers what it loaded so each run starts fresh."""
+
+    def __init__(self, fw_dir, builtins_):
+        self._dir = fw_dir
+        self._builtins = builtins_
+        self.loaded = []
+
+    def find_spec(self, name, path, target=None):
+        base = os.path.join(self._dir, *name.split("."))
+        init = os.path.join(base, "__init__.py")
+        if os.path.isfile(init):
+            file, locations = init, [base]
+        elif os.path.isfile(base + ".py"):
+            file, locations = base + ".py", None
+        else:
+            return None
+        self.loaded.append(name)
+        return importlib.util.spec_from_file_location(
+            name, file, loader=_FirmwareLoader(file, self._builtins),
+            submodule_search_locations=locations)
+
+
+def _firmware_modules(fw_dir):
+    """Top-level names importable from the firmware folder."""
+    names = set()
+    for entry in os.listdir(fw_dir):
+        full = os.path.join(fw_dir, entry)
+        if entry.endswith(".py") and entry != "code.py":
+            names.add(entry[:-3])
+        elif os.path.isfile(os.path.join(full, "__init__.py")) and entry != "lib":
+            names.add(entry)
+    return names
+
+
+def _settings_value(text, default):
+    """One settings.toml value: an integer or a "quoted string", like CircuitPython 9."""
+    if text.startswith('"'):
+        escaped = False
+        for end in range(1, len(text)):
+            if escaped:
+                escaped = False
+            elif text[end] == "\\":
+                escaped = True
+            elif text[end] == '"':
+                try:
+                    return json.loads(text[:end + 1])
+                except ValueError:
+                    return default
+        return default
+    try:
+        return int(text.split("#", 1)[0].strip(), 0)
+    except ValueError:
+        return default
+
+
+def _settings_getenv(fw_dir):
+    """os.getenv as CircuitPython 9 has it: reads settings.toml next to code.py
+    (top level only), never the desktop's environment."""
+    path = os.path.join(fw_dir, "settings.toml")
+
+    def getenv(key, default=None):
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            return default
+        for line in lines:
+            if line.lstrip().startswith("["):
+                break
+            name, sep, value = line.partition("=")
+            if sep and name.strip() == key:
+                return _settings_value(value.strip(), default)
+        return default
+
+    return getenv
 
 
 def _cp_float(value):
@@ -221,20 +320,29 @@ class _HeapMeter:
         self.code_bytes = 0
         self.import_bytes = 0
         self._last = 0.0
+        self._fw_prefix = None
+        self._lib_prefix = None
 
     def start(self, code_path, code_obj):
         self.code_path = code_path
+        # Firmware modules add their own bytecode as they're imported.
         self.code_bytes = len(marshal.dumps(code_obj))
         self.import_bytes = 0
         self._last = 0.0
+        fw_dir = os.path.dirname(code_path)
+        self._fw_prefix = os.path.join(fw_dir, "")
+        self._lib_prefix = os.path.join(fw_dir, "lib", "")
         tracemalloc.start(1)
 
+    def _is_firmware(self, filename):
+        return filename.startswith(self._fw_prefix) and not filename.startswith(self._lib_prefix)
+
     def _bytes(self):
-        """(code.py bytes, stand-in bytes) currently live."""
+        """(firmware bytes, stand-in bytes) currently live."""
         code = sim = 0
         for stat in tracemalloc.take_snapshot().statistics("filename"):
             name = stat.traceback[0].filename
-            if name == self.code_path:
+            if self._is_firmware(name):
                 code += stat.size
             elif name.startswith("<sim>/"):
                 sim += stat.size
@@ -343,23 +451,46 @@ def _not_simulated_module(name):
     return module
 
 
+def _os_module(strict, fw_dir):
+    """os with CircuitPython's getenv (settings.toml); in strict mode only CircuitPython's API."""
+    if strict:
+        module = _cp_view(os, _CP_SURFACE["os"])
+    else:
+        module = types.ModuleType("os")
+        for key in dir(os):
+            if not key.startswith("__"):
+                setattr(module, key, getattr(os, key))
+    module.getenv = _settings_getenv(fw_dir)
+    return module
+
+
 def _code_builtins(code_path, strict, shims):
-    """Builtins for code.py. Its imports get CircuitPython's gc, a stand-in for
-    board libraries the simulator doesn't model, and, in strict mode, only
-    CircuitPython 9's modules and APIs."""
+    """Builtins for code.py and the firmware modules beside it. Their imports
+    get CircuitPython's gc and os.getenv, a stand-in for board libraries the
+    simulator doesn't model, and, in strict mode, only CircuitPython 9's
+    modules and APIs."""
+    fw_dir = os.path.dirname(code_path)
     # Stand-ins model libraries the board has, so they're always importable.
     board_modules = set(_CP_MODULES) | {name.split(".")[0] for name in shims}
-    lib = os.path.join(os.path.dirname(code_path), "lib")
+    board_modules |= _firmware_modules(fw_dir)
+    lib = os.path.join(fw_dir, "lib")
     if os.path.isdir(lib):
         for entry in os.listdir(lib):
             board_modules.add(entry.split(".")[0])
-    views = {"gc": _gc_module()}
+    views = {"gc": _gc_module(), "os": _os_module(strict, fw_dir)}
     stubs = {}
 
     def cp_import(name, globals=None, locals=None, fromlist=(), level=0):
         top = name.split(".")[0]
         if level == 0 and name == "gc":
             return views["gc"]
+        if level == 0 and name == "os":
+            for wanted in fromlist or ():
+                if strict and wanted != "*" and wanted not in _CP_SURFACE["os"]:
+                    raise ImportError(
+                        "cannot import name '{}' from 'os' (not in CircuitPython 9; "
+                        "simulator strict mode)".format(wanted))
+            return views["os"]
         if strict and level == 0 and top not in board_modules:
             raise ImportError(
                 "no module named '{}' (not in CircuitPython 9 or lib/; "
@@ -413,6 +544,7 @@ def run(code_path, shims):
         "policy": asyncio.get_event_loop_policy(),
     }
     finder = _ShimFinder(shims)
+    firmware = None
     sys.stdout = sys.stderr = _LogStream()
     # Fresh copies of every shim each run, so no state leaks between runs.
     for name in shims:
@@ -427,8 +559,10 @@ def run(code_path, shims):
         print("[sim] running", code_path, "(CircuitPython strict)" if strict else "")
         with open(code_path, encoding="utf-8") as f:
             source = f.read()
-        env = {"__name__": "__main__", "__file__": code_path,
-               "__builtins__": _code_builtins(code_path, strict, shims)}
+        code_builtins = _code_builtins(code_path, strict, shims)
+        firmware = _FirmwareFinder(os.path.dirname(code_path), code_builtins)
+        sys.meta_path.insert(1, firmware)
+        env = {"__name__": "__main__", "__file__": code_path, "__builtins__": code_builtins}
         code_obj = compile(source, code_path, "exec")
         _heap.start(code_path, code_obj)
         exec(code_obj, env)
@@ -445,6 +579,11 @@ def run(code_path, shims):
         if saved["time"] is not None:
             sys.modules["time"] = saved["time"]
         sys.meta_path.remove(finder)
+        if firmware is not None:
+            sys.meta_path.remove(firmware)
+            # Fresh firmware modules each run, so edits and state don't carry over.
+            for name in firmware.loaded:
+                sys.modules.pop(name, None)
         os.chdir(saved["cwd"])
         sys.stdout = saved["stdout"]
         sys.stderr = saved["stderr"]

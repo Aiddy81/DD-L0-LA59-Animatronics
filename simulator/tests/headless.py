@@ -41,9 +41,25 @@ def load_shims():
 
 
 def stage_firmware(code_path, workdir):
-    """Copy code.py and lib/ into workdir, with sounds (silent ones if missing)."""
+    """Copy code.py, its modules, settings.toml and lib/ into workdir, with
+    sounds (silent ones if missing)."""
     src_dir = os.path.dirname(code_path)
     shutil.copy(code_path, os.path.join(workdir, "code.py"))
+    sources = [code_path]
+    for entry in os.listdir(src_dir):
+        full = os.path.join(src_dir, entry)
+        if entry == "lib":
+            continue
+        if entry.endswith(".py") and entry != "code.py":
+            shutil.copy(full, os.path.join(workdir, entry))
+            sources.append(full)
+        elif entry == "settings.toml":
+            shutil.copy(full, os.path.join(workdir, entry))
+        elif os.path.isfile(os.path.join(full, "__init__.py")):
+            shutil.copytree(full, os.path.join(workdir, entry),
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            for root, _, files in os.walk(full):
+                sources += [os.path.join(root, f) for f in files if f.endswith(".py")]
     lib = os.path.join(src_dir, "lib")
     if not os.path.isdir(lib):
         lib = os.path.join(REPO, "PropMaker_Feather", "lib")
@@ -55,8 +71,10 @@ def stage_firmware(code_path, workdir):
         shutil.copytree(real_sounds, sounds)
         return
     os.makedirs(sounds)
-    with open(code_path, encoding="utf-8") as f:
-        referenced = set(re.findall(r'"([\w.-]+\.wav)"', f.read()))
+    referenced = set()
+    for source in sources:
+        with open(source, encoding="utf-8") as f:
+            referenced |= set(re.findall(r'"([\w.-]+\.wav)"', f.read()))
     for name in sorted(referenced | set(DEFAULT_SOUNDS)):
         with wave.open(os.path.join(sounds, name), "wb") as w:
             w.setnchannels(1)

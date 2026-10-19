@@ -1,0 +1,38 @@
+# DD-L0-LA59 tunables, read at boot by config.py. Edit, save, and the board restarts.
+# CircuitPython only reads whole numbers and "quoted strings" here, so each
+# name carries its unit: _S seconds, _MG milli-g (1000 = 1 g).
+# A missing line falls back to the value in config.py.
+# This file is committed to git: never put Wi-Fi passwords or other secrets in it.
+
+# Idle: seek attention after a random quiet spell between these.
+IDLE_MIN_S = 900
+IDLE_MAX_S = 7200
+
+# Angry: ANGRY_NUDGES nudges inside one random window (between these) gets angry.
+ANGRY_MIN_WINDOW_S = 60
+ANGRY_MAX_WINDOW_S = 180
+ANGRY_NUDGES = 3
+
+# Motion: a z reading below MIN or above MAX is a nudge; above HARD it's a shake.
+MOTION_Z_MIN_MG = 0
+MOTION_Z_MAX_MG = 1100
+HARD_MOTION_MG = 2500
+
+# Breathing: period and right-wing (servo 0) angles.
+BREATH_PERIOD_S = 4
+BREATH_ANGLE_MIN = 50
+BREATH_ANGLE_MAX = 65
+
+# Left-wing (servo 1) calibration: it's mounted inverted. Adjust until both
+# wings close equally. Boot and attention use SERVO2_*, breathing BREATH_SERVO2_*.
+SERVO2_MIN = 40
+SERVO2_MAX = 60
+BREATH_SERVO2_MIN = 35
+BREATH_SERVO2_MAX = 50
+
+# Eye brightness range for breathing and boops (0-360).
+EYE_MIN_BRIGHTNESS = 60
+EYE_MAX_BRIGHTNESS = 360
+
+# White LED glow between effects (0-65535).
+WHITE_LED_IDLE_DUTY = 1000
