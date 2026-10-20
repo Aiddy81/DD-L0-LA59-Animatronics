@@ -31,12 +31,12 @@ async def data_processing_led(duration=10):
 
         # Random duration between flashes
         delay = random.uniform(0.02, 0.25)
-        time.sleep(delay)
+        await asyncio.sleep(delay)
 
         # Occasionally turn fully off to simulate pauses in data
         if random.random() < 0.2:
             white_led.duty_cycle = 0
-            time.sleep(random.uniform(0.05, 0.15))
+            await asyncio.sleep(random.uniform(0.05, 0.15))
 
     # Ensure LED is turned off at the end
     white_led.duty_cycle = config.WHITE_LED_IDLE_DUTY
