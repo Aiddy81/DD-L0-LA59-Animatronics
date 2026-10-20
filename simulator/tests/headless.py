@@ -25,6 +25,10 @@ SHIMS = os.path.join(SIM, "shims")
 DEFAULT_SOUNDS = ["angry.wav", "noseBoops.wav", "youWho.wav",
                   "001.wav", "003.wav", "005.wav", "007.wav", "008.wav"]
 
+# Virtual time of the scripted hard shake: after boot, before any nudge, so the
+# nudge count is zero and only hard motion can make the droid angry.
+SHAKE_AT = 20.0
+
 
 def load_shims():
     shims = {}
@@ -121,9 +125,12 @@ def main():
     simhw.HEAP_SCALE = board.get("heap_scale", 0.45)
     simhw.HEAP_BUDGET = board.get("heap_budget_kb", 130) * 1024.0
 
-    # Scenario: a boop after boot, the idle timer cut short, then repeated
-    # nudges, which should end in an angry flap.
-    simhw.scheduled_accel[:] = [(30.0, (0.0, 0.0, 1.3))]
+    # Scenario: a hard shake after boot (the UI's 3 g "Hard shake"), which
+    # should go straight to angry and restart the angry window; then a boop,
+    # the idle timer cut short, then repeated nudges, which should end in a
+    # second angry flap.
+    simhw.scheduled_accel[:] = [(SHAKE_AT, (0.0, 0.0, 3.0))]
+    simhw.scheduled_accel += [(30.0, (0.0, 0.0, 1.3))]
     simhw.scheduled_accel += [(60.0 + i * 0.5, (0.0, 0.0, 1.3)) for i in range(4)]
     simhw.idle_trigger_at[:] = [45.0]
 
@@ -138,6 +145,9 @@ def main():
 
     log = "\n".join(simhw.log_lines)
     played = [name for _, name in simhw.audio]
+    # The shake's response is whichever motion sound plays first after it.
+    shake_response = next((name for t, name in simhw.audio if t >= SHAKE_AT
+                           and name in ("angry.wav", "noseBoops.wav")), None)
     bursts = led_bursts(simhw.white_writes)
     checks = [
         ("no traceback", "Traceback" not in log),
@@ -147,7 +157,8 @@ def main():
         ("all six eye channels driven", all(ch in simhw.pca for ch in range(2, 8))),
         ("nudge boops (noseBoops.wav)", "noseBoops.wav" in played),
         ("idle trigger seeks attention (youWho.wav)", "youWho.wav" in played),
-        ("repeated nudges get angry (angry.wav)", "angry.wav" in played),
+        ("hard shake goes straight to angry (angry.wav)", shake_response == "angry.wav"),
+        ("repeated nudges get angry (angry.wav)", played.count("angry.wav") >= 2),
         ("white LED flickers", bool(bursts)),
         ("wings keep breathing during an LED flicker", any_during(simhw.wing_writes, bursts)),
         ("motion still sensed during an LED flicker", any_during(simhw.accel_reads, bursts)),
