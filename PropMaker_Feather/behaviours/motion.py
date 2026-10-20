@@ -51,6 +51,27 @@ async def motion_sense():
         await asyncio.sleep(0.1)
 
 
+async def sine_flaps(flaps, angle_min, angle_max, duration):
+    """Each flap is two sine strokes of `duration` seconds: min -> max -> min,
+    then max -> min -> max. Returns the angle the last stroke ends on."""
+    # Driven by the clock, not a step count: each frame's two PCA9685 writes
+    # cost ~4 ms over I2C, so fixed per-step sleeps ran ~1.7x slower than asked.
+    # A slower board just gets fewer, coarser frames per stroke.
+    start = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - start
+        if elapsed >= flaps * 2 * duration:
+            break
+        strokes = elapsed / duration
+        stroke = int(strokes)
+        lift = (angle_max - angle_min) * math.sin(math.pi * (strokes - stroke))
+        angle = angle_min + lift if stroke % 2 == 0 else angle_max - lift
+        kit.servo[0].angle = angle
+        kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
+        await asyncio.sleep(0)
+    return angle_max
+
+
 async def angry_animation(flaps=3, angle_min=30, angle_max=90, duration=0.4):
     """Smooth, rapid angry flapping using a sine wave."""
     mainEye_red.angle = 360  # Set main eye to red
@@ -61,21 +82,7 @@ async def angry_animation(flaps=3, angle_min=30, angle_max=90, duration=0.4):
     smallEye_blue.angle = 0   # Turn off blue
     print("ANGRY ANIMATION!")
     await play_wav("angry.wav")
-    steps = 20  # Number of steps per flap
-    for _ in range(flaps):
-        for i in range(steps + 1):
-            # Sine wave for smooth up/down
-            phase = math.pi * i / steps  # 0 to pi
-            angle = angle_min + (angle_max - angle_min) * math.sin(phase)
-            kit.servo[0].angle = angle
-            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
-            await asyncio.sleep(duration / steps)
-        for i in range(steps + 1):
-            phase = math.pi * i / steps  # 0 to pi
-            angle = angle_max - (angle_max - angle_min) * math.sin(phase)
-            kit.servo[0].angle = angle
-            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
-            await asyncio.sleep(duration / steps)
+    await sine_flaps(flaps, angle_min, angle_max, duration)
     # Return to neutral
     kit.servo[0].angle = angle_min
     kit.servo[1].angle = angle_max
@@ -84,20 +91,7 @@ async def angry_animation(flaps=3, angle_min=30, angle_max=90, duration=0.4):
 async def nose_boops(boops=2, angle_min=20, angle_max=70, duration=1.2):
     """Smooth, gentle 'boop' animation using a sine wave."""
     await play_wav("noseBoops.wav")
-    steps = 60  # More steps for extra smoothness
-    for _ in range(boops):
-        for i in range(steps + 1):
-            phase = math.pi * i / steps  # 0 to pi
-            angle = angle_min + (angle_max - angle_min) * math.sin(phase)
-            kit.servo[0].angle = angle
-            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
-            await asyncio.sleep(duration / steps)
-        for i in range(steps + 1):
-            phase = math.pi * i / steps  # 0 to pi
-            angle = angle_max - (angle_max - angle_min) * math.sin(phase)
-            kit.servo[0].angle = angle
-            kit.servo[1].angle = angle_max + angle_min - angle  # Inverted
-            await asyncio.sleep(duration / steps)
+    angle = await sine_flaps(boops, angle_min, angle_max, duration)
     # Return to neutral
     kit.servo[0].angle = angle_min
     kit.servo[1].angle = angle_max
