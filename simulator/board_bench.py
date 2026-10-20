@@ -33,7 +33,7 @@ free_after_imports = gc.mem_free()
 i2c = busio.I2C(board.SCL, board.SDA)
 kit = ServoKit(channels=8, i2c=i2c)
 lis3dh = adafruit_lis3dh.LIS3DH_I2C(i2c, int1=DigitalInOut(board.ACCELEROMETER_INTERRUPT))
-lis3dh.range = adafruit_lis3dh.RANGE_2_G
+lis3dh.range = adafruit_lis3dh.RANGE_4_G
 eye = kit.servo[2]
 eye.actuation_range = 360
 eye.set_pulse_width_range(0, 6550)

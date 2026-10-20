@@ -26,7 +26,7 @@ from adafruit_servokit import ServoKit
 i2c = busio.I2C(board.SCL, board.SDA)  # Create an I2C bus instance
 int1 = DigitalInOut(board.ACCELEROMETER_INTERRUPT)
 lis3dh = adafruit_lis3dh.LIS3DH_I2C(i2c, int1=int1)
-lis3dh.range = adafruit_lis3dh.RANGE_2_G
+lis3dh.range = adafruit_lis3dh.RANGE_4_G  # 2 g would clip below HARD_MOTION_G
 
 #kit = ServoKit(channels=8)
 kit = ServoKit(channels=8, i2c=i2c)  # Reuse the same PCA9685 object

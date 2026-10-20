@@ -1,7 +1,7 @@
 """LIS3DH fed from the simulator's motion controls.
 
-Readings are clipped to the configured range like the real sensor, so with
-RANGE_2_G nothing above ~2 g is ever reported.
+Readings are clipped to the configured range like the real sensor: the
+firmware's RANGE_4_G reports up to ~4 g, RANGE_2_G only ~2 g.
 """
 import math
 
