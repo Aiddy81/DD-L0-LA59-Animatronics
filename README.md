@@ -105,7 +105,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and the LIS3DH clipping at its configured range. So it shows what the robot will really do, including:
 - The eye channels peak at 32.8% duty, because `set_pulse_width_range(0, 6550)` is about a third of the 20 ms period.
 - With `RANGE_2_G` the accelerometer never reports more than about 2 g, so `abs(z) > 2.5` (hard motion) can't fire.
-- `data_processing_led()` uses blocking `time.sleep()`, which freezes every other behaviour while it runs.
+- A blocking `time.sleep()` in a behaviour freezes every other behaviour while it runs, just as on the board. (`data_processing_led()` used to do this; it now uses `await asyncio.sleep()`, so the wings keep breathing during the white-LED flicker.)
 
 ### Matching the real board
 
@@ -123,7 +123,7 @@ The timing and memory figures in `simulator/sim.toml` `[board]` start as estimat
 
 ### Tests and CI
 
-`python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a nudge, an idle trigger and repeated nudges, and fails on any traceback or if the boop, attention or angry behaviour doesn't happen. It needs Python 3.11+ (CI uses 3.13).
+`python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a nudge, an idle trigger and repeated nudges, and fails on any traceback, if the boop, attention or angry behaviour doesn't happen, or if the wings and motion sensing stall during a white-LED flicker. It needs Python 3.11+ (CI uses 3.13).
 
 GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download.
 

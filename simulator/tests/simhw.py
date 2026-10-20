@@ -24,6 +24,11 @@ unsimulated_libs = []
 # (virtual time, (x, y, z) in g) readings queued for the accelerometer.
 scheduled_accel = []
 idle_trigger_at = []
+# Virtual times of right-wing writes, white-LED writes and accelerometer
+# reads, so headless.py can tell whether behaviours overlap.
+wing_writes = []
+white_writes = []
+accel_reads = []
 
 _t0 = [time.monotonic()]
 _debt = [0.0]
@@ -61,11 +66,14 @@ def take_idle_trigger():
 
 def set_pca(channel, duty):
     pca[channel] = duty
+    if channel == 0:
+        wing_writes.append(now())
 
 
 def set_pwm_pin(name, duty):
     if name == "EXTERNAL_NEOPIXELS":
         white[0] = duty
+        white_writes.append(now())
 
 
 def set_pin(name, value):
@@ -73,6 +81,7 @@ def set_pin(name, value):
 
 
 def accel():
+    accel_reads.append(now())
     if scheduled_accel and now() >= scheduled_accel[0][0]:
         return scheduled_accel.pop(0)[1]
     return (0.0, 0.0, 1.0)

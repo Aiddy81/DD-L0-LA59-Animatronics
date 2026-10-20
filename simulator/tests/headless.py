@@ -83,6 +83,22 @@ def stage_firmware(code_path, workdir):
             w.writeframes(b"\x00\x00" * 2205)
 
 
+def led_bursts(times, gap=0.5):
+    """Group white-LED writes into (start, end) flicker bursts. Writes inside
+    a burst are at most ~0.25 s apart; bursts are seconds apart."""
+    bursts = []
+    for t in times:
+        if bursts and t - bursts[-1][1] <= gap:
+            bursts[-1][1] = t
+        else:
+            bursts.append([t, t])
+    return [(a, b) for a, b in bursts if b - a > 1.0]
+
+
+def any_during(times, spans):
+    return any(a < t < b for t in times for a, b in spans)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--code", default=os.path.join(REPO, "PropMaker_Feather", "code.py"))
@@ -122,6 +138,7 @@ def main():
 
     log = "\n".join(simhw.log_lines)
     played = [name for _, name in simhw.audio]
+    bursts = led_bursts(simhw.white_writes)
     checks = [
         ("no traceback", "Traceback" not in log),
         ("boot sequence completes", "Boot sequence complete!" in log),
@@ -131,10 +148,14 @@ def main():
         ("nudge boops (noseBoops.wav)", "noseBoops.wav" in played),
         ("idle trigger seeks attention (youWho.wav)", "youWho.wav" in played),
         ("repeated nudges get angry (angry.wav)", "angry.wav" in played),
+        ("white LED flickers", bool(bursts)),
+        ("wings keep breathing during an LED flicker", any_during(simhw.wing_writes, bursts)),
+        ("motion still sensed during an LED flicker", any_during(simhw.accel_reads, bursts)),
         ("heap estimate within board budget", simhw.heap_peak[0] < simhw.HEAP_BUDGET),
     ]
     print()
     print("Audio played: {}".format(simhw.audio))
+    print("LED bursts: {}".format(["{:.1f}-{:.1f}s".format(a, b) for a, b in bursts]))
     print("Heap peak ~{:.0f} KB of {:.0f} KB".format(simhw.heap_peak[0] / 1024, simhw.HEAP_BUDGET / 1024))
     if simhw.unsimulated_libs:
         print("Not simulated: {}".format(", ".join(simhw.unsimulated_libs)))
