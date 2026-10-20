@@ -80,18 +80,6 @@ async def angry_animation(flaps=3, angle_min=30, angle_max=90, duration=0.4):
     kit.servo[0].angle = angle_min
     kit.servo[1].angle = angle_max
 
-#async def nose_boops():
-#    """Moves servos in a gentle, cuddly 'boop' animation."""
-#    print("LOVING BOOP ANIMATION!")
-#    await play_Wav("006.wav")
-#    # Wings gently open, pause, then close
-#    for _ in range(2):  # Two gentle boops
-#        kit.servo[0].angle = 70
-#        kit.servo[1].angle = 20
-#        await asyncio.sleep(0.3)
-#        kit.servo[0].angle = 20
-#        kit.servo[1].angle = 70
-#        await asyncio.sleep(0.3)
 
 async def nose_boops(boops=2, angle_min=20, angle_max=70, duration=1.2):
     """Smooth, gentle 'boop' animation using a sine wave."""

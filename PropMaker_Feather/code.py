@@ -20,12 +20,10 @@ async def main():
     await boot_sequence()
     # Create tasks for each animation/function
     motion_sense_task = asyncio.create_task(motion_sense())
-    play_wav_task = asyncio.create_task(play_wav(random.choice(wavfiles)))
+    asyncio.create_task(play_wav(random.choice(wavfiles)))
     ambient_breathing_task = asyncio.create_task(ambient_breathing())
     idle_attention_task = asyncio.create_task(idle_attention())
     random_led_schedule_task = asyncio.create_task(random_led_scheduler())
-    #move_s1_task = asyncio.create_task(move_s1())
-    #move_s2_task = asyncio.create_task(move_s2())
 
     # This will run forever, because no tasks ever finish.
     await asyncio.gather(motion_sense_task, ambient_breathing_task, idle_attention_task, random_led_schedule_task)
