@@ -1,6 +1,7 @@
 import asyncio
 import math
 import random
+import time
 
 import config
 from hardware import (kit, play_wav, pause_breathing, reset_idle_event,
@@ -32,30 +33,34 @@ def hsv_to_rgb(h, s, v):
         return v, p, q
 
 
-async def attention_animation(flaps=5, angle_min=10, angle_max=60, duration=0.2):
+async def attention_animation(flaps=5, angle_min=10, angle_max=60, duration=0.5):
     """Smooth, attention-grabbing wing motion with full LED color cycling and servo calibration."""
     await play_wav("youWho.wav")
-    steps = 60
-    for _ in range(flaps):
-        for i in range(steps + 1):
-            phase = 2 * math.pi * i / steps
-            norm = (math.sin(phase - math.pi/2) + 1) / 2
-            angle0 = angle_min + (angle_max - angle_min) * norm
-            angle1 = config.SERVO2_MIN + (config.SERVO2_MAX - config.SERVO2_MIN) * (1 - norm)
-            kit.servo[0].angle = angle0
-            kit.servo[1].angle = angle1
+    # Driven by the clock, not a step count: each frame is 8 PCA9685 writes
+    # (~16 ms over I2C), so fixed per-step sleeps ran ~9x slower than asked.
+    # A slower board just gets fewer, coarser frames per flap.
+    start = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - start
+        if elapsed >= flaps * duration:
+            break
+        t = (elapsed / duration) % 1.0  # position within the current flap, 0-1
+        norm = (math.sin(2 * math.pi * t - math.pi/2) + 1) / 2
+        angle0 = angle_min + (angle_max - angle_min) * norm
+        angle1 = config.SERVO2_MIN + (config.SERVO2_MAX - config.SERVO2_MIN) * (1 - norm)
+        kit.servo[0].angle = angle0
+        kit.servo[1].angle = angle1
 
-            # Use custom HSV to RGB
-            hue = i / steps
-            r, g, b = hsv_to_rgb(hue, 1.0, 1.0)
-            mainEye_red.angle = int(r * 360)
-            mainEye_green.angle = int(g * 360)
-            mainEye_blue.angle = int(b * 360)
-            smallEye_red.angle = int(r * 360)
-            smallEye_green.angle = int(g * 360)
-            smallEye_blue.angle = int(b * 360)
+        # Use custom HSV to RGB
+        r, g, b = hsv_to_rgb(t, 1.0, 1.0)
+        mainEye_red.angle = int(r * 360)
+        mainEye_green.angle = int(g * 360)
+        mainEye_blue.angle = int(b * 360)
+        smallEye_red.angle = int(r * 360)
+        smallEye_green.angle = int(g * 360)
+        smallEye_blue.angle = int(b * 360)
 
-            await asyncio.sleep(duration / steps)
+        await asyncio.sleep(0)
     kit.servo[0].angle = angle_min
     kit.servo[1].angle = config.SERVO2_MIN
     mainEye_red.angle = 0
