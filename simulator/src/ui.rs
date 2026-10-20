@@ -1,6 +1,7 @@
 //! Control panels: run controls, motion input, channel readouts, plot, log.
 
 use std::collections::VecDeque;
+use std::path::Path;
 use std::time::{Instant, SystemTime};
 
 use bevy::prelude::*;
@@ -17,6 +18,35 @@ const NUDGE_G: f32 = 1.3;
 /// A hard knock. Note code.py sets RANGE_2_G, so the sensor clips this to ~2 g.
 const SHAKE_G: f32 = 3.0;
 const PLOT_SECONDS: f32 = 20.0;
+
+/// Folders next to code.py that hold no firmware source.
+const NOT_FIRMWARE: [&str; 4] = ["lib", "sounds", "sd", "__pycache__"];
+
+/// Newest modification time of the firmware: code.py, the modules beside it
+/// and settings.toml. A change to any of them should restart the run.
+pub fn firmware_mtime(code_path: &Path) -> Option<SystemTime> {
+    fn newest(dir: &Path, top: bool) -> Option<SystemTime> {
+        let mut latest = None;
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let mtime = if path.is_dir() {
+                if NOT_FIRMWARE.contains(&name.as_ref()) {
+                    continue;
+                }
+                newest(&path, false)
+            } else if name.ends_with(".py") || (top && name == "settings.toml") {
+                entry.metadata().and_then(|m| m.modified()).ok()
+            } else {
+                None
+            };
+            latest = latest.max(mtime);
+        }
+        latest
+    }
+    newest(code_path.parent()?, true)
+}
 
 pub fn nudge() {
     hw().accel_pulses.push_back([0.0, 0.0, NUDGE_G]);
@@ -97,13 +127,11 @@ fn hot_reload(mut ui: ResMut<UiState>, mut host: ResMut<Host>) {
         return;
     }
     ui.last_check = Instant::now();
-    let mtime = std::fs::metadata(host.0.code_path())
-        .and_then(|m| m.modified())
-        .ok();
+    let mtime = firmware_mtime(host.0.code_path());
     if mtime != ui.code_mtime {
         ui.code_mtime = mtime;
         if ui.auto_reload {
-            hw().push_line("[sim] code.py changed - restarting".into());
+            hw().push_line("[sim] firmware changed - restarting".into());
             host.0.start();
         }
     }
@@ -177,7 +205,7 @@ fn panels(
             {
                 hw().board_speed = board_speed;
             }
-            row.checkbox(&mut ui.auto_reload, "Restart when code.py is saved");
+            row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved");
             if let Some(mut model) = model {
                 row.separator();
                 row.label("Model");

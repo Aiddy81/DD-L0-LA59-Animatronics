@@ -12,8 +12,10 @@ This file defines how Claude should behave in this project. Follow these guideli
 - **Firmware Stack** — CircuitPython 9.x, `asyncio`, Adafruit libraries (`adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`).
 - **Simulator Stack** — Rust · Bevy (3D, renders via wgpu) · bevy_egui · PyO3 embedding CPython. Cross-compiled for Windows in Docker.
 - **Architecture**
-  - `PropMaker_Feather/code.py` — all firmware logic. Each behaviour is an `async` function (`boot_sequence`, `ambient_breathing`, `motion_sense`, `nose_boops`, `angry_animation`, `idle_attention`, `random_led_scheduler`); `main()` launches them as tasks coordinated by `asyncio.Event`s.
-  - `simulator/` — desktop app that runs the **unmodified** `code.py` against Python stand-ins for the hardware modules (`simulator/shims/`) and renders the droid in 3D.
+  - `PropMaker_Feather/code.py` — short entry point; `main()` runs `boot_sequence` then launches the behaviours as tasks coordinated by `asyncio.Event`s.
+  - `PropMaker_Feather/hardware.py` — board setup, channel map, LEDs, audio (`play_wav`), shared events. `config.py` — tunables from `settings.toml` via `os.getenv()`, defaulting to the tuned values.
+  - `PropMaker_Feather/behaviours/` — one module per behaviour: `boot`, `breathing` (`ambient_breathing`), `motion` (`motion_sense`, `nose_boops`, `angry_animation`), `attention` (`idle_attention`), `leds` (`random_led_scheduler`).
+  - `simulator/` — desktop app that runs the **unmodified** firmware against Python stand-ins for the hardware modules (`simulator/shims/`) and renders the droid in 3D.
 - **PCA9685 channel map** — must match the physical wiring:
 
   | Channel | Part | Notes |
@@ -67,9 +69,9 @@ This file defines how Claude should behave in this project. Follow these guideli
 
 ### Firmware deploy
 
-Copy the contents of `PropMaker_Feather/` (`code.py`, `lib/`, `sounds/`) to the root of the CIRCUITPY drive. The board restarts and runs `code.py`. Debug via `print()` on the serial console.
+Copy the contents of `PropMaker_Feather/` (`code.py`, `config.py`, `hardware.py`, `settings.toml`, `behaviours/`, `lib/`, `sounds/`) to the root of the CIRCUITPY drive. The board restarts and runs `code.py`. Debug via `print()` on the serial console.
 
-Libraries are pre-compiled `.mpy` files copied by hand into `PropMaker_Feather/lib/`; `requirements.txt` and `settings.toml` are unused.
+Libraries are pre-compiled `.mpy` files copied by hand into `PropMaker_Feather/lib/`; `requirements.txt` is unused. `settings.toml` holds the tunables (ints and quoted strings only — CircuitPython 9's limit) and is committed, so it must never hold secrets.
 
 ### Simulator
 
@@ -117,7 +119,7 @@ Never do the following without being explicitly asked:
 - Install anything on the host.
 - Modify `PropMaker_Feather/lib/` (`.mpy` libraries) or `boot_out.txt`.
 - Change or delete anything in `.github/`.
-- Change PCA9685 channel assignments, servo pulse ranges or `SERVO2_MIN/MAX` calibration values — they match the physical build.
+- Change PCA9685 channel assignments, servo pulse ranges or the `SERVO2_*` / `BREATH_SERVO2_*` calibration values (in `settings.toml` and `config.py`) — they match the physical build.
 - Upgrade the CircuitPython major version or major crate versions.
 - Reformat files unrelated to the current task.
 - Push directly to `main`.
