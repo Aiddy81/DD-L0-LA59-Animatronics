@@ -31,19 +31,6 @@ def hsv_to_rgb(h, s, v):
     if i == 5:
         return v, p, q
 
-#async def attention_animation():
-#    """Moves servos and plays a sound to grab attention when idle."""
-#    print("ATTENTION ANIMATION!")
-#    await play_Wav("002.wav")
-#    for _ in range(4):
-#        kit.servo[0].angle = 90
-#        kit.servo[1].angle = 0
-#        await asyncio.sleep(0.2)
-#        kit.servo[0].angle = 0
-#        kit.servo[1].angle = 90
-#        await asyncio.sleep(0.2)
-#    kit.servo[0].angle = 45
-#    kit.servo[1].angle = 45
 
 async def attention_animation(flaps=5, angle_min=10, angle_max=60, duration=0.2):
     """Smooth, attention-grabbing wing motion with full LED color cycling and servo calibration."""
