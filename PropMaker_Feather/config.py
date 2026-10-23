@@ -32,10 +32,11 @@ ANGRY_MAX_WINDOW_S = _int("ANGRY_MAX_WINDOW_S", 3 * 60)
 ANGRY_NUDGES = _int("ANGRY_NUDGES", 3)
 
 # Motion: a change of more than NUDGE from the resting reading, in any direction,
-# is a nudge (TRENCH_NUDGE during the trench run, whose buffeting shakes the board).
+# is a nudge (ANIMATION_NUDGE while attention or the trench run moves the wings,
+# which shakes the board).
 # Total acceleration above HARD is a shake (straight to angry).
-NUDGE_G = _int("NUDGE_MG", 60) / 1000
-TRENCH_NUDGE_G = _int("TRENCH_NUDGE_MG", 200) / 1000
+NUDGE_G = _int("NUDGE_MG", 100) / 1000
+ANIMATION_NUDGE_G = _int("ANIMATION_NUDGE_MG", 200) / 1000
 HARD_MOTION_G = _int("HARD_MOTION_MG", 2500) / 1000
 
 # Breathing: period and right-wing (servo 0) angle range.

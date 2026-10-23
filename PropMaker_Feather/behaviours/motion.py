@@ -8,17 +8,25 @@ import adafruit_lis3dh
 import config
 from log import log
 from hardware import (kit, lis3dh, play_wav, pause_breathing, reset_idle_event,
-                      trench_active,
                       mainEye_red, mainEye_green, mainEye_blue,
                       smallEye_red, smallEye_green, smallEye_blue)
 
 # How fast the resting (gravity) reading follows the board's orientation, per
 # 0.1 s loop. Slow enough that a nudge barely moves it.
 BASELINE_RATE = 0.1
+# Animations end by snapping the wings back to rest, which shakes the board for
+# a moment; on the robot that read as a fresh nudge and kept boops looping.
+SETTLE_S = 1.0
 
 
 def read_g():
     return [value / adafruit_lis3dh.STANDARD_GRAVITY for value in lis3dh.acceleration]
+
+
+async def settle():
+    """Let the wings stop shaking the board, then take the resting reading."""
+    await asyncio.sleep(SETTLE_S)
+    return read_g()
 
 
 async def motion_sense():
@@ -29,25 +37,27 @@ async def motion_sense():
     log(f"Angry window starts at {angry_window_start} for {angry_window_length:.2f} seconds")
     # The board is mounted sideways, so gravity isn't on any fixed axis. A nudge
     # is any change from the resting reading, in any direction.
-    rest = read_g()
-    trench_peak = 0.0
+    rest = await settle()  # the boot sequence has just moved the wings
+    animation_peak = None
     while True:
         reading = read_g()
         delta = math.sqrt(sum((a - r) ** 2 for a, r in zip(reading, rest)))
         rest = [r + (a - r) * BASELINE_RATE for a, r in zip(reading, rest)]
         hard_motion = math.sqrt(sum(a * a for a in reading)) > config.HARD_MOTION_G
 
-        # The trench run's own wing buffeting shakes the board, so it takes a
-        # firmer nudge to cut the run short.
-        if trench_active.is_set():
-            nudge_g = config.TRENCH_NUDGE_G
-            # Largest shake the run caused itself, to tune TRENCH_NUDGE_MG by.
+        # While attention or the trench run owns the wings, their movement
+        # shakes the board, so it takes a firmer nudge to interrupt them.
+        if pause_breathing.is_set():
+            nudge_g = config.ANIMATION_NUDGE_G
+            # Largest shake the animation caused itself, to tune ANIMATION_NUDGE_MG by.
             if delta <= nudge_g:
-                trench_peak = max(trench_peak, delta)
+                animation_peak = max(animation_peak or 0.0, delta)
+        elif animation_peak is not None:
+            log(f"Animation peak shake: {animation_peak * 1000:.0f} mg")
+            animation_peak = None
+            rest = await settle()
+            continue
         else:
-            if trench_peak:
-                log(f"Trench run peak buffeting: {trench_peak * 1000:.0f} mg")
-                trench_peak = 0.0
             nudge_g = config.NUDGE_G
 
         now = time.monotonic()
@@ -62,6 +72,8 @@ async def motion_sense():
             reset_idle_event.set()  # <-- Reset idle timer!
             motion_count += 1
             log(f"Motion detected! {delta * 1000:.0f} mg, count: {motion_count}")
+            if animation_peak is not None:
+                log(f"Animation peak shake: {animation_peak * 1000:.0f} mg")
             pause_breathing.set()
 
             if motion_count >= config.ANGRY_NUDGES or hard_motion:
@@ -74,10 +86,12 @@ async def motion_sense():
             else:
                 await nose_boops()
 
+            # Breathing stays paused while settling, so the wings are still.
+            # Re-taking the rest also means a droid moved for good (picked up,
+            # tipped over) counts once, not as a stream of nudges.
+            rest = await settle()
+            animation_peak = None
             pause_breathing.clear()
-            # The droid may have been moved for good (picked up, tipped over):
-            # rest from here rather than counting the new position as more nudges.
-            rest = read_g()
         await asyncio.sleep(0.1)
 
 

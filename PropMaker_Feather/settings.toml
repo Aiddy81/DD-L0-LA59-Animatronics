@@ -16,11 +16,11 @@ ANGRY_MAX_WINDOW_S = 180
 ANGRY_NUDGES = 3
 
 # Motion: a change of more than NUDGE from resting, in any direction, is a nudge.
-# The trench run shakes the board itself, so it needs TRENCH_NUDGE to cut it short
-# (the serial log prints the run's peak motion to help tune it). Total
+# Attention and the trench run shake the board themselves, so it takes ANIMATION_NUDGE
+# to interrupt them (the log prints each one's peak shake to help tune it). Total
 # acceleration above HARD is a shake.
-NUDGE_MG = 60
-TRENCH_NUDGE_MG = 200
+NUDGE_MG = 100
+ANIMATION_NUDGE_MG = 200
 HARD_MOTION_MG = 2500
 
 # Breathing: period and right-wing (servo 0) angles.

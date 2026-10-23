@@ -67,8 +67,8 @@ Each line is written straight to flash, so a pulled battery loses at most the li
 | `TRENCH_RUN_S` | 300 | Length of the trench run |
 | `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
 | `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
-| `NUDGE_MG` | 60 | A change this big from the resting reading, in any direction, is a nudge (works however the board is mounted) |
-| `TRENCH_NUDGE_MG` | 200 | Nudge size needed during the trench run, whose wing buffeting shakes the board. The serial log prints the run's peak motion after each run, to help tune it |
+| `NUDGE_MG` | 100 | A change this big from the resting reading, in any direction, is a nudge (works however the board is mounted) |
+| `ANIMATION_NUDGE_MG` | 200 | Nudge size needed to interrupt the attention animation or trench run, whose wing movement shakes the board. The serial log prints `Animation peak shake` after each one, to help tune it |
 | `HARD_MOTION_MG` | 2500 | Total acceleration above this is a shake (straight to angry) |
 | `BREATH_PERIOD_S` | 4 | Breathing period |
 | `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
