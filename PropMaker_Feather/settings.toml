@@ -15,7 +15,7 @@ ANGRY_NUDGES = 3
 
 # Motion: a z reading below MIN or above MAX is a nudge; above HARD it's a shake.
 MOTION_Z_MIN_MG = 0
-MOTION_Z_MAX_MG = 1100
+MOTION_Z_MAX_MG = 1075
 HARD_MOTION_MG = 2500
 
 # Breathing: period and right-wing (servo 0) angles.

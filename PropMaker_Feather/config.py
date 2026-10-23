@@ -29,7 +29,7 @@ ANGRY_NUDGES = _int("ANGRY_NUDGES", 3)
 
 # Motion: z outside [MIN, MAX] is a nudge; |z| above HARD is a shake (straight to angry).
 MOTION_Z_MIN_G = _int("MOTION_Z_MIN_MG", 0) / 1000
-MOTION_Z_MAX_G = _int("MOTION_Z_MAX_MG", 1100) / 1000
+MOTION_Z_MAX_G = _int("MOTION_Z_MAX_MG", 1075) / 1000
 HARD_MOTION_G = _int("HARD_MOTION_MG", 2500) / 1000
 
 # Breathing: period and right-wing (servo 0) angle range.
