@@ -31,12 +31,12 @@ ANGRY_MIN_WINDOW_S = _int("ANGRY_MIN_WINDOW_S", 1 * 60)
 ANGRY_MAX_WINDOW_S = _int("ANGRY_MAX_WINDOW_S", 3 * 60)
 ANGRY_NUDGES = _int("ANGRY_NUDGES", 3)
 
-# Motion: a change of more than NUDGE from the resting reading, in any direction,
-# is a nudge (ANIMATION_NUDGE while attention or the trench run moves the wings,
-# which shakes the board).
-# Total acceleration above HARD is a shake (straight to angry).
-NUDGE_G = _int("NUDGE_MG", 100) / 1000
-ANIMATION_NUDGE_G = _int("ANIMATION_NUDGE_MG", 200) / 1000
+# Motion: z outside [MIN, MAX] is a nudge; |z| above HARD is a shake (straight to angry).
+# While attention or the trench run moves the wings, z must pass ANIMATION_MAX instead,
+# because their movement shakes the board.
+MOTION_Z_MIN_G = _int("MOTION_Z_MIN_MG", 0) / 1000
+MOTION_Z_MAX_G = _int("MOTION_Z_MAX_MG", 1050) / 1000
+ANIMATION_Z_MAX_G = _int("ANIMATION_Z_MAX_MG", 1200) / 1000
 HARD_MOTION_G = _int("HARD_MOTION_MG", 2500) / 1000
 
 # Breathing: period and right-wing (servo 0) angle range.

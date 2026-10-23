@@ -15,12 +15,12 @@ ANGRY_MIN_WINDOW_S = 60
 ANGRY_MAX_WINDOW_S = 180
 ANGRY_NUDGES = 3
 
-# Motion: a change of more than NUDGE from resting, in any direction, is a nudge.
-# Attention and the trench run shake the board themselves, so it takes ANIMATION_NUDGE
-# to interrupt them (the log prints each one's peak shake to help tune it). Total
-# acceleration above HARD is a shake.
-NUDGE_MG = 100
-ANIMATION_NUDGE_MG = 200
+# Motion: a z reading below MIN or above MAX is a nudge; above HARD it's a shake.
+# Attention and the trench run shake the board themselves, so while they run z must
+# pass ANIMATION_MAX (the log prints each one's peak z to help tune it).
+MOTION_Z_MIN_MG = 0
+MOTION_Z_MAX_MG = 1050
+ANIMATION_Z_MAX_MG = 1200
 HARD_MOTION_MG = 2500
 
 # Breathing: period and right-wing (servo 0) angles.

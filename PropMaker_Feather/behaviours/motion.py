@@ -11,9 +11,6 @@ from hardware import (kit, lis3dh, play_wav, pause_breathing, reset_idle_event,
                       mainEye_red, mainEye_green, mainEye_blue,
                       smallEye_red, smallEye_green, smallEye_blue)
 
-# How fast the resting (gravity) reading follows the board's orientation, per
-# 0.1 s loop. Slow enough that a nudge barely moves it.
-BASELINE_RATE = 0.1
 # Animations end by snapping the wings back to rest, which shakes the board for
 # a moment; on the robot that read as a fresh nudge and kept boops looping.
 SETTLE_S = 1.0
@@ -23,42 +20,35 @@ def read_g():
     return [value / adafruit_lis3dh.STANDARD_GRAVITY for value in lis3dh.acceleration]
 
 
-async def settle():
-    """Let the wings stop shaking the board, then take the resting reading."""
-    await asyncio.sleep(SETTLE_S)
-    return read_g()
-
-
 async def motion_sense():
     # Counts nudges in the current angry window; enough of them gets the droid angry.
     motion_count = 0
     angry_window_start = time.monotonic()
     angry_window_length = random.uniform(config.ANGRY_MIN_WINDOW_S, config.ANGRY_MAX_WINDOW_S)
     log(f"Angry window starts at {angry_window_start} for {angry_window_length:.2f} seconds")
-    # The board is mounted sideways, so gravity isn't on any fixed axis. A nudge
-    # is any change from the resting reading, in any direction.
-    rest = await settle()  # the boot sequence has just moved the wings
+    await asyncio.sleep(SETTLE_S)  # the boot sequence has just moved the wings
+    x, y, z = read_g()
+    log(f"Resting reading: x={x:.2f} y={y:.2f} z={z:.2f} g")
     animation_peak = None
     while True:
-        reading = read_g()
-        delta = math.sqrt(sum((a - r) ** 2 for a, r in zip(reading, rest)))
-        rest = [r + (a - r) * BASELINE_RATE for a, r in zip(reading, rest)]
-        hard_motion = math.sqrt(sum(a * a for a in reading)) > config.HARD_MOTION_G
+        # Only z: on the robot, x and y pick up the wings' own movement.
+        z = read_g()[2]
+        hard_motion = abs(z) > config.HARD_MOTION_G
 
         # While attention or the trench run owns the wings, their movement
         # shakes the board, so it takes a firmer nudge to interrupt them.
         if pause_breathing.is_set():
-            nudge_g = config.ANIMATION_NUDGE_G
-            # Largest shake the animation caused itself, to tune ANIMATION_NUDGE_MG by.
-            if delta <= nudge_g:
-                animation_peak = max(animation_peak or 0.0, delta)
+            z_max = config.ANIMATION_Z_MAX_G
+            # Highest z the animation caused itself, to tune ANIMATION_Z_MAX_MG by.
+            if z <= z_max:
+                animation_peak = max(animation_peak or z, z)
         elif animation_peak is not None:
-            log(f"Animation peak shake: {animation_peak * 1000:.0f} mg")
+            log(f"Animation peak z: {animation_peak:.3f} g")
             animation_peak = None
-            rest = await settle()
+            await asyncio.sleep(SETTLE_S)
             continue
         else:
-            nudge_g = config.NUDGE_G
+            z_max = config.MOTION_Z_MAX_G
 
         now = time.monotonic()
         # Reset the angry window if time expired
@@ -68,12 +58,12 @@ async def motion_sense():
             angry_window_length = random.uniform(config.ANGRY_MIN_WINDOW_S, config.ANGRY_MAX_WINDOW_S)
             log("Angry window expired, motion_count reset.")
 
-        if delta > nudge_g or hard_motion:
+        if z < config.MOTION_Z_MIN_G or z > z_max or hard_motion:
             reset_idle_event.set()  # <-- Reset idle timer!
             motion_count += 1
-            log(f"Motion detected! {delta * 1000:.0f} mg, count: {motion_count}")
+            log(f"Motion detected! z={z:.3f} g, count: {motion_count}")
             if animation_peak is not None:
-                log(f"Animation peak shake: {animation_peak * 1000:.0f} mg")
+                log(f"Animation peak z: {animation_peak:.3f} g")
             pause_breathing.set()
 
             if motion_count >= config.ANGRY_NUDGES or hard_motion:
@@ -87,9 +77,7 @@ async def motion_sense():
                 await nose_boops()
 
             # Breathing stays paused while settling, so the wings are still.
-            # Re-taking the rest also means a droid moved for good (picked up,
-            # tipped over) counts once, not as a stream of nudges.
-            rest = await settle()
+            await asyncio.sleep(SETTLE_S)
             animation_peak = None
             pause_breathing.clear()
         await asyncio.sleep(0.1)
