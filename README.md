@@ -56,7 +56,7 @@ This project implements interactive animatronic behaviors for a custom device us
 | `TRENCH_RUN_S` | 300 | Length of the trench run |
 | `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
 | `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
-| `MOTION_Z_MIN_MG`, `MOTION_Z_MAX_MG` | 0, 1100 | A z reading outside this range is a nudge |
+| `MOTION_Z_MIN_MG`, `MOTION_Z_MAX_MG` | 0, 1075 | A z reading outside this range is a nudge |
 | `HARD_MOTION_MG` | 2500 | A z reading above this is a shake (straight to angry) |
 | `BREATH_PERIOD_S` | 4 | Breathing period |
 | `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
