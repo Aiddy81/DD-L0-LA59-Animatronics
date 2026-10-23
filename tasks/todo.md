@@ -13,6 +13,25 @@ Branch: `bugfix/breathing-pause` (off `Documentation`).
 - After: 0 inside any animation. The probe still shows 2 (ch 0 + ch 1 at 79.29 s) because it merges two back-to-back boops into one span; those writes land in the gap after the first boop ended and before the second boop's sound started (79.3 s), when the pause is correctly clear.
 - On resume the wings step from the animation's end pose to breathing's held position in one tick. Before the fix that same step happened on the next breathing tick anyway.
 
+# nose_boops() / angry_animation() slower than written (follow-up to #17)
+
+Branch: `bugfix/motion-speed` (off `Documentation`, after PR #26).
+
+- [x] Measure in the headless sim at board speed (estimated `[board]` figures, #20 not run yet), first to last wing write:
+  - `angry_animation`: ~4.0 s vs 2.4 s written (3 flaps × 2 strokes × 0.4 s), ~1.7x slow
+  - `nose_boops`: ~7.9 s vs 4.8 s written (2 boops × 2 strokes × 1.2 s), ~1.65x slow
+- [x] Root cause: same as #17. Fixed step counts (20 / 60 per stroke) with `sleep(duration / steps)`, plus 2 PCA9685 writes (~4 ms) and scheduler overhead per step
+- [x] Both now share a clock-driven `sine_flaps()`; same `duration` (per stroke), angles, end pose and eye-colour logic
+- [x] Headless test passes
+- [ ] Interactive sim (nudge → boop, hard shake → angry, Board speed on) — user
+- [ ] Hardware check — user; re-check once #20 has real `[board]` figures
+
+## Review
+- After: angry 2.42 / 2.44 s, boops 4.80–4.84 s. ~6.4 ms per frame, so ~62 frames per angry stroke and ~187 per boop stroke (was 21 / 61).
+- Trajectory kept exactly, including the snap between strokes: each stroke ends where it started (min → max → min, then max → min → max), so the wing jumps min ↔ max at every stroke boundary, as before.
+- Eye colour after a boop still comes from the last stroke's end angle (`angle_max`, so full blue / dim red), as before.
+- Not changed: `ambient_breathing` never waits on `pause_breathing`, so it keeps writing the wings ~10x/s during these animations (and attention). Pre-existing; worth its own issue.
+
 # Issue #17 — attention_animation() much slower on the robot than written
 
 Branch: `bugfix/attention-speed` (stacked on `chore/tidy-code`, PR #24).
