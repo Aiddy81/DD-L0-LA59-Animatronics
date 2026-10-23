@@ -56,14 +56,15 @@ This project implements interactive animatronic behaviors for a custom device us
 | `TRENCH_RUN_S` | 300 | Length of the trench run |
 | `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
 | `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
-| `MOTION_Z_MIN_MG`, `MOTION_Z_MAX_MG` | 0, 1075 | A z reading outside this range is a nudge |
-| `HARD_MOTION_MG` | 2500 | A z reading above this is a shake (straight to angry) |
+| `NUDGE_MG` | 60 | A change this big from the resting reading, in any direction, is a nudge (works however the board is mounted) |
+| `TRENCH_NUDGE_MG` | 200 | Nudge size needed during the trench run, whose wing buffeting shakes the board. The serial log prints the run's peak motion after each run, to help tune it |
+| `HARD_MOTION_MG` | 2500 | Total acceleration above this is a shake (straight to angry) |
 | `BREATH_PERIOD_S` | 4 | Breathing period |
 | `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
 | `SERVO2_MIN`, `SERVO2_MAX` | 40, 60 | Left-wing calibration (mounted inverted) for boot and attention |
 | `BREATH_SERVO2_MIN`, `BREATH_SERVO2_MAX` | 35, 50 | Left-wing calibration while breathing |
 | `EYE_MIN_BRIGHTNESS`, `EYE_MAX_BRIGHTNESS` | 60, 360 | Eye brightness range for breathing and boops (0–360) |
-| `WHITE_LED_IDLE_DUTY` | 1000 | White LED glow between effects (0–65535) |
+| `WHITE_LED_IDLE_DUTY` | 500 | White LED glow between effects (0–65535) |
 
 ## Sound Files and Their Functions
 
@@ -97,7 +98,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 
 ### Using it
 
-- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. *Tipped over* holds z at -1 g.
+- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. *Tipped over* holds z at -1 g, which counts as one nudge; after that the resting reading settles on the new orientation.
 - **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation or the trench run plays (50/50).
 - **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log.
 - **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.
@@ -107,7 +108,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 
 The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and the LIS3DH clipping at its configured range. So it shows what the robot will really do, including:
 - The eye channels peak at 32.8% duty, because `set_pulse_width_range(0, 6550)` is about a third of the 20 ms period.
-- The accelerometer saturates at its range. The firmware uses `RANGE_4_G`, so a 3 g shake reads as 3 g and passes `abs(z) > 2.5` (hard motion). At `RANGE_2_G` it would clip to about 2 g and only count as a nudge.
+- The accelerometer saturates at its range. The firmware uses `RANGE_4_G`, so a 3 g shake reads as 3 g and passes the 2.5 g hard-motion limit. At `RANGE_2_G` it would clip to about 2 g and only count as a nudge.
 - A blocking `time.sleep()` in a behaviour freezes every other behaviour while it runs, just as on the board. (`data_processing_led()` used to do this; it now uses `await asyncio.sleep()`, so the wings keep breathing during the white-LED flicker.)
 
 ### Matching the real board

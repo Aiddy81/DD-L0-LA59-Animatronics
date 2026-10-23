@@ -15,9 +15,12 @@ ANGRY_MIN_WINDOW_S = 60
 ANGRY_MAX_WINDOW_S = 180
 ANGRY_NUDGES = 3
 
-# Motion: a z reading below MIN or above MAX is a nudge; above HARD it's a shake.
-MOTION_Z_MIN_MG = 0
-MOTION_Z_MAX_MG = 1075
+# Motion: a change of more than NUDGE from resting, in any direction, is a nudge.
+# The trench run shakes the board itself, so it needs TRENCH_NUDGE to cut it short
+# (the serial log prints the run's peak motion to help tune it). Total
+# acceleration above HARD is a shake.
+NUDGE_MG = 60
+TRENCH_NUDGE_MG = 200
 HARD_MOTION_MG = 2500
 
 # Breathing: period and right-wing (servo 0) angles.
@@ -37,4 +40,4 @@ EYE_MIN_BRIGHTNESS = 60
 EYE_MAX_BRIGHTNESS = 360
 
 # White LED glow between effects (0-65535).
-WHITE_LED_IDLE_DUTY = 1000
+WHITE_LED_IDLE_DUTY = 500

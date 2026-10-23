@@ -29,9 +29,11 @@ ANGRY_MIN_WINDOW_S = _int("ANGRY_MIN_WINDOW_S", 1 * 60)
 ANGRY_MAX_WINDOW_S = _int("ANGRY_MAX_WINDOW_S", 3 * 60)
 ANGRY_NUDGES = _int("ANGRY_NUDGES", 3)
 
-# Motion: z outside [MIN, MAX] is a nudge; |z| above HARD is a shake (straight to angry).
-MOTION_Z_MIN_G = _int("MOTION_Z_MIN_MG", 0) / 1000
-MOTION_Z_MAX_G = _int("MOTION_Z_MAX_MG", 1075) / 1000
+# Motion: a change of more than NUDGE from the resting reading, in any direction,
+# is a nudge (TRENCH_NUDGE during the trench run, whose buffeting shakes the board).
+# Total acceleration above HARD is a shake (straight to angry).
+NUDGE_G = _int("NUDGE_MG", 60) / 1000
+TRENCH_NUDGE_G = _int("TRENCH_NUDGE_MG", 200) / 1000
 HARD_MOTION_G = _int("HARD_MOTION_MG", 2500) / 1000
 
 # Breathing: period and right-wing (servo 0) angle range.
@@ -51,4 +53,4 @@ EYE_MIN_BRIGHTNESS = _int("EYE_MIN_BRIGHTNESS", 60)
 EYE_MAX_BRIGHTNESS = _int("EYE_MAX_BRIGHTNESS", 360)
 
 # White LED glow between effects (duty cycle, 0-65535).
-WHITE_LED_IDLE_DUTY = _int("WHITE_LED_IDLE_DUTY", 1000)
+WHITE_LED_IDLE_DUTY = _int("WHITE_LED_IDLE_DUTY", 500)

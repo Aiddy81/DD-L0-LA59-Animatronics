@@ -7,8 +7,17 @@ import adafruit_lis3dh
 
 import config
 from hardware import (kit, lis3dh, play_wav, pause_breathing, reset_idle_event,
+                      trench_active,
                       mainEye_red, mainEye_green, mainEye_blue,
                       smallEye_red, smallEye_green, smallEye_blue)
+
+# How fast the resting (gravity) reading follows the board's orientation, per
+# 0.1 s loop. Slow enough that a nudge barely moves it.
+BASELINE_RATE = 0.1
+
+
+def read_g():
+    return [value / adafruit_lis3dh.STANDARD_GRAVITY for value in lis3dh.acceleration]
 
 
 async def motion_sense():
@@ -17,11 +26,28 @@ async def motion_sense():
     angry_window_start = time.monotonic()
     angry_window_length = random.uniform(config.ANGRY_MIN_WINDOW_S, config.ANGRY_MAX_WINDOW_S)
     print(f"Angry window starts at {angry_window_start} for {angry_window_length:.2f} seconds")
+    # The board is mounted sideways, so gravity isn't on any fixed axis. A nudge
+    # is any change from the resting reading, in any direction.
+    rest = read_g()
+    trench_peak = 0.0
     while True:
-        x, y, z = [
-            value / adafruit_lis3dh.STANDARD_GRAVITY for value in lis3dh.acceleration
-        ]
-        hard_motion = abs(z) > config.HARD_MOTION_G
+        reading = read_g()
+        delta = math.sqrt(sum((a - r) ** 2 for a, r in zip(reading, rest)))
+        rest = [r + (a - r) * BASELINE_RATE for a, r in zip(reading, rest)]
+        hard_motion = math.sqrt(sum(a * a for a in reading)) > config.HARD_MOTION_G
+
+        # The trench run's own wing buffeting shakes the board, so it takes a
+        # firmer nudge to cut the run short.
+        if trench_active.is_set():
+            nudge_g = config.TRENCH_NUDGE_G
+            # Largest shake the run caused itself, to tune TRENCH_NUDGE_MG by.
+            if delta <= nudge_g:
+                trench_peak = max(trench_peak, delta)
+        else:
+            if trench_peak:
+                print(f"Trench run peak buffeting: {trench_peak * 1000:.0f} mg")
+                trench_peak = 0.0
+            nudge_g = config.NUDGE_G
 
         now = time.monotonic()
         # Reset the angry window if time expired
@@ -31,10 +57,10 @@ async def motion_sense():
             angry_window_length = random.uniform(config.ANGRY_MIN_WINDOW_S, config.ANGRY_MAX_WINDOW_S)
             print("Angry window expired, motion_count reset.")
 
-        if z < config.MOTION_Z_MIN_G or z > config.MOTION_Z_MAX_G or hard_motion:
+        if delta > nudge_g or hard_motion:
             reset_idle_event.set()  # <-- Reset idle timer!
             motion_count += 1
-            print(f"Motion detected! Count: {motion_count}")
+            print(f"Motion detected! {delta * 1000:.0f} mg, count: {motion_count}")
             pause_breathing.set()
 
             if motion_count >= config.ANGRY_NUDGES or hard_motion:
@@ -48,6 +74,9 @@ async def motion_sense():
                 await nose_boops()
 
             pause_breathing.clear()
+            # The droid may have been moved for good (picked up, tipped over):
+            # rest from here rather than counting the new position as more nudges.
+            rest = read_g()
         await asyncio.sleep(0.1)
 
 
