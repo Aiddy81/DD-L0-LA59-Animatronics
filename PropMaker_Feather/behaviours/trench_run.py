@@ -16,9 +16,13 @@ MANOEUVRES = (
     (0.2, -1.0, 0.6, 1.2),   # tight turn left
     (1.0, 0.0, 1.0, 2.0),    # steep climb
     (-1.0, 0.0, 0.8, 1.5),   # steep dive
-    (0.7, 0.7, 0.8, 1.5),    # climbing turn right
-    (0.7, -0.7, 0.8, 1.5),   # climbing turn left
+    (0.6, 1.0, 0.8, 1.5),    # climbing turn right
+    (0.6, -1.0, 0.8, 1.5),   # climbing turn left
 )
+
+# Wing travel in servo degrees (see set_wings).
+WING_UP = 20
+WING_DOWN = 90
 
 # Buffeting: a fast flutter on top of each pose, stronger the harder the move,
 # like air loading up an aileron.
@@ -45,10 +49,11 @@ def wing_heights(pitch, roll):
 
 
 def set_wings(right, left):
-    # Same ranges as attention_animation: servo 0 lower angle = higher wing,
-    # servo 1 is mounted inverted and calibrated by SERVO2_MIN/MAX.
-    kit.servo[0].angle = 60 - 50 * right
-    kit.servo[1].angle = config.SERVO2_MIN + (config.SERVO2_MAX - config.SERVO2_MIN) * left
+    # Servo 0: lower angle = higher wing. Servo 1 is mounted inverted, so it is
+    # mirrored as in angry_animation. 20-90 degrees is the span boops (20-70)
+    # and angry (30-90) already drive both servos through.
+    kit.servo[0].angle = WING_DOWN - (WING_DOWN - WING_UP) * right
+    kit.servo[1].angle = WING_UP + (WING_DOWN - WING_UP) * left
 
 
 def set_eyes(red, green):

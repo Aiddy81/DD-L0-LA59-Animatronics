@@ -13,7 +13,8 @@ Branch: `feature/trench-run` (off `Documentation`).
 - [ ] Hardware check: servo strain at the buffet frequency — user
 
 ## Review
-- Wings stay inside the attention animation's ranges (servo 0 10–60°, servo 1 `SERVO2_MIN/MAX`); no calibration changed.
+- Wings swing 20–90° on both servos (left mirrored, as in `angry_animation`): the span boops (20–70) and angry (30–90) already use. First version used the attention ranges, which gave the left wing only 20° of travel; user asked for more pronounced moves. No calibration changed.
+- Sound loops a short `trenchRun.wav` (full length won't fit on CIRCUITPY) and stops when the run ends or is aborted.
 - On abort the afterburner is cleared (eyes off, white LED idle), because a boop only resets some eye channels; the small eye would otherwise stay orange.
 
 # Breathing ignores `pause_breathing`
