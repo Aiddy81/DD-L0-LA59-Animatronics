@@ -2,7 +2,7 @@ import asyncio
 import math
 
 import config
-from hardware import kit, mainEye_red, mainEye_green, mainEye_blue, smallEye_blue
+from hardware import kit, mainEye_red, mainEye_green, mainEye_blue, smallEye_blue, pause_breathing
 
 
 def clamp(val, min_val, max_val):
@@ -14,6 +14,12 @@ async def ambient_breathing(period=config.BREATH_PERIOD_S, angle_min=config.BREA
     """Smoothly moves both wings up and down in a breathing pattern, with blue/red LED color and clamped servo angles."""
     t = 0
     while True:
+        # Hold off while boop/angry/attention own the wings and eyes; t is not
+        # advanced, so breathing resumes from the same point in its cycle.
+        if pause_breathing.is_set():
+            await asyncio.sleep(0.1)
+            continue
+
         # Normalized sine wave: norm goes from 0 (down) to 1 (up)
         norm = (math.sin(2 * math.pi * t / period) + 1) / 2
         angle = angle_min + (angle_max - angle_min) * norm

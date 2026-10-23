@@ -1,3 +1,18 @@
+# Breathing ignores `pause_breathing`
+
+Branch: `bugfix/breathing-pause` (off `Documentation`).
+
+- [x] Root cause: `ambient_breathing()` never checked `pause_breathing`, so while boop / angry / attention ran it kept writing wings (ch 0/1) and eye LEDs every 0.1 s, interleaved with the animation's writes
+- [x] Fix: each tick, if `pause_breathing.is_set()` sleep 0.1 s and skip; `t` is held, so breathing resumes from the same point in its cycle
+- [x] Headless test passes in the `ddl0-sim-dev` image (all 13 checks)
+- [x] Probe (scratch, not committed): tag each ch 0/1 write by calling function, count breathing writes inside each animation
+- [ ] Hardware check — user
+
+## Review
+- Before: 682 breathing wing writes inside animations (angry 66 + 68, boop 132 + 126 + 258, attention 32).
+- After: 0 inside any animation. The probe still shows 2 (ch 0 + ch 1 at 79.29 s) because it merges two back-to-back boops into one span; those writes land in the gap after the first boop ended and before the second boop's sound started (79.3 s), when the pause is correctly clear.
+- On resume the wings step from the animation's end pose to breathing's held position in one tick. Before the fix that same step happened on the next breathing tick anyway.
+
 # nose_boops() / angry_animation() slower than written (follow-up to #17)
 
 Branch: `bugfix/motion-speed` (off `Documentation`, after PR #26).
