@@ -4,7 +4,7 @@
 This project implements interactive animatronic behaviors for a custom device using Adafruit hardware and CircuitPython 9.x. The system features servo-driven wings, RGB LED eyes, sound playback, and motion sensing, all orchestrated with asynchronous code for lifelike, responsive actions.
 
 ## Features
-- **Servo Animation**: Smooth, natural wing movements for idle, attention, and angry states.
+- **Servo Animation**: Smooth, natural wing movements for idle, attention, trench-run and angry states.
 - **LED Effects**: RGB LEDs (main and small "eyes") display color patterns synchronized with animations.
 - **Audio Playback**: WAV sound effects triggered by events and behaviors.
 - **Motion Sensing**: LIS3DH accelerometer detects movement to trigger responses.
@@ -23,7 +23,7 @@ This project implements interactive animatronic behaviors for a custom device us
 - `PropMaker_Feather/hardware.py` — Board setup: accelerometer, PCA9685 channel map, LEDs, audio, shared events
 - `PropMaker_Feather/config.py` — Reads the tunables from `settings.toml`, with built-in defaults
 - `PropMaker_Feather/settings.toml` — Tunables (see [Tuning](#tuning))
-- `PropMaker_Feather/behaviours/` — One module per behaviour: `boot`, `breathing`, `motion` (boops and angry), `attention`, `leds`
+- `PropMaker_Feather/behaviours/` — One module per behaviour: `boot`, `breathing`, `motion` (boops and angry), `attention`, `trench_run`, `leds`
 - `PropMaker_Feather/sounds/` — WAV files for sound effects
 - `PropMaker_Feather/lib/` — CircuitPython libraries (Adafruit drivers, etc.)
 
@@ -31,7 +31,8 @@ This project implements interactive animatronic behaviors for a custom device us
 - **Boot Sequence**: Smooth startup animation for wings and eyes, with LED and audio effects.
 - **Ambient Breathing**: Wings and LEDs move in a breathing pattern.
 - **Motion Response**: Device reacts to motion with "boop" or "angry" animations and sounds.
-- **Idle Attention**: After a random idle period, device performs an attention-seeking animation.
+- **Idle Attention**: After a random idle period, device performs an attention-seeking animation, or (equal chance) a trench run.
+- **Trench Run**: A 5-minute Top Gun: Maverick-style flight. Tight turns split the wings (one up, one down), steep climbs lift both, steep dives drop both, and the wings buffet under load. Eyes glow orange like an afterburner, brighter on climbs; the white LED flickers. A nudge or shake cuts it short.
 - **Random LED Effects**: White LED flashes at random intervals to simulate data processing.
 
 ## Setup & Usage
@@ -52,6 +53,7 @@ This project implements interactive animatronic behaviors for a custom device us
 | Key | Default | What it does |
 |---|---|---|
 | `IDLE_MIN_S`, `IDLE_MAX_S` | 900, 7200 | Quiet spell (random, between these) before seeking attention |
+| `TRENCH_RUN_S` | 300 | Length of the trench run |
 | `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
 | `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
 | `MOTION_Z_MIN_MG`, `MOTION_Z_MAX_MG` | 0, 1100 | A z reading outside this range is a nudge |
@@ -70,6 +72,7 @@ This project implements interactive animatronic behaviors for a custom device us
 | angry.wav        | angry_animation()        | Angry response to repeated/strong motion  |
 | noseBoops.wav    | nose_boops()             | Gentle/loving response to motion          |
 | youWho.wav       | attention_animation()    | Attention-seeking after idle period       |
+| trenchRun.wav    | trench_run()             | Trench run after idle period (plays once at the start) |
 | 001.wav          | play_Wav_task (random)   | General/random sound effect               |
 | 003.wav          | play_Wav_task (random)   | General/random sound effect               |
 | 005.wav          | play_Wav_task (random)   | General/random sound effect               |
@@ -95,7 +98,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 ### Using it
 
 - **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. *Tipped over* holds z at -1 g.
-- **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation plays.
+- **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation or the trench run plays (50/50).
 - **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log.
 - **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.
 - **CircuitPython strict** (on by default) holds `code.py` and its modules to what the board has. Imports outside CircuitPython 9 and `lib/` fail, as do APIs CircuitPython lacks (`random.choices`, `os.path`, `asyncio.TaskGroup`...). `time.monotonic()` gets the board's reduced float precision, so long-uptime timer drift shows when you fast-forward. Untick it to run with full desktop Python; the change applies on the next restart.

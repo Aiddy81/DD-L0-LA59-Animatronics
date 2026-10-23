@@ -1,3 +1,21 @@
+# Trench run idle animation (Top Gun: Maverick)
+
+Branch: `feature/trench-run` (off `Documentation`).
+
+- [x] `behaviours/trench_run.py`: random manoeuvres (tight turns split the wings, climbs lift both, dives drop both), smoothstep transitions, buffet flutter (~7 Hz, stronger under load), orange afterburner eyes, white LED flicker; runs `TRENCH_RUN_S` (300 s)
+- [x] `idle_attention()`: 50/50 attention or trench run; a nudge aborts the run and `motion_sense` keeps `pause_breathing` until its boop / angry ends
+- [x] `trench_active` event: LED scheduler skips or stops its flicker while the run owns the white LED
+- [x] `TRENCH_RUN_S` in `config.py` / `settings.toml`; README behaviour, tuning and sound tables
+- [x] Headless test: accepts either idle animation, checks a trench run is aborted by the next nudge, second idle trigger at 100 s; silent stand-ins for sounds missing locally
+- [x] Headless passes (4 runs: trench picked in 2); forced-trench copy: aborts on nudge, and with `TRENCH_RUN_S = 8` completes and resets
+- [ ] Interactive sim (Trigger idle now until the trench run plays; nudge mid-run; full run at fast-forward) — user
+- [ ] Add `sounds/trenchRun.wav` — user (missing file crashes the firmware when the run starts)
+- [ ] Hardware check: servo strain at the buffet frequency — user
+
+## Review
+- Wings stay inside the attention animation's ranges (servo 0 10–60°, servo 1 `SERVO2_MIN/MAX`); no calibration changed.
+- On abort the afterburner is cleared (eyes off, white LED idle), because a boop only resets some eye channels; the small eye would otherwise stay orange.
+
 # Breathing ignores `pause_breathing`
 
 Branch: `bugfix/breathing-pause` (off `Documentation`).

@@ -83,6 +83,7 @@ white_led= pwmio.PWMOut(board.EXTERNAL_NEOPIXELS, frequency=5000)
 pause_breathing = asyncio.Event()
 pause_breathing.clear()  # Start with breathing enabled
 reset_idle_event = asyncio.Event()
+trench_active = asyncio.Event()  # the trench run owns the white LED while set
 
 wavfiles = [
     file
