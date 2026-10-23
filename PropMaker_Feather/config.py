@@ -35,7 +35,7 @@ ANGRY_NUDGES = _int("ANGRY_NUDGES", 3)
 # While attention or the trench run moves the wings, z must pass ANIMATION_MAX instead,
 # because their movement shakes the board.
 MOTION_Z_MIN_G = _int("MOTION_Z_MIN_MG", 0) / 1000
-MOTION_Z_MAX_G = _int("MOTION_Z_MAX_MG", 1050) / 1000
+MOTION_Z_MAX_G = _int("MOTION_Z_MAX_MG", 1025) / 1000
 ANIMATION_Z_MAX_G = _int("ANIMATION_Z_MAX_MG", 1200) / 1000
 HARD_MOTION_G = _int("HARD_MOTION_MG", 2500) / 1000
 
