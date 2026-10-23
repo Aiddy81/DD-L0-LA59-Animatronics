@@ -117,9 +117,14 @@ The RP2040 is much slower than a PC and has far less memory, so the simulator mo
 
 The timing and memory figures in `simulator/sim.toml` `[board]` start as estimates. To measure your robot:
 
-1. Copy `simulator/board_bench.py` to the root of the CIRCUITPY drive.
-2. In the serial console press Ctrl-C, then Enter, and type `import board_bench`. Only the main eye's red LED flickers dimly; the wings don't move.
-3. Paste the `[board]` block it prints over the one in `simulator/sim.toml`, then delete `board_bench.py` from the drive.
+The bench runs inside the robot with no PC attached. It saves its results in the board's non-volatile memory, and you read them back over USB afterwards.
+
+1. On the CIRCUITPY drive, rename `code.py` to `code_main.py`, then copy `simulator/board_bench.py` in as `code.py`.
+2. Unplug the Feather, fit it in the robot and power on. Only the main eye's red LED flickers dimly; the wings don't move. When it's done the main eye glows green. If the Feather's red LED blinks instead, it failed, and the error is saved in place of the results.
+3. Plug the Feather into the PC and open the serial console. Press Ctrl-D to rerun if you missed the output. With USB connected it prints the saved `[board]` block instead of measuring.
+4. Paste that block over the one in `simulator/sim.toml`. Then, on the drive, delete the bench `code.py` and rename `code_main.py` back to `code.py`.
+
+If the Feather is plugged into USB and nothing is saved, the bench measures and prints straight away. That only works if the FeatherWing is attached.
 
 ### Tests and CI
 
