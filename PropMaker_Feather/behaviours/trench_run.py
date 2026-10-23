@@ -4,7 +4,7 @@ import random
 import time
 
 import config
-from hardware import (kit, play_wav, white_led, reset_idle_event,
+from hardware import (kit, play_wav, stop_wav, white_led, reset_idle_event,
                       mainEye_red, mainEye_green, mainEye_blue,
                       smallEye_red, smallEye_green, smallEye_blue)
 
@@ -64,7 +64,8 @@ async def trench_run(duration=config.TRENCH_RUN_S):
     """Top Gun: Maverick trench run: tight turns, steep climbs and dives with
     buffeting wings and an afterburner glow. Returns True if a nudge cut it short."""
     print("TRENCH RUN!")
-    await play_wav("trenchRun.wav")
+    # A short clip looped for the whole run: a full-length track won't fit on CIRCUITPY.
+    await play_wav("trenchRun.wav", loop=True)
     pitch, roll = 0.0, 0.0
     start = time.monotonic()
     while True:
@@ -83,6 +84,7 @@ async def trench_run(duration=config.TRENCH_RUN_S):
                 # Boops only reset some eye channels, so clear the afterburner
                 # either way. On a nudge, motion_sense owns the wings and
                 # pause_breathing from here.
+                stop_wav()
                 if not aborted:
                     set_wings(0.5, 0.5)
                 set_eyes(0, 0)

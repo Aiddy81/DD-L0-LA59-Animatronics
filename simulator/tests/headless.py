@@ -167,6 +167,10 @@ def main():
          "youWho.wav" in played or "trenchRun.wav" in played),
         ("a nudge aborts the trench run",
          "trenchRun.wav" not in played or "Trench run aborted" in log),
+        ("trench run sound loops, then stops with the run",
+         all(any(n == "trenchRun.wav" and abs(lt - t) < 0.2 for lt, n in simhw.looped_audio)
+             and any(s >= t for s in simhw.audio_stops)
+             for t, name in simhw.audio if name == "trenchRun.wav")),
         ("hard shake goes straight to angry (angry.wav)", shake_response == "angry.wav"),
         ("repeated nudges get angry (angry.wav)", played.count("angry.wav") >= 2),
         ("white LED flickers", bool(bursts)),

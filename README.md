@@ -72,7 +72,7 @@ This project implements interactive animatronic behaviors for a custom device us
 | angry.wav        | angry_animation()        | Angry response to repeated/strong motion  |
 | noseBoops.wav    | nose_boops()             | Gentle/loving response to motion          |
 | youWho.wav       | attention_animation()    | Attention-seeking after idle period       |
-| trenchRun.wav    | trench_run()             | Trench run after idle period (plays once at the start) |
+| trenchRun.wav    | trench_run()             | Trench run after idle period (a short clip, looped for the whole run) |
 | 001.wav          | play_Wav_task (random)   | General/random sound effect               |
 | 003.wav          | play_Wav_task (random)   | General/random sound effect               |
 | 005.wav          | play_Wav_task (random)   | General/random sound effect               |

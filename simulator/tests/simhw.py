@@ -18,6 +18,8 @@ pca = {}
 pins = {}
 white = [0]
 audio = []
+looped_audio = []  # (time, name) of sounds started on a loop
+audio_stops = []   # times stop_audio() was called
 log_lines = []
 heap_peak = [0.0]
 unsimulated_libs = []
@@ -96,11 +98,14 @@ def log(text):
 
 
 def play_wav(path, level, looped):
-    audio.append((round(now(), 1), path.replace("\\", "/").rsplit("/", 1)[-1]))
+    name = path.replace("\\", "/").rsplit("/", 1)[-1]
+    audio.append((round(now(), 1), name))
+    if looped:
+        looped_audio.append((round(now(), 1), name))
 
 
 def stop_audio():
-    pass
+    audio_stops.append(round(now(), 1))
 
 
 def set_volume(level):
