@@ -21,6 +21,8 @@ def _int(key, default):
 # Idle: seek attention after a random quiet spell in this range.
 IDLE_MIN_S = _int("IDLE_MIN_S", 15 * 60)
 IDLE_MAX_S = _int("IDLE_MAX_S", 120 * 60)
+# How long the trench run (the other idle animation) lasts.
+TRENCH_RUN_S = _int("TRENCH_RUN_S", 5 * 60)
 
 # Angry: this many nudges inside one random window gets the droid angry.
 ANGRY_MIN_WINDOW_S = _int("ANGRY_MIN_WINDOW_S", 1 * 60)

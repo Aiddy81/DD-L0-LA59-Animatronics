@@ -22,7 +22,7 @@ REPO = os.path.dirname(SIM)
 SHIMS = os.path.join(SIM, "shims")
 
 # Sounds the README lists; real files are git-ignored, so CI gets silent ones.
-DEFAULT_SOUNDS = ["angry.wav", "noseBoops.wav", "youWho.wav",
+DEFAULT_SOUNDS = ["angry.wav", "noseBoops.wav", "youWho.wav", "trenchRun.wav",
                   "001.wav", "003.wav", "005.wav", "007.wav", "008.wav"]
 
 # Virtual time of the scripted hard shake: after boot, before any nudge, so the
@@ -73,13 +73,16 @@ def stage_firmware(code_path, workdir):
     real_sounds = os.path.join(src_dir, "sounds")
     if os.path.isdir(real_sounds):
         shutil.copytree(real_sounds, sounds)
-        return
-    os.makedirs(sounds)
+    else:
+        os.makedirs(sounds)
     referenced = set()
     for source in sources:
         with open(source, encoding="utf-8") as f:
             referenced |= set(re.findall(r'"([\w.-]+\.wav)"', f.read()))
+    # Silent stand-ins for any sound not on disk (all of them in CI).
     for name in sorted(referenced | set(DEFAULT_SOUNDS)):
+        if os.path.exists(os.path.join(sounds, name)):
+            continue
         with wave.open(os.path.join(sounds, name), "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
@@ -128,11 +131,13 @@ def main():
     # Scenario: a hard shake after boot (the UI's 3 g "Hard shake"), which
     # should go straight to angry and restart the angry window; then a boop,
     # the idle timer cut short, then repeated nudges, which should end in a
-    # second angry flap.
+    # second angry flap. Each idle trigger (45 s, 100 s) picks attention or a
+    # trench run at random; the nudge after each one aborts a trench run.
     simhw.scheduled_accel[:] = [(SHAKE_AT, (0.0, 0.0, 3.0))]
     simhw.scheduled_accel += [(30.0, (0.0, 0.0, 1.3))]
     simhw.scheduled_accel += [(60.0 + i * 0.5, (0.0, 0.0, 1.3)) for i in range(4)]
-    simhw.idle_trigger_at[:] = [45.0]
+    simhw.scheduled_accel += [(110.0, (0.0, 0.0, 1.3))]
+    simhw.idle_trigger_at[:] = [45.0, 100.0]
 
     random.seed(1)
     workdir = tempfile.mkdtemp(prefix="ddl0-headless-")
@@ -156,7 +161,16 @@ def main():
         ("both wing servos driven", 0 in simhw.pca and 1 in simhw.pca),
         ("all six eye channels driven", all(ch in simhw.pca for ch in range(2, 8))),
         ("nudge boops (noseBoops.wav)", "noseBoops.wav" in played),
-        ("idle trigger seeks attention (youWho.wav)", "youWho.wav" in played),
+        # Idle picks either animation at random, so accept both; a trench run
+        # must be cut short by the nudge that follows its trigger.
+        ("idle trigger seeks attention (youWho.wav or trenchRun.wav)",
+         "youWho.wav" in played or "trenchRun.wav" in played),
+        ("a nudge aborts the trench run",
+         "trenchRun.wav" not in played or "Trench run aborted" in log),
+        ("trench run sound loops, then stops with the run",
+         all(any(n == "trenchRun.wav" and abs(lt - t) < 0.2 for lt, n in simhw.looped_audio)
+             and any(s >= t for s in simhw.audio_stops)
+             for t, name in simhw.audio if name == "trenchRun.wav")),
         ("hard shake goes straight to angry (angry.wav)", shake_response == "angry.wav"),
         ("repeated nudges get angry (angry.wav)", played.count("angry.wav") >= 2),
         ("white LED flickers", bool(bursts)),

@@ -183,7 +183,7 @@ fn panels(
             }
             if row
                 .button("Trigger idle now")
-                .on_hover_text("Ends the idle wait so attention_animation runs")
+                .on_hover_text("Ends the idle wait so attention_animation or trench_run runs")
                 .clicked()
             {
                 hw().idle_trigger = true;

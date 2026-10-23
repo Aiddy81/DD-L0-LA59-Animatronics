@@ -4,7 +4,8 @@ import random
 import time
 
 import config
-from hardware import (kit, play_wav, pause_breathing, reset_idle_event,
+from behaviours.trench_run import trench_run
+from hardware import (kit, play_wav, pause_breathing, reset_idle_event, trench_active,
                       mainEye_red, mainEye_green, mainEye_blue,
                       smallEye_red, smallEye_green, smallEye_blue)
 
@@ -81,7 +82,15 @@ async def idle_attention():
             await asyncio.wait_for(reset_idle_event.wait(), timeout=wait_time)
             reset_idle_event.clear()  # Reset for next cycle
         except asyncio.TimeoutError:
-            # Timer expired: do the attention animation
+            # Timer expired: equal chance of the attention animation or a trench run
             pause_breathing.set()
-            await attention_animation()
+            if random.random() < 0.5:
+                trench_active.set()
+                aborted = await trench_run()
+                trench_active.clear()
+                if aborted:
+                    # motion_sense owns pause_breathing until its boop or angry ends.
+                    continue
+            else:
+                await attention_animation()
             pause_breathing.clear()

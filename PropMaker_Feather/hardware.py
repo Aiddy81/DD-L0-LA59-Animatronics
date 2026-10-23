@@ -83,6 +83,7 @@ white_led= pwmio.PWMOut(board.EXTERNAL_NEOPIXELS, frequency=5000)
 pause_breathing = asyncio.Event()
 pause_breathing.clear()  # Start with breathing enabled
 reset_idle_event = asyncio.Event()
+trench_active = asyncio.Event()  # the trench run owns the white LED while set
 
 wavfiles = [
     file
@@ -91,15 +92,16 @@ wavfiles = [
 ]
 
 
-async def play_wav(filename):
-    """Starts a WAV file on the mixer and returns straight away."""
+async def play_wav(filename, loop=False):
+    """Starts a WAV file on the mixer and returns straight away. A looped
+    sound plays until stop_wav() or the next play_wav()."""
     print("Playing", filename)
     #with open(f"sounds/{filename}", "rb") as file:
     #audio.play(audiocore.WaveFile(file))
     wave_file = open(f"sounds/{filename}", "rb")
     wav = audiocore.WaveFile(wave_file)
     audio.play(mixer)
-    mixer.voice[0].play(wav, loop=False)
+    mixer.voice[0].play(wav, loop=loop)
     mixer.voice[0].level = 0.70
 
     # Randomly flicker the LED a bit while audio plays
@@ -108,3 +110,8 @@ async def play_wav(filename):
         #time.sleep(0.1)
     #led.duty_cycle = 65535  # Back to full brightness
     return
+
+
+def stop_wav():
+    """Stops whatever is playing, e.g. a looped sound."""
+    mixer.voice[0].stop()
