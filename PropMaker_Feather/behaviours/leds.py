@@ -3,6 +3,7 @@ import random
 import time
 
 import config
+from log import log
 from hardware import white_led, trench_active
 
 
@@ -13,13 +14,13 @@ async def random_led_scheduler(min_interval=5, max_interval=60):
         #duration = random.uniform(2, 6)  # How long the flash effect lasts
         #await data_processing_led(duration)
         interval = random.uniform(min_interval, max_interval)
-        print(f"Next LED activation in: {interval:.2f} seconds")
+        log(f"Next LED activation in: {interval:.2f} seconds")
         await asyncio.sleep(interval)
         if trench_active.is_set():
             continue  # the afterburner flicker has the LED
 
         duration = random.uniform(2, 6)
-        print(f"LED will flash for: {duration:.2f} seconds")
+        log(f"LED will flash for: {duration:.2f} seconds")
         await data_processing_led(duration)
 
 

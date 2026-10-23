@@ -4,6 +4,7 @@ import random
 import time
 
 import config
+from log import log
 from hardware import (kit, play_wav, stop_wav, white_led, reset_idle_event,
                       mainEye_red, mainEye_green, mainEye_blue,
                       smallEye_red, smallEye_green, smallEye_blue)
@@ -68,7 +69,7 @@ def set_eyes(red, green):
 async def trench_run(duration=config.TRENCH_RUN_S):
     """Top Gun: Maverick trench run: tight turns, steep climbs and dives with
     buffeting wings and an afterburner glow. Returns True if a nudge cut it short."""
-    print("TRENCH RUN!")
+    log("TRENCH RUN!")
     # A short clip looped for the whole run: a full-length track won't fit on CIRCUITPY.
     await play_wav("trenchRun.wav", loop=True)
     pitch, roll = 0.0, 0.0
@@ -94,7 +95,7 @@ async def trench_run(duration=config.TRENCH_RUN_S):
                     set_wings(0.5, 0.5)
                 set_eyes(0, 0)
                 white_led.duty_cycle = config.WHITE_LED_IDLE_DUTY
-                print("Trench run aborted" if aborted else "Trench run complete")
+                log("Trench run aborted" if aborted else "Trench run complete")
                 return aborted
             in_move = now - move_start
             if in_move >= move_len:

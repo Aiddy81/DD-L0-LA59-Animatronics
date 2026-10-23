@@ -6,6 +6,7 @@ import time
 import adafruit_lis3dh
 
 import config
+from log import log
 from hardware import (kit, lis3dh, play_wav, pause_breathing, reset_idle_event,
                       trench_active,
                       mainEye_red, mainEye_green, mainEye_blue,
@@ -25,7 +26,7 @@ async def motion_sense():
     motion_count = 0
     angry_window_start = time.monotonic()
     angry_window_length = random.uniform(config.ANGRY_MIN_WINDOW_S, config.ANGRY_MAX_WINDOW_S)
-    print(f"Angry window starts at {angry_window_start} for {angry_window_length:.2f} seconds")
+    log(f"Angry window starts at {angry_window_start} for {angry_window_length:.2f} seconds")
     # The board is mounted sideways, so gravity isn't on any fixed axis. A nudge
     # is any change from the resting reading, in any direction.
     rest = read_g()
@@ -45,7 +46,7 @@ async def motion_sense():
                 trench_peak = max(trench_peak, delta)
         else:
             if trench_peak:
-                print(f"Trench run peak buffeting: {trench_peak * 1000:.0f} mg")
+                log(f"Trench run peak buffeting: {trench_peak * 1000:.0f} mg")
                 trench_peak = 0.0
             nudge_g = config.NUDGE_G
 
@@ -55,12 +56,12 @@ async def motion_sense():
             motion_count = 0
             angry_window_start = now
             angry_window_length = random.uniform(config.ANGRY_MIN_WINDOW_S, config.ANGRY_MAX_WINDOW_S)
-            print("Angry window expired, motion_count reset.")
+            log("Angry window expired, motion_count reset.")
 
         if delta > nudge_g or hard_motion:
             reset_idle_event.set()  # <-- Reset idle timer!
             motion_count += 1
-            print(f"Motion detected! {delta * 1000:.0f} mg, count: {motion_count}")
+            log(f"Motion detected! {delta * 1000:.0f} mg, count: {motion_count}")
             pause_breathing.set()
 
             if motion_count >= config.ANGRY_NUDGES or hard_motion:
@@ -69,7 +70,7 @@ async def motion_sense():
                 # Reset the angry window after triggering
                 angry_window_start = time.monotonic()
                 angry_window_length = random.uniform(config.ANGRY_MIN_WINDOW_S, config.ANGRY_MAX_WINDOW_S)
-                print("Angry animation triggered, motion_count reset and window restarted.")
+                log("Angry animation triggered, motion_count reset and window restarted.")
             else:
                 await nose_boops()
 
@@ -109,7 +110,7 @@ async def angry_animation(flaps=3, angle_min=30, angle_max=90, duration=0.4):
     smallEye_red.angle = 360  # Set small eye to red
     smallEye_green.angle = 0  # Turn off green
     smallEye_blue.angle = 0   # Turn off blue
-    print("ANGRY ANIMATION!")
+    log("ANGRY ANIMATION!")
     await play_wav("angry.wav")
     await sine_flaps(flaps, angle_min, angle_max, duration)
     # Return to neutral

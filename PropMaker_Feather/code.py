@@ -13,10 +13,13 @@ from behaviours.boot import boot_sequence
 from behaviours.breathing import ambient_breathing
 from behaviours.leds import random_led_scheduler
 from behaviours.motion import motion_sense
+from log import log
 
 
 async def main():
     """Main function to run all tasks concurrently."""
+    # log.txt keeps every run, so mark where this one starts.
+    log("=== DD-L0-LA59 starting ===")
     await boot_sequence()
     # Create tasks for each animation/function
     motion_sense_task = asyncio.create_task(motion_sense())

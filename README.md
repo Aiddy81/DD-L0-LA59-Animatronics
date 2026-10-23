@@ -23,6 +23,7 @@ This project implements interactive animatronic behaviors for a custom device us
 - `PropMaker_Feather/hardware.py` — Board setup: accelerometer, PCA9685 channel map, LEDs, audio, shared events
 - `PropMaker_Feather/config.py` — Reads the tunables from `settings.toml`, with built-in defaults
 - `PropMaker_Feather/settings.toml` — Tunables (see [Tuning](#tuning))
+- `PropMaker_Feather/log.py`, `boot.py`, `log_off.py` — Serial output, optionally saved to `log.txt` (see [Logging on the robot](#logging-on-the-robot))
 - `PropMaker_Feather/behaviours/` — One module per behaviour: `boot`, `breathing`, `motion` (boops and angry), `attention`, `trench_run`, `leds`
 - `PropMaker_Feather/sounds/` — WAV files for sound effects
 - `PropMaker_Feather/lib/` — CircuitPython libraries (Adafruit drivers, etc.)
@@ -36,10 +37,20 @@ This project implements interactive animatronic behaviors for a custom device us
 - **Random LED Effects**: White LED flashes at random intervals to simulate data processing.
 
 ## Setup & Usage
-1. Copy the contents of `PropMaker_Feather/` (`code.py`, `config.py`, `hardware.py`, `settings.toml`, `behaviours/`, `lib/`, `sounds/`) to the root of your CIRCUITPY drive, preserving the folder structure.
+1. Copy the contents of `PropMaker_Feather/` (`code.py`, `boot.py`, `config.py`, `hardware.py`, `log.py`, `log_off.py`, `settings.toml`, `behaviours/`, `lib/`, `sounds/`) to the root of your CIRCUITPY drive, preserving the folder structure.
 2. Ensure all required libraries are present in `PropMaker_Feather/lib/`.
 3. Place WAV files in `PropMaker_Feather/sounds/` and name them correctly.
 4. Power the device. The firmware will run automatically.
+
+### Logging on the robot
+The wings can't run while the board is plugged into a computer, so the serial output can be saved to a file instead and read afterwards.
+
+1. **Turn on:** with the board plugged in, create an empty file named `log_mode` (no extension) in the root of CIRCUITPY, then press the board's reset button. A soft reload (Ctrl-D) isn't enough, because `boot.py` only runs on a reset or power-on.
+2. **Run** the robot on battery. Every serial line is appended to `log.txt`, starting with the seconds since power-on. Each run starts with `=== DD-L0-LA59 starting ===`. At 256 KB the log moves to `log.old.txt` and starts again, so only the latest ~512 KB is kept.
+3. **Read:** plug back in and copy `log.txt` off. While logging mode is on, the drive is **read-only to the computer**, so you can copy files off but not edit or add any.
+4. **Turn off:** open the serial console, press Ctrl-C, then type `import log_off` and press Enter. This deletes `log_mode` and restarts the board, and the drive is editable again.
+
+Each line is written straight to flash, so a pulled battery loses at most the line being written. A write can take a few milliseconds, so the wings may pause very briefly when a line is logged.
 
 ## Customization
 - Add or replace WAV files in the `sounds/` directory for new sound effects.

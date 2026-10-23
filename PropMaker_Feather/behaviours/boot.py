@@ -2,6 +2,7 @@ import asyncio
 import math
 
 import config
+from log import log
 from hardware import (kit, white_led, mainEye_red, mainEye_green, mainEye_blue,
                       smallEye_red, smallEye_green, smallEye_blue)
 
@@ -48,4 +49,4 @@ async def boot_sequence(angle_min=10, angle_max=60, cycles=2, duration=1):
     await asyncio.sleep(0.5)  # Hold for a moment
     white_led.duty_cycle = 0  # Turn off white LED
     white_led.duty_cycle = config.WHITE_LED_IDLE_DUTY  # Set white LED to very low brightness
-    print("Boot sequence complete!")
+    log("Boot sequence complete!")

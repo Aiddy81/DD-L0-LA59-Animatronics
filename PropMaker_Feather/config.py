@@ -7,13 +7,15 @@ behaves exactly as before.
 """
 import os
 
+from log import log
+
 
 def _int(key, default):
     value = os.getenv(key)
     if value is None:
         return default
     if not isinstance(value, int):
-        print("settings.toml: {} must be a whole number, using {}".format(key, default))
+        log("settings.toml: {} must be a whole number, using {}".format(key, default))
         return default
     return value
 
