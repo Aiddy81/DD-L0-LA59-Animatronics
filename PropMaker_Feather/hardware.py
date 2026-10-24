@@ -20,6 +20,8 @@ import adafruit_lis3dh
 import asyncio
 from adafruit_servokit import ServoKit
 
+from log import log
+
 
 # onboard LIS3DH
 #i2c = board.I2C()  # uses board.SCL and board.SDA
@@ -95,7 +97,7 @@ wavfiles = [
 async def play_wav(filename, loop=False):
     """Starts a WAV file on the mixer and returns straight away. A looped
     sound plays until stop_wav() or the next play_wav()."""
-    print("Playing", filename)
+    log("Playing", filename)
     #with open(f"sounds/{filename}", "rb") as file:
     #audio.play(audiocore.WaveFile(file))
     wave_file = open(f"sounds/{filename}", "rb")

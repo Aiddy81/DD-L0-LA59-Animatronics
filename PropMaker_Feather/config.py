@@ -7,13 +7,15 @@ behaves exactly as before.
 """
 import os
 
+from log import log
+
 
 def _int(key, default):
     value = os.getenv(key)
     if value is None:
         return default
     if not isinstance(value, int):
-        print("settings.toml: {} must be a whole number, using {}".format(key, default))
+        log("settings.toml: {} must be a whole number, using {}".format(key, default))
         return default
     return value
 
@@ -29,9 +31,12 @@ ANGRY_MIN_WINDOW_S = _int("ANGRY_MIN_WINDOW_S", 1 * 60)
 ANGRY_MAX_WINDOW_S = _int("ANGRY_MAX_WINDOW_S", 3 * 60)
 ANGRY_NUDGES = _int("ANGRY_NUDGES", 3)
 
-# Motion: z outside [MIN, MAX] is a nudge; |z| above HARD is a shake (straight to angry).
-MOTION_Z_MIN_G = _int("MOTION_Z_MIN_MG", 0) / 1000
-MOTION_Z_MAX_G = _int("MOTION_Z_MAX_MG", 1075) / 1000
+# Motion: z moving more than NUDGE_Z from where it rests, either way, is a nudge;
+# |z| above HARD is a shake (straight to angry). While attention or the trench run
+# moves the wings, z must move more than ANIMATION_NUDGE_Z, because their movement
+# shakes the board.
+NUDGE_Z_G = _int("NUDGE_Z_MG", 250) / 1000
+ANIMATION_NUDGE_Z_G = _int("ANIMATION_NUDGE_Z_MG", 800) / 1000
 HARD_MOTION_G = _int("HARD_MOTION_MG", 2500) / 1000
 
 # Breathing: period and right-wing (servo 0) angle range.
@@ -51,4 +56,4 @@ EYE_MIN_BRIGHTNESS = _int("EYE_MIN_BRIGHTNESS", 60)
 EYE_MAX_BRIGHTNESS = _int("EYE_MAX_BRIGHTNESS", 360)
 
 # White LED glow between effects (duty cycle, 0-65535).
-WHITE_LED_IDLE_DUTY = _int("WHITE_LED_IDLE_DUTY", 1000)
+WHITE_LED_IDLE_DUTY = _int("WHITE_LED_IDLE_DUTY", 500)

@@ -132,11 +132,13 @@ def main():
     # should go straight to angry and restart the angry window; then a boop,
     # the idle timer cut short, then repeated nudges, which should end in a
     # second angry flap. Each idle trigger (45 s, 100 s) picks attention or a
-    # trench run at random; the nudge after each one aborts a trench run.
+    # trench run at random; the firmer 2 g nudge after each one aborts a trench
+    # run (a gentle one is ignored while the wings are animating).
     simhw.scheduled_accel[:] = [(SHAKE_AT, (0.0, 0.0, 3.0))]
     simhw.scheduled_accel += [(30.0, (0.0, 0.0, 1.3))]
-    simhw.scheduled_accel += [(60.0 + i * 0.5, (0.0, 0.0, 1.3)) for i in range(4)]
-    simhw.scheduled_accel += [(110.0, (0.0, 0.0, 1.3))]
+    simhw.scheduled_accel += [(60.0 + i * 0.5, (0.0, 0.0, 2.0 if i == 0 else 1.3))
+                              for i in range(4)]
+    simhw.scheduled_accel += [(110.0, (0.0, 0.0, 2.0))]
     simhw.idle_trigger_at[:] = [45.0, 100.0]
 
     random.seed(1)

@@ -12,3 +12,8 @@ __pycache__/
 /.ci-cache/
 # Blender backups
 *.blend1
+
+# Robot log files copied back from CIRCUITPY
+/PropMaker_Feather/log.txt
+/PropMaker_Feather/log.old.txt
+/PropMaker_Feather/log_mode

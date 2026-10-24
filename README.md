@@ -23,6 +23,7 @@ This project implements interactive animatronic behaviors for a custom device us
 - `PropMaker_Feather/hardware.py` — Board setup: accelerometer, PCA9685 channel map, LEDs, audio, shared events
 - `PropMaker_Feather/config.py` — Reads the tunables from `settings.toml`, with built-in defaults
 - `PropMaker_Feather/settings.toml` — Tunables (see [Tuning](#tuning))
+- `PropMaker_Feather/log.py`, `boot.py`, `log_off.py` — Serial output, optionally saved to `log.txt` (see [Logging on the robot](#logging-on-the-robot))
 - `PropMaker_Feather/behaviours/` — One module per behaviour: `boot`, `breathing`, `motion` (boops and angry), `attention`, `trench_run`, `leds`
 - `PropMaker_Feather/sounds/` — WAV files for sound effects
 - `PropMaker_Feather/lib/` — CircuitPython libraries (Adafruit drivers, etc.)
@@ -36,10 +37,20 @@ This project implements interactive animatronic behaviors for a custom device us
 - **Random LED Effects**: White LED flashes at random intervals to simulate data processing.
 
 ## Setup & Usage
-1. Copy the contents of `PropMaker_Feather/` (`code.py`, `config.py`, `hardware.py`, `settings.toml`, `behaviours/`, `lib/`, `sounds/`) to the root of your CIRCUITPY drive, preserving the folder structure.
+1. Copy the contents of `PropMaker_Feather/` (`code.py`, `boot.py`, `config.py`, `hardware.py`, `log.py`, `log_off.py`, `settings.toml`, `behaviours/`, `lib/`, `sounds/`) to the root of your CIRCUITPY drive, preserving the folder structure.
 2. Ensure all required libraries are present in `PropMaker_Feather/lib/`.
 3. Place WAV files in `PropMaker_Feather/sounds/` and name them correctly.
 4. Power the device. The firmware will run automatically.
+
+### Logging on the robot
+The wings can't run while the board is plugged into a computer, so the serial output can be saved to a file instead and read afterwards.
+
+1. **Turn on:** with the board plugged in, create an empty file named `log_mode` (no extension) in the root of CIRCUITPY, then press the board's reset button. A soft reload (Ctrl-D) isn't enough, because `boot.py` only runs on a reset or power-on.
+2. **Run** the robot on battery. Every serial line is appended to `log.txt`, starting with the seconds since power-on. Each run starts with `=== DD-L0-LA59 starting ===`. At 256 KB the log moves to `log.old.txt` and starts again, so only the latest ~512 KB is kept.
+3. **Read:** plug back in and copy `log.txt` off. While logging mode is on, the drive is **read-only to the computer**, so you can copy files off but not edit or add any.
+4. **Turn off:** open the serial console, press Ctrl-C, then type `import log_off` and press Enter. This deletes `log_mode` and restarts the board, and the drive is editable again.
+
+Each line is written straight to flash, so a pulled battery loses at most the line being written. A write can take a few milliseconds, so the wings may pause very briefly when a line is logged.
 
 ## Customization
 - Add or replace WAV files in the `sounds/` directory for new sound effects.
@@ -56,14 +67,15 @@ This project implements interactive animatronic behaviors for a custom device us
 | `TRENCH_RUN_S` | 300 | Length of the trench run |
 | `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
 | `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
-| `MOTION_Z_MIN_MG`, `MOTION_Z_MAX_MG` | 0, 1075 | A z reading outside this range is a nudge |
+| `NUDGE_Z_MG` | 250 | A change in z this big from where it rests, up or down, is a nudge. The resting z is measured at start-up and after each animation, so this works however the board is mounted or the droid sits |
+| `ANIMATION_NUDGE_Z_MG` | 800 | The change in z needed to interrupt the attention animation or trench run, whose wing movement shakes the board. The serial log prints `Animation peak z change` after each one, to help tune it |
 | `HARD_MOTION_MG` | 2500 | A z reading above this is a shake (straight to angry) |
 | `BREATH_PERIOD_S` | 4 | Breathing period |
 | `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
 | `SERVO2_MIN`, `SERVO2_MAX` | 40, 60 | Left-wing calibration (mounted inverted) for boot and attention |
 | `BREATH_SERVO2_MIN`, `BREATH_SERVO2_MAX` | 35, 50 | Left-wing calibration while breathing |
 | `EYE_MIN_BRIGHTNESS`, `EYE_MAX_BRIGHTNESS` | 60, 360 | Eye brightness range for breathing and boops (0–360) |
-| `WHITE_LED_IDLE_DUTY` | 1000 | White LED glow between effects (0–65535) |
+| `WHITE_LED_IDLE_DUTY` | 500 | White LED glow between effects (0–65535) |
 
 ## Sound Files and Their Functions
 
@@ -97,7 +109,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 
 ### Using it
 
-- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. *Tipped over* holds z at -1 g.
+- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. A nudge is too gentle to interrupt the attention animation or trench run; use *Hard shake*. *Tipped over* holds z at -1 g, which counts as one nudge.
 - **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation or the trench run plays (50/50).
 - **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log.
 - **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.

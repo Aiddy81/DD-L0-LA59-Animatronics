@@ -4,6 +4,7 @@ import random
 import time
 
 import config
+from log import log
 from behaviours.trench_run import trench_run
 from hardware import (kit, play_wav, pause_breathing, reset_idle_event, trench_active,
                       mainEye_red, mainEye_green, mainEye_blue,
@@ -76,7 +77,7 @@ async def idle_attention():
     """Waits for a random idle period, then grabs attention if no interaction."""
     while True:
         wait_time = random.uniform(config.IDLE_MIN_S, config.IDLE_MAX_S)
-        print(f"Waiting for idle period: {wait_time:.2f} seconds")
+        log(f"Waiting for idle period: {wait_time:.2f} seconds")
         try:
             # Wait for either the timer or a reset event
             await asyncio.wait_for(reset_idle_event.wait(), timeout=wait_time)
