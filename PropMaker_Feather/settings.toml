@@ -25,8 +25,8 @@ IDLE_MAX_S = 7200
 # TRENCH RUN: when the wait above ends, the droid either flaps for attention or
 # does a "trench run" flight (a 50/50 coin flip). This is how long the trench
 # run lasts, unless someone nudges the droid to stop it early.
-# Default: 5 minutes (300).
-TRENCH_RUN_S = 300
+# Default: 2.5 minutes (150), long enough to show every move many times over.
+TRENCH_RUN_S = 150
 
 # ANGRY: the droid gets angry if it's nudged ANGRY_NUDGES times within a short
 # stretch of time (a "window"). The length of each window is picked at random
@@ -66,7 +66,7 @@ BREATH_SERVO2_MIN = 35
 BREATH_SERVO2_MAX = 50
 
 # Eye brightness range for breathing and boops (0-360).
-EYE_MIN_BRIGHTNESS = 60
+EYE_MIN_BRIGHTNESS = 70
 EYE_MAX_BRIGHTNESS = 360
 
 # White LED glow between effects (0-65535).
