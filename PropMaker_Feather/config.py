@@ -24,7 +24,7 @@ def _int(key, default):
 IDLE_MIN_S = _int("IDLE_MIN_S", 15 * 60)
 IDLE_MAX_S = _int("IDLE_MAX_S", 120 * 60)
 # How long the trench run (the other idle animation) lasts.
-TRENCH_RUN_S = _int("TRENCH_RUN_S", 5 * 60)
+TRENCH_RUN_S = _int("TRENCH_RUN_S", 150)
 
 # Angry: this many nudges inside one random window gets the droid angry.
 ANGRY_MIN_WINDOW_S = _int("ANGRY_MIN_WINDOW_S", 1 * 60)
@@ -52,7 +52,7 @@ BREATH_SERVO2_MIN = _int("BREATH_SERVO2_MIN", 35)
 BREATH_SERVO2_MAX = _int("BREATH_SERVO2_MAX", 50)
 
 # Eye brightness range for breathing and boops, in eye "angle" units (0-360).
-EYE_MIN_BRIGHTNESS = _int("EYE_MIN_BRIGHTNESS", 60)
+EYE_MIN_BRIGHTNESS = _int("EYE_MIN_BRIGHTNESS", 70)
 EYE_MAX_BRIGHTNESS = _int("EYE_MAX_BRIGHTNESS", 360)
 
 # White LED glow between effects (duty cycle, 0-65535).

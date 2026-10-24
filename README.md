@@ -33,7 +33,7 @@ This project implements interactive animatronic behaviors for a custom device us
 - **Ambient Breathing**: Wings and LEDs move in a breathing pattern.
 - **Motion Response**: Device reacts to motion with "boop" or "angry" animations and sounds.
 - **Idle Attention**: After a random idle period, device performs an attention-seeking animation, or (equal chance) a trench run.
-- **Trench Run**: A 5-minute Top Gun: Maverick-style flight. Tight turns split the wings (one up, one down), steep climbs lift both, steep dives drop both, and the wings buffet under load. Eyes glow orange like an afterburner, brighter on climbs; the white LED flickers. A nudge or shake cuts it short.
+- **Trench Run**: A 2½-minute Top Gun: Maverick-style flight. Tight turns split the wings (one up, one down), steep climbs lift both, steep dives drop both, and the wings buffet under load. Eyes glow orange like an afterburner, brighter on climbs; the white LED flickers. A nudge or shake cuts it short.
 - **Random LED Effects**: White LED flashes at random intervals to simulate data processing.
 
 ## Setup & Usage
@@ -64,7 +64,7 @@ Each line is written straight to flash, so a pulled battery loses at most the li
 | Key | Default | What it does |
 |---|---|---|
 | `IDLE_MIN_S`, `IDLE_MAX_S` | 900, 7200 | Quiet spell (random, between these) before seeking attention |
-| `TRENCH_RUN_S` | 300 | Length of the trench run |
+| `TRENCH_RUN_S` | 150 | Length of the trench run |
 | `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
 | `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
 | `NUDGE_Z_MG` | 250 | A change in z this big from where it rests, up or down, is a nudge. The resting z is measured at start-up and after each animation, so this works however the board is mounted or the droid sits |
@@ -74,7 +74,7 @@ Each line is written straight to flash, so a pulled battery loses at most the li
 | `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
 | `SERVO2_MIN`, `SERVO2_MAX` | 40, 60 | Left-wing calibration (mounted inverted) for boot and attention |
 | `BREATH_SERVO2_MIN`, `BREATH_SERVO2_MAX` | 35, 50 | Left-wing calibration while breathing |
-| `EYE_MIN_BRIGHTNESS`, `EYE_MAX_BRIGHTNESS` | 60, 360 | Eye brightness range for breathing and boops (0–360) |
+| `EYE_MIN_BRIGHTNESS`, `EYE_MAX_BRIGHTNESS` | 70, 360 | Eye brightness range for breathing and boops (0–360) |
 | `WHITE_LED_IDLE_DUTY` | 500 | White LED glow between effects (0–65535) |
 
 ## Sound Files and Their Functions
