@@ -4,15 +4,40 @@
 # A missing line falls back to the value in config.py.
 # This file is committed to git: never put Wi-Fi passwords or other secrets in it.
 
-# Idle: seek attention after a random quiet spell between these.
+# ---------------------------------------------------------------------------
+# TIMING
+# Every setting ending in _S is a number of seconds, as a whole number only
+# (write 90, not 1.5 minutes or 90.5). Handy conversions:
+#   60 = 1 minute    300 = 5 minutes    900 = 15 minutes
+#   1800 = 30 minutes    3600 = 1 hour    7200 = 2 hours
+# A value that isn't a whole number is ignored, and the default is used.
+# ---------------------------------------------------------------------------
+
+# IDLE: how long the droid waits, left alone, before it tries to get attention.
+# Each time, it picks a random wait somewhere between MIN and MAX, so it never
+# feels predictable. Any boop or nudge restarts the wait from zero.
+# Default: between 15 minutes (900) and 2 hours (7200).
+# For testing, try 60 and 120 to see it within 1-2 minutes.
+# MIN must be smaller than or equal to MAX.
 IDLE_MIN_S = 900
 IDLE_MAX_S = 7200
-# Idle picks the attention flaps or a trench run (50/50); the run lasts this long.
+
+# TRENCH RUN: when the wait above ends, the droid either flaps for attention or
+# does a "trench run" flight (a 50/50 coin flip). This is how long the trench
+# run lasts, unless someone nudges the droid to stop it early.
+# Default: 5 minutes (300).
 TRENCH_RUN_S = 300
 
-# Angry: ANGRY_NUDGES nudges inside one random window (between these) gets angry.
+# ANGRY: the droid gets angry if it's nudged ANGRY_NUDGES times within a short
+# stretch of time (a "window"). The length of each window is picked at random
+# between MIN and MAX. When a window runs out, the nudge count starts again
+# from zero, and a new window begins.
+# Default: 3 nudges within a window of 1 minute (60) to 3 minutes (180).
+# A shorter window or more nudges makes it harder to annoy.
+# MIN must be smaller than or equal to MAX.
 ANGRY_MIN_WINDOW_S = 60
 ANGRY_MAX_WINDOW_S = 180
+# Number of nudges (not seconds) needed to make it angry.
 ANGRY_NUDGES = 3
 
 # Motion: z moving more than NUDGE_Z from where it rests, either way, is a nudge;
@@ -23,8 +48,13 @@ NUDGE_Z_MG = 250
 ANIMATION_NUDGE_Z_MG = 800
 HARD_MOTION_MG = 2500
 
-# Breathing: period and right-wing (servo 0) angles.
+# BREATHING: while idle, the wings slowly rise and fall like breathing.
+# BREATH_PERIOD_S is how many seconds one full breath takes (wings up and back
+# down again). A bigger number means slower, calmer breathing.
+# Default: 4 seconds.
 BREATH_PERIOD_S = 4
+# Wing positions for breathing, in degrees (not seconds).
+# Right-wing (servo 0) angles: a lower number lifts the wing higher.
 BREATH_ANGLE_MIN = 50
 BREATH_ANGLE_MAX = 65
 
