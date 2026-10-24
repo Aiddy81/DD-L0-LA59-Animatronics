@@ -67,8 +67,8 @@ Each line is written straight to flash, so a pulled battery loses at most the li
 | `TRENCH_RUN_S` | 300 | Length of the trench run |
 | `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
 | `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
-| `MOTION_Z_MIN_MG`, `MOTION_Z_MAX_MG` | 0, 1025 | A z reading outside this range is a nudge |
-| `ANIMATION_Z_MAX_MG` | 1200 | The z reading needed to interrupt the attention animation or trench run, whose wing movement shakes the board. The serial log prints `Animation peak z` after each one, to help tune it |
+| `NUDGE_Z_MG` | 250 | A change in z this big from where it rests, up or down, is a nudge. The resting z is measured at start-up and after each animation, so this works however the board is mounted or the droid sits |
+| `ANIMATION_NUDGE_Z_MG` | 800 | The change in z needed to interrupt the attention animation or trench run, whose wing movement shakes the board. The serial log prints `Animation peak z change` after each one, to help tune it |
 | `HARD_MOTION_MG` | 2500 | A z reading above this is a shake (straight to angry) |
 | `BREATH_PERIOD_S` | 4 | Breathing period |
 | `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
@@ -109,7 +109,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 
 ### Using it
 
-- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. *Tipped over* holds z at -1 g.
+- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. A nudge is too gentle to interrupt the attention animation or trench run; use *Hard shake*. *Tipped over* holds z at -1 g, which counts as one nudge.
 - **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation or the trench run plays (50/50).
 - **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log.
 - **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.
