@@ -51,6 +51,27 @@ pub fn firmware_mtime(code_path: &Path) -> Option<SystemTime> {
     newest(code_path.parent()?, true)
 }
 
+/// Newest change under `dist\shims\`: any .py file, or a folder (so adding
+/// or deleting a file counts too). None while the folder doesn't exist.
+pub fn shims_mtime(dir: &Path) -> Option<SystemTime> {
+    let mut latest = std::fs::metadata(dir).and_then(|m| m.modified()).ok()?;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        let mtime = if path.is_dir() {
+            if entry.file_name() == "__pycache__" {
+                continue;
+            }
+            shims_mtime(&path)
+        } else if path.extension().is_some_and(|e| e == "py") {
+            entry.metadata().and_then(|m| m.modified()).ok()
+        } else {
+            None
+        };
+        latest = latest.max(mtime.unwrap_or(latest));
+    }
+    Some(latest)
+}
+
 pub fn nudge() {
     hw().accel_pulses.push_back([0.0, 0.0, NUDGE_G]);
 }
@@ -74,6 +95,7 @@ pub struct UiState {
     tipped: bool,
     auto_reload: bool,
     code_mtime: Option<SystemTime>,
+    shims_mtime: Option<SystemTime>,
     last_check: Instant,
     history: VecDeque<Sample>,
     started: Instant,
@@ -99,12 +121,17 @@ struct Sample {
 }
 
 impl UiState {
-    pub fn new(code_mtime: Option<SystemTime>, prefs: &Prefs) -> Self {
+    pub fn new(
+        code_mtime: Option<SystemTime>,
+        shims_mtime: Option<SystemTime>,
+        prefs: &Prefs,
+    ) -> Self {
         Self {
             speed: 1.0,
             tipped: false,
             auto_reload: prefs.auto_reload,
             code_mtime,
+            shims_mtime,
             last_check: Instant::now(),
             history: VecDeque::new(),
             started: Instant::now(),
@@ -287,10 +314,19 @@ fn hot_reload(mut ui: ResMut<UiState>, mut host: ResMut<Host>) {
     }
     ui.last_check = Instant::now();
     let mtime = firmware_mtime(host.0.code_path());
-    if mtime != ui.code_mtime {
-        ui.code_mtime = mtime;
+    let shims = shims_mtime(host.0.shim_dir());
+    let changed = if mtime != ui.code_mtime {
+        Some("firmware")
+    } else if shims != ui.shims_mtime {
+        Some("shims")
+    } else {
+        None
+    };
+    ui.code_mtime = mtime;
+    ui.shims_mtime = shims;
+    if let Some(what) = changed {
         if ui.auto_reload {
-            hw().push_line("[sim] firmware changed - restarting".into());
+            hw().push_line(format!("[sim] {what} changed - restarting"));
             host.0.start();
         }
     }
@@ -413,7 +449,8 @@ fn panels(
             {
                 hw().board_speed = board_speed;
             }
-            row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved");
+            row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved")
+                .on_hover_text("Also when a shim in dist\\shims\\ is added, saved or deleted.");
             if let Some(mut model) = model {
                 row.separator();
                 row.label("Model");
@@ -527,12 +564,17 @@ fn panels(
                                 "R wing", "L wing", "main R", "main G", "main B", "small R",
                                 "small G", "small B",
                             ];
-                            for (ch, name) in names.iter().enumerate() {
+                            for ch in 0..16 {
+                                // Spare channels appear once a custom shim writes to them.
+                                let name = names.get(ch).copied().unwrap_or("spare");
+                                if ch >= names.len() && hw().pca_duty[ch].is_none() {
+                                    continue;
+                                }
                                 // Before hw() is locked below: these helpers lock it too.
                                 let view = channel_view(&cfg, ch);
                                 let s = hw();
                                 grid.label(ch.to_string());
-                                grid.label(*name);
+                                grid.label(name);
                                 match (s.duty_fraction(ch), s.pulse_us(ch)) {
                                     (Some(d), Some(p)) => {
                                         grid.label(format!("{:5.1}%", d * 100.0));

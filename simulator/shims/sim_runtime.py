@@ -12,6 +12,7 @@ import asyncio
 import builtins
 import gc as _real_gc
 import json
+import linecache
 import marshal
 import struct
 import importlib.abc
@@ -43,11 +44,74 @@ class _ShimLoader(importlib.abc.Loader):
         return None
 
     def exec_module(self, module):
+        filename = "<sim>/" + module.__name__ + ".py"
+        # Lets tracebacks from a shim show its source lines.
+        linecache.cache[filename] = (
+            len(self._source), None, self._source.splitlines(True), filename)
         # What a stand-in allocates while importing is library code, which the
         # board's heap budget already excludes.
         before = _heap.stand_in_bytes()
-        exec(compile(self._source, "<sim>/" + module.__name__ + ".py", "exec"), module.__dict__)
+        exec(compile(self._source, filename, "exec"), module.__dict__)
         _heap.import_bytes += _heap.stand_in_bytes() - before
+
+
+def load_shim_dir(shim_dir, skipped=None):
+    """Shims in a folder, as {module name: (source, is_package)}.
+
+    foo.py -> "foo", pkg/__init__.py -> package "pkg", pkg/sub.py -> "pkg.sub".
+    A missing folder gives {}. Files that can't be read are left out and, if
+    `skipped` is a list, added to it as (module name, error)."""
+    shims = {}
+    if not shim_dir or not os.path.isdir(shim_dir):
+        return shims
+    for root, dirs, files in os.walk(shim_dir):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in sorted(files):
+            if not name.endswith(".py") or name == "sim_runtime.py":
+                continue
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, shim_dir).replace(os.sep, "/")[:-3]
+            is_pkg = rel == "__init__" or rel.endswith("/__init__")
+            module = rel[: -len("/__init__")] if is_pkg else rel
+            module = module.replace("/", ".")
+            if not module or module == "__init__":
+                continue
+            try:
+                with open(full, encoding="utf-8") as f:
+                    shims[module] = (f.read(), is_pkg)
+            except (OSError, UnicodeDecodeError) as e:
+                if skipped is not None:
+                    skipped.append((module, e))
+    return shims
+
+
+def _merge_disk_shims(shims, shim_dir):
+    """Built-in shims with those in `shim_dir` on top (disk wins), logging each
+    one taken from disk so an override is never silent. Never raises: on any
+    problem it logs a traceback and keeps the built-ins."""
+    if not shim_dir:
+        return shims
+    try:
+        return _merge_disk_shims_unchecked(shims, shim_dir)
+    except Exception:
+        traceback.print_exc()
+        print("[sim] could not read", shim_dir, "- using the built-in shims")
+        return shims
+
+
+def _merge_disk_shims_unchecked(shims, shim_dir):
+    skipped = []
+    disk = load_shim_dir(shim_dir, skipped)
+    merged = dict(shims)
+    where = os.path.join(os.path.basename(os.path.dirname(os.path.abspath(shim_dir))),
+                         os.path.basename(os.path.abspath(shim_dir)), "")
+    for module, source in disk.items():
+        kind = "overrides built-in" if module in shims else "new"
+        print("[sim] shim '{}' loaded from {} ({})".format(module, where, kind))
+        merged[module] = source
+    for module, error in skipped:
+        print("[sim] shim '{}' in {} skipped: {}".format(module, where, error))
+    return merged
 
 
 class _ShimFinder(importlib.abc.MetaPathFinder):
@@ -538,8 +602,11 @@ class _LogStream:
         return False
 
 
-def run(code_path, shims):
-    """Execute code.py with the shims installed. Never raises."""
+def run(code_path, shims, shim_dir=None):
+    """Execute code.py with the shims installed. Never raises.
+
+    `shims` are the built-in stand-ins; any in `shim_dir` (read afresh each
+    run) override them or add new ones."""
     saved = {
         "stdout": sys.stdout,
         "stderr": sys.stderr,
@@ -547,20 +614,21 @@ def run(code_path, shims):
         "cwd": os.getcwd(),
         "policy": asyncio.get_event_loop_policy(),
     }
-    finder = _ShimFinder(shims)
     firmware = None
     sys.stdout = sys.stderr = _LogStream()
+    strict = simhw.strict()
+    print("[sim] running", code_path, "(CircuitPython strict)" if strict else "")
+    shims = _merge_disk_shims(shims, shim_dir)
+    finder = _ShimFinder(shims)
     # Fresh copies of every shim each run, so no state leaks between runs.
     for name in shims:
         sys.modules.pop(name, None)
     sys.meta_path.insert(0, finder)
-    strict = simhw.strict()
     sys.modules["time"] = _virtual_time_module(strict)
     asyncio.set_event_loop_policy(_SimPolicy())
     asyncio.wait_for = _wait_for
     try:
         os.chdir(os.path.dirname(code_path))
-        print("[sim] running", code_path, "(CircuitPython strict)" if strict else "")
         with open(code_path, encoding="utf-8") as f:
             source = f.read()
         code_builtins = _code_builtins(code_path, strict, shims)
@@ -583,6 +651,9 @@ def run(code_path, shims):
         if saved["time"] is not None:
             sys.modules["time"] = saved["time"]
         sys.meta_path.remove(finder)
+        # A shim deleted from disk must not linger into the next run.
+        for name in shims:
+            sys.modules.pop(name, None)
         if firmware is not None:
             sys.meta_path.remove(firmware)
             # Fresh firmware modules each run, so edits and state don't carry over.

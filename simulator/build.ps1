@@ -10,6 +10,9 @@
       simulator\dist\python3*.dll ...  official embeddable Python (from the image)
       simulator\dist\lib*.dll          MinGW runtime
 
+    Rebuilding keeps simulator\dist\shims\ (drop-in shims), captures\ and
+    ddl0-sim.prefs.toml.
+
     Cargo's registry and target dirs live in Docker volumes, so the multi-GB
     Bevy build never lands in OneDrive.
 

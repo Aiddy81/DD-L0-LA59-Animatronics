@@ -21,6 +21,8 @@ jobs:
           python-version: "3.13"
       - name: Run code.py against the simulator's hardware stand-ins
         run: python simulator/tests/headless.py
+      - name: Drop-in shims (dist\shims\) override and add to the built-ins
+        run: python simulator/tests/shim_dir.py
 
   build:
     name: Simulator build (Windows exe)

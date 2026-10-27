@@ -9,7 +9,9 @@ use pyo3::types::{PyDict, PyModule};
 
 use crate::hw::{hw, AudioCmd};
 
-/// Hardware stand-ins, compiled into the exe so the dist folder stays simple.
+/// Hardware stand-ins, compiled into the exe so it runs on its own. Shims in
+/// `dist\shims\` override these or add new ones; sim_runtime.py reads that
+/// folder at the start of every run, so no rebuild is needed.
 /// (module name, source, is_package)
 const SHIMS: &[(&str, &str, bool)] = &[
     ("board", include_str!("../shims/board.py"), false),
@@ -171,19 +173,25 @@ pub fn init_python() {
 
 pub struct PyHost {
     code_path: PathBuf,
+    shim_dir: PathBuf,
     thread: Option<JoinHandle<()>>,
 }
 
 impl PyHost {
-    pub fn new(code_path: PathBuf) -> Self {
+    pub fn new(code_path: PathBuf, shim_dir: PathBuf) -> Self {
         Self {
             code_path,
+            shim_dir,
             thread: None,
         }
     }
 
     pub fn code_path(&self) -> &Path {
         &self.code_path
+    }
+
+    pub fn shim_dir(&self) -> &Path {
+        &self.shim_dir
     }
 
     pub fn is_running(&self) -> bool {
@@ -199,7 +207,8 @@ impl PyHost {
             s.push_line(String::new());
         }
         let path = self.code_path.clone();
-        self.thread = Some(std::thread::spawn(move || run_code(&path)));
+        let shim_dir = self.shim_dir.clone();
+        self.thread = Some(std::thread::spawn(move || run_code(&path, &shim_dir)));
     }
 
     /// Asks code.py to unwind and waits briefly for it.
@@ -220,7 +229,7 @@ impl PyHost {
     }
 }
 
-fn run_code(path: &Path) {
+fn run_code(path: &Path, shim_dir: &Path) {
     let result = Python::with_gil(|py| -> PyResult<()> {
         let runtime = PyModule::from_code(
             py,
@@ -232,9 +241,11 @@ fn run_code(path: &Path) {
         for (name, source, is_pkg) in SHIMS {
             shims.set_item(*name, (*source, *is_pkg))?;
         }
-        runtime
-            .getattr("run")?
-            .call1((path.to_string_lossy().into_owned(), shims))?;
+        runtime.getattr("run")?.call1((
+            path.to_string_lossy().into_owned(),
+            shims,
+            shim_dir.to_string_lossy().into_owned(),
+        ))?;
         Ok(())
     });
     if let Err(err) = result {

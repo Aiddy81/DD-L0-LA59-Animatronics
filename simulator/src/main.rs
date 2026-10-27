@@ -34,6 +34,9 @@ pub struct Paths {
     /// Saved preferences. Next to the exe, which lives in the gitignored
     /// simulator/dist, so they never land in the repo.
     pub prefs: PathBuf,
+    /// Drop-in shims that override or add to the built-in ones. Next to the
+    /// exe; rebuilding keeps it.
+    pub shims: PathBuf,
 }
 
 impl Paths {
@@ -70,6 +73,7 @@ impl Paths {
             assets: simulator.join("assets"),
             captures: exe_dir.join("captures"),
             prefs: exe_dir.join("ddl0-sim.prefs.toml"),
+            shims: exe_dir.join("shims"),
             simulator,
         })
     }
@@ -108,9 +112,10 @@ fn main() {
     }
 
     pyhost::init_python();
-    let mut host = PyHost::new(paths.code.clone());
+    let mut host = PyHost::new(paths.code.clone(), paths.shims.clone());
     host.start();
     let code_mtime = ui::firmware_mtime(&paths.code);
+    let shims_mtime = ui::shims_mtime(&paths.shims);
 
     App::new()
         .add_plugins(
@@ -137,7 +142,7 @@ fn main() {
         .insert_resource(cfg)
         .insert_resource(paths)
         .insert_resource(ui::Host(host))
-        .insert_resource(ui::UiState::new(code_mtime, &prefs))
+        .insert_resource(ui::UiState::new(code_mtime, shims_mtime, &prefs))
         .insert_resource(prefs)
         .add_plugins((
             scene::ScenePlugin,
