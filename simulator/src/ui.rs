@@ -15,6 +15,7 @@ use crate::hw::{hw, LogKind, LogLine};
 use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice};
+use crate::settings::SettingsState;
 
 /// A gentle bump, added to the held reading along the chosen direction. From
 /// rest it clears the firmware's NUDGE_Z_MG (250 mg) threshold.
@@ -124,6 +125,8 @@ pub struct UiState {
     open_pca: bool,
     open_board: bool,
     open_plot: bool,
+    open_settings: bool,
+    settings: SettingsState,
     panel_width: f32,
     log_height: f32,
     /// Names (file stems) of simulator/scenarios/*.toml, re-listed with hot_reload.
@@ -163,6 +166,8 @@ impl UiState {
             open_pca: prefs.open_pca,
             open_board: prefs.open_board,
             open_plot: prefs.open_plot,
+            open_settings: prefs.open_settings,
+            settings: SettingsState::default(),
             panel_width: prefs.panel_width,
             log_height: prefs.log_height,
             scenarios: Vec::new(),
@@ -228,6 +233,7 @@ fn save_prefs(
         open_pca: ui.open_pca,
         open_board: ui.open_board,
         open_plot: ui.open_plot,
+        open_settings: ui.open_settings,
         show_firmware: ui.show_firmware,
         show_sim: ui.show_sim,
     };
@@ -388,6 +394,9 @@ fn hot_reload(mut ui: ResMut<UiState>, mut host: ResMut<Host>, paths: Res<crate:
     }
     ui.last_check = Instant::now();
     ui.scenarios = list_scenarios(&paths.simulator.join("scenarios"));
+    if let Some(dir) = paths.code.parent() {
+        ui.settings.refresh(dir);
+    }
     let mtime = firmware_mtime(host.0.code_path());
     let shims = shims_mtime(host.0.shim_dir());
     let changed = if mtime != ui.code_mtime {
@@ -616,6 +625,7 @@ fn panels(
         }
     });
 
+    let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
     let side_panel = egui::SidePanel::right("hardware")
         .default_width(ui.panel_width)
         .show(ctx, |side| {
@@ -760,6 +770,15 @@ fn panels(
                 .default_open(ui.open_plot)
                 .show(side, |side| plot(side, &ui.history));
             ui.open_plot = plot_section.openness > 0.5;
+
+            side.separator();
+            let auto_reload = ui.auto_reload;
+            let settings = egui::CollapsingHeader::new("Settings (settings.toml)")
+                .default_open(ui.open_settings)
+                .show(side, |side| {
+                    settings_panel(side, &mut ui.settings, fw_dir, auto_reload);
+                });
+            ui.open_settings = settings.openness > 0.5;
         });
     ui.panel_width = side_panel.response.rect.width();
 
@@ -999,6 +1018,110 @@ fn plot(ui: &mut egui::Ui, history: &VecDeque<Sample>) {
         font,
         Color32::GRAY,
     );
+}
+
+/// Every tunable config.py reads, with its value in settings.toml and its
+/// default. Edits stay pending until Save writes them into settings.toml. The
+/// left-wing calibration is shown but locked: it matches the physical build.
+fn settings_panel(ui: &mut egui::Ui, state: &mut SettingsState, dir: &Path, auto_reload: bool) {
+    let pending = Color32::from_rgb(230, 170, 40);
+    let red = Color32::from_rgb(220, 60, 60);
+    if let Some(error) = &state.error {
+        ui.colored_label(red, error);
+    }
+    // Cloned so `state` can be changed while the rows are drawn.
+    let tunables = state.tunables.clone();
+    egui::ScrollArea::vertical()
+        .id_salt("settings")
+        .max_height(320.0)
+        .show(ui, |area| {
+            egui::Grid::new("settings_grid")
+                .striped(true)
+                .num_columns(4)
+                .show(area, |grid| {
+                    grid.label("key");
+                    grid.label("value");
+                    grid.label("default");
+                    grid.end_row();
+                    for t in &tunables {
+                        let saved = state.saved(t);
+                        let edit = state.edits.get(&t.key).copied();
+                        let invalid = state.invalid(t).map(str::to_owned);
+                        let mut help = t.help.clone();
+                        let mut name = egui::RichText::new(&t.key).monospace().small();
+                        if edit.is_some() {
+                            name = name.color(pending);
+                        } else if invalid.is_some() {
+                            name = name.color(red);
+                        } else if saved != t.default {
+                            name = name.strong();
+                        }
+                        if let Some(bad) = &invalid {
+                            help.push_str(&format!(
+                                "\n\nsettings.toml has {bad}, which isn't a whole number, so the default is used."
+                            ));
+                        }
+                        if t.read_only {
+                            help.push_str("\n\nCalibration for the physical build: read-only here.");
+                        }
+                        grid.label(name).on_hover_text(&help);
+                        let default = t.default.map_or("?".to_owned(), |d| d.to_string());
+                        if t.read_only {
+                            grid.label(saved.map_or("?".to_owned(), |v| v.to_string()))
+                                .on_hover_text(&help);
+                            grid.label(default);
+                            grid.label(egui::RichText::new("locked").small().weak());
+                        } else {
+                            let mut value = edit.or(saved).unwrap_or(0);
+                            // Big values (seconds in hours) would take forever at 1 per pixel.
+                            let speed = (value.abs() as f64 / 200.0).max(1.0);
+                            let changed = grid
+                                .add(egui::DragValue::new(&mut value).speed(speed))
+                                .on_hover_text(&help)
+                                .changed();
+                            if changed {
+                                state.set(t, value);
+                            }
+                            grid.label(default);
+                            let reset = grid
+                                .add_enabled(
+                                    t.default.is_some_and(|d| d != value),
+                                    egui::Button::new("Reset").small(),
+                                )
+                                .on_hover_text("Back to the default in config.py")
+                                .clicked();
+                            if let (true, Some(d)) = (reset, t.default) {
+                                state.set(t, d);
+                            }
+                        }
+                        grid.end_row();
+                    }
+                });
+        });
+    ui.horizontal(|row| {
+        let dirty = !state.edits.is_empty();
+        let save = row
+            .add_enabled(dirty, egui::Button::new("Save"))
+            .on_hover_text("Write the changes into settings.toml, keeping its comments");
+        if save.clicked() {
+            let note = match state.save(dir) {
+                Ok(n) if auto_reload => format!("[sim] settings.toml saved ({n} changed)"),
+                Ok(n) => format!("[sim] settings.toml saved ({n} changed); restart (R) to apply"),
+                Err(e) => format!("[sim] could not save settings.toml: {e}"),
+            };
+            hw().push_line(note);
+        }
+        if row
+            .add_enabled(dirty, egui::Button::new("Revert"))
+            .on_hover_text("Forget the unsaved changes")
+            .clicked()
+        {
+            state.revert(dir);
+        }
+        if dirty {
+            row.colored_label(pending, format!("{} unsaved", state.edits.len()));
+        }
+    });
 }
 
 fn board_panel(ui: &mut egui::Ui) {

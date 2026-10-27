@@ -28,6 +28,7 @@ pub struct Prefs {
     pub open_pca: bool,
     pub open_board: bool,
     pub open_plot: bool,
+    pub open_settings: bool,
     pub show_firmware: bool,
     pub show_sim: bool,
 }
@@ -47,6 +48,7 @@ impl Default for Prefs {
             open_pca: true,
             open_board: true,
             open_plot: true,
+            open_settings: true,
             show_firmware: true,
             show_sim: true,
         }
