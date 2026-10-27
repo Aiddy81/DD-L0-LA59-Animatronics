@@ -83,6 +83,11 @@ pub fn shims_mtime(dir: &Path) -> Option<SystemTime> {
     Some(latest)
 }
 
+/// Modification time of one file; None if it doesn't exist.
+pub fn file_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 /// Queues one reading `delta` g past the held value along `dir`.
 pub fn boop(dir: [f32; 3], delta: f32) {
     let mut s = hw();
@@ -146,6 +151,7 @@ pub struct UiState {
     auto_reload: bool,
     code_mtime: Option<SystemTime>,
     shims_mtime: Option<SystemTime>,
+    sim_toml_mtime: Option<SystemTime>,
     last_check: Instant,
     history: VecDeque<Sample>,
     started: Instant,
@@ -184,6 +190,7 @@ impl UiState {
     pub fn new(
         code_mtime: Option<SystemTime>,
         shims_mtime: Option<SystemTime>,
+        sim_toml_mtime: Option<SystemTime>,
         prefs: &Prefs,
     ) -> Self {
         Self {
@@ -191,6 +198,7 @@ impl UiState {
             auto_reload: prefs.auto_reload,
             code_mtime,
             shims_mtime,
+            sim_toml_mtime,
             last_check: Instant::now(),
             history: VecDeque::new(),
             started: Instant::now(),
@@ -431,11 +439,17 @@ fn run_scenario(host: &mut PyHost, cfg: &SimConfig, paths: &crate::Paths, name: 
     });
 }
 
-fn hot_reload(mut ui: ResMut<UiState>, mut host: ResMut<Host>, paths: Res<crate::Paths>) {
+fn hot_reload(
+    mut ui: ResMut<UiState>,
+    mut host: ResMut<Host>,
+    mut cfg: ResMut<SimConfig>,
+    paths: Res<crate::Paths>,
+) {
     if ui.last_check.elapsed().as_millis() < 500 {
         return;
     }
     ui.last_check = Instant::now();
+    reload_sim_toml(&mut ui, &mut cfg, &paths.simulator.join("sim.toml"));
     ui.scenarios = list_scenarios(&paths.simulator.join("scenarios"));
     if let Some(dir) = paths.code.parent() {
         ui.settings.refresh(dir);
@@ -457,6 +471,27 @@ fn hot_reload(mut ui: ResMut<UiState>, mut host: ResMut<Host>, paths: Res<crate:
             host.0.start();
         }
     }
+}
+
+/// Applies a saved sim.toml without restarting code.py: everything reads
+/// `SimConfig` and `hw().board` live. An invalid file keeps the old config.
+/// Not gated on Auto-reload, which is about restarting the firmware.
+fn reload_sim_toml(ui: &mut UiState, cfg: &mut SimConfig, path: &Path) {
+    let mtime = file_mtime(path);
+    if mtime == ui.sim_toml_mtime {
+        return;
+    }
+    ui.sim_toml_mtime = mtime;
+    let line = match SimConfig::read(path) {
+        Ok(Some(new)) => {
+            hw().board = new.board.clone();
+            *cfg = new;
+            "[sim] sim.toml reloaded".to_owned()
+        }
+        Ok(None) => "[sim] sim.toml is missing, keeping the previous config".to_owned(),
+        Err(e) => format!("[sim] sim.toml is invalid, keeping the previous config: {e}"),
+    };
+    hw().push_line(line);
 }
 
 fn stop_on_exit(mut exits: EventReader<AppExit>, mut host: ResMut<Host>) {

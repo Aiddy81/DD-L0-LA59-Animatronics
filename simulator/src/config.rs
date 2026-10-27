@@ -171,19 +171,27 @@ impl WingCfg {
 }
 
 impl SimConfig {
+    /// Start-up load: a missing file means defaults, an invalid one defaults
+    /// plus a warning.
     pub fn load(path: &Path) -> (Self, Option<String>) {
+        match Self::read(path) {
+            Ok(cfg) => (cfg.unwrap_or_default(), None),
+            Err(e) => (
+                Self::default(),
+                Some(format!(
+                    "[sim] {} is invalid, using defaults: {e}",
+                    path.display()
+                )),
+            ),
+        }
+    }
+
+    /// `Ok(None)` when the file doesn't exist; `Err` when it can't be read or parsed.
+    pub fn read(path: &Path) -> Result<Option<Self>, String> {
         match std::fs::read_to_string(path) {
-            Ok(text) => match toml::from_str(&text) {
-                Ok(cfg) => (cfg, None),
-                Err(e) => (
-                    Self::default(),
-                    Some(format!(
-                        "[sim] {} is invalid, using defaults: {e}",
-                        path.display()
-                    )),
-                ),
-            },
-            Err(_) => (Self::default(), None),
+            Ok(text) => toml::from_str(&text).map(Some).map_err(|e| e.to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
         }
     }
 }

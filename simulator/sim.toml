@@ -1,5 +1,5 @@
 # How the simulator maps PCA9685 outputs onto the 3D droid.
-# Edit and restart the simulator to apply.
+# Saved changes apply live, except [model] kind (start-up only).
 
 # The physical wing servos: pulse width range that covers their full travel.
 [servo]
