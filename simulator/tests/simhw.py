@@ -47,6 +47,9 @@ states = []
 
 _t0 = [time.monotonic()]
 _debt = [0.0]
+_board_time = [0.0]
+# (task name, virtual seconds) for each task step that held the loop 1 ms or more.
+task_holds = []
 _partial = [""]
 _heap_now = [0.0]
 
@@ -54,6 +57,8 @@ _heap_now = [0.0]
 def reset():
     _t0[0] = time.monotonic()
     _debt[0] = 0.0
+    _board_time[0] = 0.0
+    task_holds.clear()
 
 
 def now():
@@ -185,7 +190,16 @@ def set_volume(level):
     pass
 
 
+def board_time():
+    return _board_time[0]
+
+
+def task_hold(name, secs):
+    task_holds.append((name, secs))
+
+
 def charge(kind):
+    _board_time[0] += BOARD.get(kind, 0.0) / 1000.0
     _debt[0] += BOARD.get(kind, 0.0) / 1000.0
     real = _debt[0] / SPEED
     if real >= 0.001:

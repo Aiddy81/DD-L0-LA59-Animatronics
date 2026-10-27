@@ -16,7 +16,7 @@ use crate::editor;
 use crate::hw::{hw, LogKind, LogLine, MarkerKind};
 use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
-use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice};
+use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice, RoomLight};
 use crate::settings::SettingsState;
 
 /// A gentle bump, added to the held reading along the chosen direction. From
@@ -250,6 +250,8 @@ struct Sample {
     accel: [f32; 3],
     /// The held z reading, which the firmware treats as "at rest".
     rest_z: f32,
+    /// Estimated CircuitPython heap in use, in KB.
+    heap_kb: f32,
 }
 
 /// An input or event drawn on the plot at the run time it happened.
@@ -323,7 +325,7 @@ struct SaveState {
 /// `Last` so the AppExit event is still readable.
 fn save_prefs(
     ui: Res<UiState>,
-    model: Option<Res<ModelChoice>>,
+    (model, room): (Option<Res<ModelChoice>>, Res<RoomLight>),
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut saved: ResMut<Prefs>,
     paths: Res<crate::Paths>,
@@ -348,6 +350,7 @@ fn save_prefs(
         panel_width: ui.panel_width,
         log_height: ui.log_height,
         model_gltf: model.map(|m| m.use_gltf).or(saved.model_gltf),
+        room_light: *room,
         strict,
         board_speed,
         servo_speed,
@@ -449,9 +452,15 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
     let t = ui.started.elapsed().as_secs_f32();
     // Markers raised while paused wait until now, which is also when the
     // firmware gets to act on them.
-    let (accel, rest_z, new_markers) = {
+    let (accel, rest_z, heap_kb, new_markers) = {
         let mut s = hw();
-        (s.last_accel, s.accel_g[2], std::mem::take(&mut s.markers))
+        let heap_kb = (s.heap_bytes / 1024.0) as f32;
+        (
+            s.last_accel,
+            s.accel_g[2],
+            heap_kb,
+            std::mem::take(&mut s.markers),
+        )
     };
     ui.markers.extend(
         new_markers
@@ -476,6 +485,7 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
         white: glow_rgb(&cfg, GlowSource::WhiteLed).x,
         accel,
         rest_z,
+        heap_kb,
     };
     ui.history.push_back(sample);
     while ui
@@ -612,6 +622,7 @@ fn panels(
     mut ui: ResMut<UiState>,
     mut host: ResMut<Host>,
     model: Option<ResMut<ModelChoice>>,
+    mut room: ResMut<RoomLight>,
     cfg: Res<SimConfig>,
     mut captures: Captures,
 ) {
@@ -822,6 +833,17 @@ fn panels(
             {
                 controls.toggle_record = true;
             }
+            row.separator();
+            row.label("Light")
+                .on_hover_text("Room lighting, to judge how bright the eyes and white LED look in a dim room");
+            let mut light = *room;
+            for choice in RoomLight::ALL {
+                row.selectable_value(&mut light, choice, choice.label());
+            }
+            // Only touch the resource on a real change, so the lights aren't reset every frame.
+            if light != *room {
+                *room = light;
+            }
         });
         // Cloned out so the lock isn't held while a click writes the request.
         let (behaviours, running) = {
@@ -1003,6 +1025,7 @@ fn panels(
                 .default_open(ui.open_plot)
                 .show(side, |side| {
                     let limits = AccelLimits::read(&ui.settings);
+                    let heap_budget_kb = hw().board.heap_budget_kb as f32;
                     let state: &mut UiState = &mut ui;
                     plot_panel(
                         side,
@@ -1010,6 +1033,7 @@ fn panels(
                         &state.history,
                         &state.markers,
                         &limits,
+                        heap_budget_kb,
                     )
                 });
             ui.open_plot = plot_section.openness > 0.5;
@@ -1358,6 +1382,7 @@ enum Band {
     Wings,
     Leds,
     Accel,
+    Heap,
 }
 
 impl Band {
@@ -1366,6 +1391,7 @@ impl Band {
             Band::Wings => format!("{v:.0}\u{b0}"),
             Band::Leds => format!("{:.1}%", v * 100.0),
             Band::Accel => format!("{v:.2} g"),
+            Band::Heap => format!("{v:.0} KB"),
         }
     }
 }
@@ -1387,6 +1413,10 @@ const WING_L: Color32 = Color32::from_rgb(90, 200, 230);
 const RED: Color32 = Color32::from_rgb(230, 60, 60);
 const GREEN: Color32 = Color32::from_rgb(60, 210, 90);
 const BLUE: Color32 = Color32::from_rgb(80, 120, 255);
+// The heap bar's colours, shared with the plot's heap band.
+const HEAP_OK: Color32 = Color32::from_rgb(70, 170, 90);
+const HEAP_HIGH: Color32 = Color32::from_rgb(230, 170, 40);
+const HEAP_OVER: Color32 = Color32::from_rgb(220, 60, 60);
 
 const fn series(
     group: &'static str,
@@ -1409,7 +1439,7 @@ const fn dashed(s: SeriesDef) -> SeriesDef {
     SeriesDef { dashed: true, ..s }
 }
 
-const SERIES: [SeriesDef; 12] = [
+const SERIES: [SeriesDef; 13] = [
     series("Wings", "R", Band::Wings, WING_R, |s| s.wings[0]),
     series("Wings", "L", Band::Wings, WING_L, |s| s.wings[1]),
     series("Main eye", "R", Band::Leds, RED, |s| Some(s.main.x)),
@@ -1445,10 +1475,18 @@ const SERIES: [SeriesDef; 12] = [
     series("Accel", "z", Band::Accel, Color32::WHITE, |s| {
         Some(s.accel[2])
     }),
+    series("Heap", "KB", Band::Heap, HEAP_OK, |s| Some(s.heap_kb)),
 ];
 
 /// The checkbox rows and readout groups, in display order.
-const GROUPS: [&str; 5] = ["Wings", "Main eye", "Small eye", "White LED", "Accel"];
+const GROUPS: [&str; 6] = [
+    "Wings",
+    "Main eye",
+    "Small eye",
+    "White LED",
+    "Accel",
+    "Heap",
+];
 
 /// What the plot shows; kept in `UiState` so it lasts between frames.
 struct PlotState {
@@ -1567,7 +1605,7 @@ fn decimate(samples: &[&Sample], get: fn(&Sample) -> Option<f32>, buckets: usize
     out
 }
 
-/// Window, Freeze and Reset controls, the series checkboxes, three stacked
+/// Window, Freeze and Reset controls, the series checkboxes, four stacked
 /// plots with linked time axes, and a readout of every ticked series at the
 /// time under the pointer.
 fn plot_panel(
@@ -1576,6 +1614,7 @@ fn plot_panel(
     history: &VecDeque<Sample>,
     markers: &VecDeque<Marker>,
     limits: &AccelLimits,
+    heap_budget_kb: f32,
 ) {
     ui.horizontal_wrapped(|row| {
         egui::ComboBox::from_id_salt("plot_window")
@@ -1661,6 +1700,13 @@ fn plot_panel(
         (Band::Wings, "plot_wings", "deg", 0.0, 180.0),
         (Band::Leds, "plot_leds", "duty", 0.0, 1.0),
         (Band::Accel, "plot_accel", "g", -clip, clip),
+        (
+            Band::Heap,
+            "plot_heap",
+            "KB",
+            0.0,
+            f64::from(heap_budget_kb) * 1.1,
+        ),
     ];
     let mut hover_t = None;
     let mut moved = false;
@@ -1700,6 +1746,9 @@ fn plot_panel(
                 }
                 if band == Band::Accel {
                     accel_limits(p, limits, last.rest_z, x1);
+                }
+                if band == Band::Heap {
+                    heap_limits(p, heap_budget_kb, x1);
                 }
                 draw_markers(p, in_view, n == 0);
                 p.response()
@@ -1771,6 +1820,25 @@ fn accel_limits(p: &mut egui_plot::PlotUi, limits: &AccelLimits, rest_z: f32, ri
                 .color(Color32::GRAY)
                 .width(1.0)
                 .style(LineStyle::dashed_dense()),
+        );
+    }
+}
+
+/// The heap bar's thresholds: amber from 80% of the budget, red at the budget.
+fn heap_limits(p: &mut egui_plot::PlotUi, budget_kb: f32, right_x: f64) {
+    for (y, name, color) in [
+        (budget_kb * 0.8, "80%", HEAP_HIGH),
+        (budget_kb, "budget", HEAP_OVER),
+    ] {
+        p.hline(HLine::new(name, y).color(color).width(1.0));
+        p.text(
+            Text::new(
+                name,
+                PlotPoint::new(right_x, f64::from(y)),
+                egui::RichText::new(name).small(),
+            )
+            .color(color)
+            .anchor(egui::Align2::RIGHT_BOTTOM),
         );
     }
 }
@@ -2026,11 +2094,11 @@ fn board_panel(ui: &mut egui::Ui) {
     let budget = s.heap_budget();
     let used = (s.heap_bytes / budget) as f32;
     let colour = if used >= 1.0 {
-        Color32::from_rgb(220, 60, 60)
+        HEAP_OVER
     } else if used >= 0.8 {
-        Color32::from_rgb(230, 170, 40)
+        HEAP_HIGH
     } else {
-        Color32::from_rgb(70, 170, 90)
+        HEAP_OK
     };
     ui.add(
         egui::ProgressBar::new(used.min(1.0))
@@ -2043,6 +2111,20 @@ fn board_panel(ui: &mut egui::Ui) {
             )),
     )
     .on_hover_text("Estimated from what code.py allocates, scaled to CircuitPython's smaller objects. Catches clear overruns, not the last few KB.");
+
+    let limit = b.loop_hold_warn_ms;
+    let (text, over) = match &s.longest_hold {
+        Some((task, ms)) => (
+            format!("longest step ~{ms:.0} ms ({task})"),
+            limit > 0.0 && *ms > limit,
+        ),
+        None => ("longest step: none over 1 ms yet".to_owned(), false),
+    };
+    let text = egui::RichText::new(text);
+    ui.label(if over { text.color(HEAP_HIGH) } else { text })
+        .on_hover_text(format!(
+            "The longest any task ran between two awaits this run, in board time. Nothing else runs meanwhile, so over {limit:.0} ms (loop_hold_warn_ms in sim.toml) the other behaviours visibly stall."
+        ));
 
     if !s.unsimulated.is_empty() {
         ui.label(

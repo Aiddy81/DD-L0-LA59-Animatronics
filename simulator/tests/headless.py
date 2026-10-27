@@ -116,6 +116,36 @@ def scenario_hw(sim_cfg):
             "channels": channels}
 
 
+BLOCKING_CODE = """\
+import asyncio
+import time
+
+
+async def blocker():
+    await asyncio.sleep(0.5)
+    time.sleep(0.2)
+    await asyncio.sleep(0.5)
+
+
+asyncio.run(blocker())
+"""
+
+
+def blocking_task_holds(simhw, sim_runtime):
+    """Runs a code.py whose task blocks with time.sleep(0.2) and returns the
+    (task, seconds) steps the simulator timed."""
+    workdir = tempfile.mkdtemp(prefix="ddl0-blocking-")
+    try:
+        code_path = os.path.join(workdir, "code.py")
+        with open(code_path, "w", encoding="utf-8") as f:
+            f.write(BLOCKING_CODE)
+        simhw.reset()
+        sim_runtime.run(code_path, sim_runtime.load_shim_dir(SHIMS))
+        return list(simhw.task_holds)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def run_scenarios(code_path, names, sim_cfg, simhw, sim_runtime):
     """Plays each simulator/scenarios/<name>.toml against a fresh run of
     code.py. Returns the names that did not pass."""
@@ -203,6 +233,9 @@ def main():
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
+    hold_limit_s = board.get("loop_hold_warn_ms", 50) / 1000.0
+    worst_hold = max(simhw.task_holds, key=lambda h: h[1], default=("none", 0.0))
+
     log = "\n".join(simhw.log_lines)
     played = [name for _, name in simhw.audio]
     # The shake's response is whichever motion sound plays first after it.
@@ -247,6 +280,7 @@ def main():
         ("boot_sequence button runs it again",
          "[sim] running boot_sequence" in log and log.count("Boot sequence complete!") == 2),
         ("heap estimate within board budget", simhw.heap_peak[0] < simhw.HEAP_BUDGET),
+        ("no task holds the loop longer than loop_hold_warn_ms", worst_hold[1] <= hold_limit_s),
         ("state panel lists hardware.py's events", all(events.values())),
         ("state panel sees pause_breathing set and clear", events["pause_breathing"] == {True, False}),
         ("state panel lists the background tasks",
@@ -261,9 +295,16 @@ def main():
     ]
     print()
     print("Behaviour buttons: {}".format(", ".join(simhw.behaviours)))
+    # Its own run, after everything above has read the main run's results.
+    blocker_holds = blocking_task_holds(simhw, sim_runtime)
+    checks.append(("a blocking time.sleep(0.2) is timed against its task",
+                   any(name == "blocker" and 0.15 < secs < 0.3 for name, secs in blocker_holds)))
     print("Audio played: {}".format(simhw.audio))
     print("LED bursts: {}".format(["{:.1f}-{:.1f}s".format(a, b) for a, b in bursts]))
     print("Heap peak ~{:.0f} KB of {:.0f} KB".format(simhw.heap_peak[0] / 1024, simhw.HEAP_BUDGET / 1024))
+    print("Longest task step ~{:.1f} ms ({})".format(worst_hold[1] * 1000, worst_hold[0]))
+    print("Blocking test steps: {}".format(
+        ["{} {:.0f} ms".format(n, s * 1000) for n, s in blocker_holds]))
     if simhw.unsimulated_libs:
         print("Not simulated: {}".format(", ".join(simhw.unsimulated_libs)))
     failed = [name for name, ok in checks if not ok]
