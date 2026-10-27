@@ -10,6 +10,7 @@ mod hw;
 mod prefs;
 mod pyhost;
 mod scene;
+mod settings;
 mod ui;
 
 use std::path::{Path, PathBuf};

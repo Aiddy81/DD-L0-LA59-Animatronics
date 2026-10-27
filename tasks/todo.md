@@ -1,3 +1,22 @@
+# Simulator Settings panel for settings.toml (#46)
+
+Branch: `feature/simulator-settings-editor` (off `Documentation`).
+
+- [x] `settings.rs` (std only): discover `_int("KEY", default)` in config.py with help from the comment above; read settings.toml like `os.getenv`; line-based edits that keep comments, order, line endings and other keys; write via tmp + rename
+- [x] Calibration keys (`SERVO2_*`, `BREATH_SERVO2_*`) read-only, filtered out again at save
+- [x] `ui.rs`: Settings section (value, default, Reset, Save, Revert, pending/changed/invalid colours); re-read on disk change in `hot_reload`; open state in prefs
+- [x] 10 unit tests pass (`rustc --test src/settings.rs` in the dev image), incl. no-op edit leaves the real settings.toml byte-identical
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] `headless.py` passes: all checks and 7 scenarios (firmware unchanged)
+- [x] README updated
+- [ ] Interactive: edit `BREATH_PERIOD_S`, Save → restart with faster breathing, `git diff` shows one value; Reset; locked rows — user
+
+## Review
+- Logic lives in `settings.rs` with no egui/bevy, so its tests run with plain `rustc` (the crate itself only cross-compiles for Windows).
+- Keys come from config.py, not a list in Rust, so a new tunable appears with no simulator change.
+- Reset writes the default value rather than deleting the line, so the file's comments for that key stay.
+- Only discovered keys are read or shown, and only integers are written, so nothing else in settings.toml (e.g. secrets someone adds) is displayed or touched.
+
 # Simulator 3-axis accelerometer input (#43)
 
 Branch: `feature/simulator-3-axis-accel` (off `Documentation`).
