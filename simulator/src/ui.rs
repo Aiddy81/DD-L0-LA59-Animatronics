@@ -1,15 +1,15 @@
 //! Control panels: run controls, motion input, channel readouts, plot, log.
 
 use std::collections::VecDeque;
-use std::path::Path;
-use std::time::{Instant, SystemTime};
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Pos2, Stroke};
 use bevy_egui::EguiContexts;
 
 use crate::config::SimConfig;
-use crate::hw::hw;
+use crate::hw::{hw, LogKind, LogLine};
 use crate::pyhost::PyHost;
 use crate::scene::{glow_rgb, GlowSource, ModelChoice};
 
@@ -64,6 +64,9 @@ pub struct UiState {
     last_check: Instant,
     history: VecDeque<Sample>,
     started: Instant,
+    log_filter: String,
+    show_firmware: bool,
+    show_sim: bool,
 }
 
 type Series = fn(&Sample) -> f32;
@@ -86,6 +89,9 @@ impl UiState {
             last_check: Instant::now(),
             history: VecDeque::new(),
             started: Instant::now(),
+            log_filter: String::new(),
+            show_firmware: true,
+            show_sim: true,
         }
     }
 }
@@ -197,6 +203,7 @@ fn panels(
     mut host: ResMut<Host>,
     model: Option<ResMut<ModelChoice>>,
     cfg: Res<SimConfig>,
+    paths: Res<crate::Paths>,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else {
         return;
@@ -377,16 +384,102 @@ fn panels(
         .resizable(true)
         .default_height(170.0)
         .show(ctx, |bottom| {
+            bottom.horizontal(|row| {
+                row.label("Log");
+                row.add(
+                    egui::TextEdit::singleline(&mut ui.log_filter)
+                        .hint_text("search")
+                        .desired_width(180.0),
+                );
+                row.checkbox(&mut ui.show_firmware, "Firmware");
+                row.checkbox(&mut ui.show_sim, "[sim]");
+                if row.button("Clear").clicked() {
+                    hw().clear_log();
+                }
+                if row
+                    .button("Copy")
+                    .on_hover_text("Copy the lines shown to the clipboard")
+                    .clicked()
+                {
+                    let filter = ui.log_filter.to_lowercase();
+                    // Released before copy_text so the lock is never held across egui calls.
+                    let text = hw()
+                        .log
+                        .iter()
+                        .filter(|l| line_visible(l, ui.show_firmware, ui.show_sim, &filter))
+                        .map(|l| l.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    row.ctx().copy_text(text);
+                }
+                if row
+                    .button("Save")
+                    .on_hover_text("Save the whole log to the captures folder next to the exe")
+                    .clicked()
+                {
+                    // Snapshot first: file IO must not run under the shared lock.
+                    let text = hw()
+                        .log
+                        .iter()
+                        .map(|l| l.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let note = match save_log(&paths.captures, &text) {
+                        Ok(path) => format!("[sim] log saved to {}", path.display()),
+                        Err(e) => format!("[sim] could not save the log: {e}"),
+                    };
+                    hw().push_line(note);
+                }
+            });
+            let filter = ui.log_filter.to_lowercase();
+            let (show_firmware, show_sim) = (ui.show_firmware, ui.show_sim);
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
                 .auto_shrink([false, false])
                 .show(bottom, |area| {
                     let s = hw();
-                    for line in &s.log {
-                        area.monospace(line);
+                    for line in s
+                        .log
+                        .iter()
+                        .filter(|l| line_visible(l, show_firmware, show_sim, &filter))
+                    {
+                        if line.kind == LogKind::Error {
+                            area.label(
+                                egui::RichText::new(&line.text)
+                                    .monospace()
+                                    .color(Color32::from_rgb(235, 90, 80)),
+                            );
+                        } else {
+                            area.monospace(&line.text);
+                        }
                     }
                 });
         });
+}
+
+/// Whether a log line passes the Firmware / [sim] toggles and the search box
+/// (`filter` is already lowercase).
+fn line_visible(line: &LogLine, show_firmware: bool, show_sim: bool, filter: &str) -> bool {
+    let from_sim = match line.kind {
+        LogKind::Sim => true,
+        // Sim errors are Error-kind but still belong to the [sim] toggle.
+        LogKind::Error => line.text.starts_with("[sim]"),
+        LogKind::Firmware => false,
+    };
+    let shown = if from_sim { show_sim } else { show_firmware };
+    shown && (filter.is_empty() || line.text.to_lowercase().contains(filter))
+}
+
+/// Writes the log to `dir/sim-log-<unix seconds>.txt`, creating `dir` if needed.
+fn save_log(dir: &Path, text: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let path = dir.join(format!("sim-log-{secs}.txt"));
+    std::fs::write(&path, text)?;
+    Ok(path)
 }
 
 fn plot(ui: &mut egui::Ui, history: &VecDeque<Sample>) {

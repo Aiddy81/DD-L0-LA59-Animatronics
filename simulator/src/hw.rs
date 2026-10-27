@@ -21,6 +21,18 @@ pub enum AudioCmd {
     Volume(f32),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LogKind {
+    Firmware,
+    Sim,
+    Error,
+}
+
+pub struct LogLine {
+    pub kind: LogKind,
+    pub text: String,
+}
+
 pub struct HwState {
     /// 16-bit duty cycle per PCA9685 channel, `None` until first written.
     pub pca_duty: [Option<u16>; 16],
@@ -32,8 +44,11 @@ pub struct HwState {
     pub accel_g: [f32; 3],
     /// One-shot readings returned before falling back to `accel_g`.
     pub accel_pulses: VecDeque<[f32; 3]>,
-    pub log: VecDeque<String>,
+    pub log: VecDeque<LogLine>,
     partial_line: String,
+    /// Between a "Traceback" header and its exception message, so the whole
+    /// traceback can be coloured as an error.
+    in_traceback: bool,
     /// Audio commands from `code.py`, drained by the audio system.
     pub audio: Vec<AudioCmd>,
     pub clock: SimClock,
@@ -65,6 +80,7 @@ impl HwState {
             accel_pulses: VecDeque::new(),
             log: VecDeque::new(),
             partial_line: String::new(),
+            in_traceback: false,
             audio: Vec::new(),
             clock: SimClock::new(),
             stop_requested: false,
@@ -165,10 +181,36 @@ impl HwState {
     }
 
     pub fn push_line(&mut self, line: String) {
+        let kind = if line.starts_with("[sim]") {
+            if line.to_lowercase().contains("error") {
+                LogKind::Error
+            } else {
+                LogKind::Sim
+            }
+        } else if line.starts_with("Traceback (most recent call last)") {
+            self.in_traceback = true;
+            LogKind::Error
+        } else if self.in_traceback {
+            if line.is_empty() {
+                self.in_traceback = false;
+                LogKind::Firmware
+            } else {
+                // The first unindented line is the exception message, which ends it.
+                self.in_traceback = line.starts_with(char::is_whitespace);
+                LogKind::Error
+            }
+        } else {
+            LogKind::Firmware
+        };
         if self.log.len() >= LOG_CAP {
             self.log.pop_front();
         }
-        self.log.push_back(line);
+        self.log.push_back(LogLine { kind, text: line });
+    }
+
+    pub fn clear_log(&mut self) {
+        self.log.clear();
+        self.in_traceback = false;
     }
 
     pub fn next_accel(&mut self) -> [f32; 3] {

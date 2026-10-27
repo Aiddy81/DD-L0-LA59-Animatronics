@@ -26,6 +26,9 @@ pub struct Paths {
     pub code: PathBuf,
     pub simulator: PathBuf,
     pub assets: PathBuf,
+    /// Files the user saves from the app (logs, screenshots). Next to the exe,
+    /// so they stay out of the repo's tracked files.
+    pub captures: PathBuf,
 }
 
 impl Paths {
@@ -60,6 +63,7 @@ impl Paths {
         Ok(Self {
             code,
             assets: simulator.join("assets"),
+            captures: exe_dir.join("captures"),
             simulator,
         })
     }
