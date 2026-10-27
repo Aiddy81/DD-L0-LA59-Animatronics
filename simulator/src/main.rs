@@ -3,9 +3,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod capture;
 mod config;
 mod droid;
 mod hw;
+mod prefs;
 mod pyhost;
 mod scene;
 mod ui;
@@ -26,6 +28,12 @@ pub struct Paths {
     pub code: PathBuf,
     pub simulator: PathBuf,
     pub assets: PathBuf,
+    /// Files the user saves from the app (logs, screenshots). Next to the exe,
+    /// so they stay out of the repo's tracked files.
+    pub captures: PathBuf,
+    /// Saved preferences. Next to the exe, which lives in the gitignored
+    /// simulator/dist, so they never land in the repo.
+    pub prefs: PathBuf,
 }
 
 impl Paths {
@@ -60,6 +68,8 @@ impl Paths {
         Ok(Self {
             code,
             assets: simulator.join("assets"),
+            captures: exe_dir.join("captures"),
+            prefs: exe_dir.join("ddl0-sim.prefs.toml"),
             simulator,
         })
     }
@@ -87,6 +97,15 @@ fn main() {
         hw().push_line(w);
     }
     hw().board = cfg.board.clone();
+    let (prefs, prefs_warning) = prefs::load(&paths.prefs);
+    if let Some(w) = prefs_warning {
+        hw().push_line(w);
+    }
+    {
+        let mut s = hw();
+        s.strict = prefs.strict;
+        s.board_speed = prefs.board_speed;
+    }
 
     pyhost::init_python();
     let mut host = PyHost::new(paths.code.clone());
@@ -99,7 +118,7 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "DD-L0-LA59 Simulator".into(),
-                        resolution: (1500.0, 920.0).into(),
+                        resolution: (prefs.window_width, prefs.window_height).into(),
                         ..default()
                     }),
                     ..default()
@@ -118,7 +137,13 @@ fn main() {
         .insert_resource(cfg)
         .insert_resource(paths)
         .insert_resource(ui::Host(host))
-        .insert_resource(ui::UiState::new(code_mtime))
-        .add_plugins((scene::ScenePlugin, audio::AudioPlugin, ui::UiPlugin))
+        .insert_resource(ui::UiState::new(code_mtime, &prefs))
+        .insert_resource(prefs)
+        .add_plugins((
+            scene::ScenePlugin,
+            audio::AudioPlugin,
+            capture::CapturePlugin,
+            ui::UiPlugin,
+        ))
         .run();
 }

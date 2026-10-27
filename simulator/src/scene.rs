@@ -3,6 +3,7 @@
 
 use bevy::core_pipeline::bloom::Bloom;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
@@ -44,6 +45,10 @@ pub struct Glow {
 }
 
 impl Glow {
+    pub fn source(&self) -> GlowSource {
+        self.source
+    }
+
     pub fn placeholder(source: GlowSource, material: Handle<StandardMaterial>) -> Self {
         Self {
             source,
@@ -67,6 +72,39 @@ pub struct OrbitCam {
     pitch: f32,
     distance: f32,
     focus: Vec3,
+}
+
+/// Where the camera looks by default: roughly the droid's chest.
+const HOME_FOCUS: Vec3 = Vec3::new(0.0, 1.05, 0.0);
+
+impl OrbitCam {
+    fn home() -> Self {
+        Self {
+            yaw: 0.35,
+            pitch: 0.38,
+            distance: 5.2,
+            focus: HOME_FOCUS,
+        }
+    }
+}
+
+/// Toolbar camera presets.
+#[derive(Clone, Copy)]
+pub enum CameraView {
+    Front,
+    Side,
+    Top,
+    Eyes,
+    Reset,
+}
+
+/// Mouse state the orbit camera reads; bundled to keep `orbit_camera` within
+/// clippy's argument limit.
+#[derive(SystemParam)]
+struct MouseInput<'w> {
+    buttons: Res<'w, ButtonInput<MouseButton>>,
+    motion: Res<'w, AccumulatedMouseMotion>,
+    scroll: Res<'w, AccumulatedMouseScroll>,
 }
 
 /// Which droid model is shown. Switching it swaps the model live.
@@ -112,10 +150,15 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     paths: Res<Paths>,
     cfg: Res<SimConfig>,
+    prefs: Option<Res<crate::prefs::Prefs>>,
 ) {
     let gltf_available = paths.assets.join(MODEL_FILE).exists();
+    // A saved choice beats sim.toml, which only sets the default.
+    let wanted = prefs
+        .and_then(|p| p.model_gltf)
+        .unwrap_or(cfg.model.kind != "primitive");
     commands.insert_resource(ModelChoice {
-        use_gltf: gltf_available && cfg.model.kind != "primitive",
+        use_gltf: gltf_available && wanted,
         gltf_available,
     });
     commands.spawn((
@@ -128,12 +171,7 @@ fn setup(
         Tonemapping::TonyMcMapface,
         Bloom::NATURAL,
         Transform::default(),
-        OrbitCam {
-            yaw: 0.35,
-            pitch: 0.38,
-            distance: 5.2,
-            focus: Vec3::new(0.0, 1.05, 0.0),
-        },
+        OrbitCam::home(),
     ));
     commands.spawn((
         DirectionalLight {
@@ -339,20 +377,34 @@ fn drive_glow(
 
 fn orbit_camera(
     mut contexts: EguiContexts,
-    buttons: Res<ButtonInput<MouseButton>>,
-    motion: Res<AccumulatedMouseMotion>,
-    scroll: Res<AccumulatedMouseScroll>,
+    input: MouseInput,
     mut cams: Query<(&mut OrbitCam, &mut Transform)>,
     mut drag: ResMut<DragDistance>,
+    mut controls: ResMut<crate::capture::ViewControls>,
+    glows: Query<(&Glow, &GlobalTransform)>,
 ) {
+    let MouseInput {
+        buttons,
+        motion,
+        scroll,
+    } = input;
     if buttons.get_just_pressed().next().is_some() {
         drag.0 = 0.0;
     }
     drag.0 += motion.delta.length();
+    let preset = controls.camera.take();
+    // Aim at the main eye's current position, so it works for either model.
+    let eye_focus = glows
+        .iter()
+        .find(|(glow, _)| glow.source() == GlowSource::MainEye)
+        .map_or(HOME_FOCUS, |(_, at)| at.translation());
     let over_ui = contexts
         .try_ctx_mut()
         .is_some_and(|ctx| ctx.wants_pointer_input() || ctx.is_pointer_over_area());
     for (mut cam, mut transform) in &mut cams {
+        if let Some(view) = preset {
+            apply_view(&mut cam, view, eye_focus);
+        }
         if !over_ui {
             if buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right) {
                 cam.yaw -= motion.delta.x * 0.006;
@@ -374,4 +426,26 @@ fn orbit_camera(
         transform.translation = cam.focus + rot * Vec3::new(0.0, 0.0, cam.distance);
         transform.look_at(cam.focus, Vec3::Y);
     }
+}
+
+fn apply_view(cam: &mut OrbitCam, view: CameraView, eye_focus: Vec3) {
+    let preset = |yaw, pitch| OrbitCam {
+        yaw,
+        pitch,
+        distance: 5.2,
+        focus: HOME_FOCUS,
+    };
+    *cam = match view {
+        CameraView::Front => preset(0.0, 0.15),
+        CameraView::Side => preset(std::f32::consts::FRAC_PI_2, 0.15),
+        // 1.45 is the pitch clamp used when orbiting.
+        CameraView::Top => preset(0.0, 1.45),
+        CameraView::Eyes => OrbitCam {
+            yaw: 0.0,
+            pitch: 0.6,
+            distance: 1.6,
+            focus: eye_focus,
+        },
+        CameraView::Reset => OrbitCam::home(),
+    };
 }

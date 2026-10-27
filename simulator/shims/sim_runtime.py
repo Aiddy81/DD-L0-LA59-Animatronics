@@ -218,6 +218,10 @@ class _ScaledSelector(selectors.SelectSelector):
         # code.py does I/O through the loop, so sleeping first loses nothing.
         if timeout > 0:
             _real_time.sleep(timeout)
+        if simhw.paused():
+            # Virtual time is frozen, so animations that yield with
+            # asyncio.sleep(0) would otherwise spin a CPU core.
+            _real_time.sleep(_POLL_S)
         simhw.charge("loop")
         _heap.sample()
         return super().select(0)

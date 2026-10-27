@@ -112,6 +112,11 @@ mod simhw {
     }
 
     #[pyfunction]
+    fn paused() -> bool {
+        hw().clock.is_paused()
+    }
+
+    #[pyfunction]
     fn stopping() -> bool {
         hw().stop_requested
     }

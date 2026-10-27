@@ -51,6 +51,10 @@ def speed():
     return SPEED
 
 
+def paused():
+    return False
+
+
 def stopping():
     return now() >= DURATION
 

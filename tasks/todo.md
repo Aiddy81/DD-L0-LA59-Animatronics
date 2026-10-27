@@ -1,3 +1,24 @@
+# Simulator UI polish (#50, #52, #56, #59)
+
+Branch: `feature/simulator-ui-polish` (off `Documentation`). One commit per issue, one PR.
+
+- [x] #50 PCA9685 grid: servo angle for ch 0/1, colour swatch per eye
+- [x] #52 Log: search, Firmware / [sim] toggles, red tracebacks, Clear / Copy / Save
+- [x] #56 Camera views (Front, Side, Top, Eyes, Reset), Screenshot, Record frames
+- [x] #59 Collapsible sections, saved prefs (`ddl0-sim.prefs.toml` next to the exe), shortcuts, Pause
+- [x] `build.ps1` succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] Headless test passes (all 16 checks)
+- [x] Interactive: boot, breathing, N → boop, S → angry, I → attention; Space pause freezes sim time; camera views; log search, red SyntaxError traceback, Save; Screenshot; Record (22 frames in ~2 s); folded section restored after restart
+- [ ] Copy button — not checked (no clipboard access in the session) — user
+- [x] README updated
+
+## Review
+- Copy needs bevy_egui's `manage_clipboard` feature, which adds `arboard` / `clipboard-win` to Cargo.lock. No existing crate versions changed.
+- Pause needed a Python-side change: while paused the scheduler sleeps 50 ms per pass, or animations that yield with `asyncio.sleep(0)` would spin a core against a frozen clock.
+- `docker/build.sh` used to `rm -rf dist`, which would have wiped the prefs and captures on every build; it now keeps those two.
+- Once saved, the Model choice overrides `[model] kind` in sim.toml (documented). Delete the prefs file to fall back.
+- Shortcut keys are consumed, so a button focused by a click doesn't also fire on Space.
+
 # Trench run idle animation (Top Gun: Maverick)
 
 Branch: `feature/trench-run` (off `Documentation`).
