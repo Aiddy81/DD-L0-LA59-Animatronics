@@ -24,6 +24,15 @@ pub enum AudioCmd {
     Volume(f32),
 }
 
+/// What a plot marker shows: an input or event that can explain what follows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarkerKind {
+    Motion,
+    Sound,
+    Idle,
+    Restart,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LogKind {
     Firmware,
@@ -110,6 +119,8 @@ pub struct HwState {
     pub skipping: bool,
     pub stop_requested: bool,
     pub idle_trigger: bool,
+    /// Plot markers not yet picked up by the plot, which timestamps them.
+    pub markers: Vec<(MarkerKind, String)>,
     /// Behaviours code.py can be asked to run once, found by sim_runtime.py.
     pub behaviours: Vec<String>,
     /// A behaviour button click, waiting for code.py's event loop.
@@ -154,6 +165,7 @@ impl HwState {
             skipping: false,
             stop_requested: false,
             idle_trigger: false,
+            markers: Vec::new(),
             behaviours: Vec::new(),
             behaviour_request: None,
             behaviour_running: None,
@@ -207,6 +219,16 @@ impl HwState {
         self.skipping = false;
         self.clock.set_speed(1.0);
         self.push_line(format!("[sim] skip stopped: {reason}"));
+    }
+
+    pub fn mark(&mut self, kind: MarkerKind, label: impl Into<String>) {
+        self.markers.push((kind, label.into()));
+    }
+
+    /// Ends idle_attention's wait (from the toolbar, the I key or a scenario).
+    pub fn trigger_idle(&mut self) {
+        self.idle_trigger = true;
+        self.mark(MarkerKind::Idle, "idle");
     }
 
     /// Sets the clock speed, ending any skip.

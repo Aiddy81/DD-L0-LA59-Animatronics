@@ -8,11 +8,11 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Stroke};
 use bevy_egui::EguiContexts;
-use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text};
+use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine};
 
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
-use crate::hw::{hw, LogKind, LogLine};
+use crate::hw::{hw, LogKind, LogLine, MarkerKind};
 use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice};
@@ -92,20 +92,27 @@ pub fn file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Queues one reading `delta` g past the held value along `dir`.
-pub fn boop(dir: [f32; 3], delta: f32) {
+/// Queues one reading `delta` g past the held value along `dir`, and marks
+/// it on the plot.
+fn push_reading(dir: [f32; 3], delta: f32, label: String) {
     let mut s = hw();
     let held = s.accel_g;
     s.accel_pulses
         .push_back(std::array::from_fn(|i| held[i] + dir[i] * delta));
+    s.mark(MarkerKind::Motion, label);
+}
+
+/// A head click of any strength.
+pub fn boop(dir: [f32; 3], delta: f32) {
+    push_reading(dir, delta, format!("boop {delta:.1} g"));
 }
 
 pub fn nudge(dir: [f32; 3]) {
-    boop(dir, NUDGE_DELTA_G);
+    push_reading(dir, NUDGE_DELTA_G, "nudge".to_owned());
 }
 
 pub fn shake(dir: [f32; 3]) {
-    boop(dir, SHAKE_DELTA_G);
+    push_reading(dir, SHAKE_DELTA_G, "shake".to_owned());
 }
 
 /// Label of the axis direction that `dir` points closest to.
@@ -158,6 +165,7 @@ pub struct UiState {
     sim_toml_mtime: Option<SystemTime>,
     last_check: Instant,
     history: VecDeque<Sample>,
+    markers: VecDeque<Marker>,
     plot: PlotState,
     started: Instant,
     log_filter: String,
@@ -189,6 +197,13 @@ struct Sample {
     rest_z: f32,
 }
 
+/// An input or event drawn on the plot at the run time it happened.
+struct Marker {
+    t: f32,
+    kind: MarkerKind,
+    label: String,
+}
+
 impl UiState {
     pub fn new(
         code_mtime: Option<SystemTime>,
@@ -204,6 +219,7 @@ impl UiState {
             sim_toml_mtime,
             last_check: Instant::now(),
             history: VecDeque::new(),
+            markers: VecDeque::new(),
             plot: PlotState::new(prefs),
             started: Instant::now(),
             log_filter: String::new(),
@@ -372,10 +388,24 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
         return;
     }
     let t = ui.started.elapsed().as_secs_f32();
-    let (accel, rest_z) = {
-        let s = hw();
-        (s.last_accel, s.accel_g[2])
+    // Markers raised while paused wait until now, which is also when the
+    // firmware gets to act on them.
+    let (accel, rest_z, new_markers) = {
+        let mut s = hw();
+        (s.last_accel, s.accel_g[2], std::mem::take(&mut s.markers))
     };
+    ui.markers.extend(
+        new_markers
+            .into_iter()
+            .map(|(kind, label)| Marker { t, kind, label }),
+    );
+    while ui
+        .markers
+        .front()
+        .is_some_and(|m| t - m.t > HISTORY_SECONDS)
+    {
+        ui.markers.pop_front();
+    }
     let sample = Sample {
         t,
         wings: [
@@ -566,7 +596,7 @@ fn panels(
             host.0.start();
         }
         if i {
-            hw().idle_trigger = true;
+            hw().trigger_idle();
         }
     }
 
@@ -645,7 +675,7 @@ fn panels(
                 .on_hover_text("Ends the idle wait so attention_animation or trench_run runs (I)")
                 .clicked()
             {
-                hw().idle_trigger = true;
+                hw().trigger_idle();
             }
             row.separator();
             let mut strict = hw().strict;
@@ -906,7 +936,13 @@ fn panels(
                 .show(side, |side| {
                     let limits = AccelLimits::read(&ui.settings);
                     let state: &mut UiState = &mut ui;
-                    plot_panel(side, &mut state.plot, &state.history, &limits)
+                    plot_panel(
+                        side,
+                        &mut state.plot,
+                        &state.history,
+                        &state.markers,
+                        &limits,
+                    )
                 });
             ui.open_plot = plot_section.openness > 0.5;
 
@@ -1210,9 +1246,13 @@ struct PlotState {
     /// Reset or a double-click sets it again.
     following: bool,
     visible: [bool; SERIES.len()],
+    show_markers: bool,
     /// The x range the plot showed last frame.
     view_x: (f64, f64),
 }
+
+/// The name the Events checkbox is saved under in `plot_hidden`.
+const MARKERS_NAME: &str = "Events";
 
 impl PlotState {
     fn new(prefs: &Prefs) -> Self {
@@ -1222,16 +1262,53 @@ impl PlotState {
             frozen_at: None,
             following: true,
             visible: std::array::from_fn(|i| !prefs.plot_hidden.contains(&series_name(i))),
+            show_markers: !prefs.plot_hidden.iter().any(|n| n == MARKERS_NAME),
             view_x: (-f64::from(window_s), 0.0),
         }
     }
 
-    /// Names of the unticked series, for the preferences file.
+    /// Names of the unticked series (and Events), for the preferences file.
     fn hidden(&self) -> Vec<String> {
         (0..SERIES.len())
             .filter(|&i| !self.visible[i])
             .map(series_name)
+            .chain((!self.show_markers).then(|| MARKERS_NAME.to_owned()))
             .collect()
+    }
+}
+
+fn marker_style(kind: MarkerKind) -> (Color32, bool) {
+    match kind {
+        MarkerKind::Motion => (Color32::from_rgb(230, 200, 60), false),
+        MarkerKind::Sound => (Color32::from_rgb(190, 120, 240), false),
+        MarkerKind::Idle => (Color32::from_rgb(90, 210, 140), false),
+        MarkerKind::Restart => (Color32::GRAY, true),
+    }
+}
+
+/// A vertical line per marker in view; `labels` adds their names along the
+/// top edge (only the top band, so they aren't repeated three times).
+fn draw_markers(p: &mut egui_plot::PlotUi, markers: &[&Marker], labels: bool) {
+    let top_y = labels.then(|| p.plot_bounds().max()[1]);
+    for m in markers {
+        let (color, dashed) = marker_style(m.kind);
+        let x = f64::from(m.t);
+        let mut line = VLine::new(m.label.as_str(), x).color(color).width(1.0);
+        if dashed {
+            line = line.style(LineStyle::dashed_dense());
+        }
+        p.vline(line);
+        if let Some(y) = top_y {
+            p.text(
+                Text::new(
+                    m.label.as_str(),
+                    PlotPoint::new(x, y),
+                    egui::RichText::new(&m.label).small(),
+                )
+                .color(color)
+                .anchor(egui::Align2::LEFT_TOP),
+            );
+        }
     }
 }
 
@@ -1284,6 +1361,7 @@ fn plot_panel(
     ui: &mut egui::Ui,
     state: &mut PlotState,
     history: &VecDeque<Sample>,
+    markers: &VecDeque<Marker>,
     limits: &AccelLimits,
 ) {
     ui.horizontal_wrapped(|row| {
@@ -1318,6 +1396,10 @@ fn plot_panel(
         {
             state.following = true;
         }
+        row.checkbox(&mut state.show_markers, MARKERS_NAME)
+            .on_hover_text(
+            "Lines where a nudge, shake or boop, a sound, an idle trigger or a restart happened",
+        );
     });
     for group in GROUPS {
         ui.horizontal(|row| {
@@ -1351,6 +1433,14 @@ fn plot_panel(
         i1 += 1;
     }
     let shown: Vec<&Sample> = history.range(i0..i1.max(i0)).collect();
+    let in_view: Vec<&Marker> = if state.show_markers {
+        markers
+            .iter()
+            .filter(|m| (x0..=x1.min(end)).contains(&f64::from(m.t)))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let buckets = (ui.available_width() as usize).max(50);
 
     let clip = f64::from(limits.clip);
@@ -1367,6 +1457,7 @@ fn plot_panel(
         let following = state.following;
         let visible = state.visible;
         let shown = &shown;
+        let in_view = &in_view;
         let response = Plot::new(id)
             .height(110.0)
             .link_axis("sim_plot", [true, false])
@@ -1397,6 +1488,7 @@ fn plot_panel(
                 if band == Band::Accel {
                     accel_limits(p, limits, last.rest_z, x1);
                 }
+                draw_markers(p, in_view, n == 0);
                 p.response()
                     .hovered()
                     .then(|| p.pointer_coordinate())
