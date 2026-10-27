@@ -49,11 +49,18 @@ pub struct ScenarioStatus {
 pub struct FwState {
     /// Each `asyncio.Event` in hardware.py and whether it is set.
     pub events: Vec<(String, bool)>,
-    /// Each running task as its await chain, e.g. "motion_sense → nose_boops → sleep".
-    pub tasks: Vec<String>,
+    pub tasks: Vec<TaskState>,
     pub angry: Option<AngryWindow>,
     /// `None` while idle_attention isn't waiting (its animation is running).
     pub idle: Option<IdleWait>,
+}
+
+#[derive(Clone)]
+pub struct TaskState {
+    /// The await chain, e.g. "motion_sense → nose_boops → sleep".
+    pub chain: String,
+    /// Every number variable in the chain's firmware functions, as (name, value).
+    pub numbers: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy)]

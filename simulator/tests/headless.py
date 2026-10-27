@@ -212,7 +212,9 @@ def main():
     states = simhw.states
     events = {name: {s for _, evs, _, _, _ in states for n, s in evs if n == name}
               for name in ("pause_breathing", "reset_idle_event", "trench_active")}
-    tasks = {task.split(" → ")[0] for _, _, ts, _, _ in states for task in ts}
+    tasks = {chain.split(" → ")[0] for _, _, ts, _, _ in states for chain, _ in ts}
+    motion_numbers = {name for _, _, ts, _, _ in states for chain, numbers in ts
+                      if chain.startswith("motion_sense") for name, _ in numbers}
     angry = [(t, a) for t, _, _, a, _ in states if a]
     idle = [(t, i) for t, _, _, _, i in states if i]
     checks = [
@@ -249,6 +251,8 @@ def main():
         ("state panel sees pause_breathing set and clear", events["pause_breathing"] == {True, False}),
         ("state panel lists the background tasks",
          {"motion_sense", "ambient_breathing", "idle_attention", "random_led_scheduler"} <= tasks),
+        ("state panel shows a behaviour's number variables, including called functions'",
+         {"motion_count", "rest_z", "nose_boops.boops"} <= motion_numbers),
         ("state panel counts nudges in the angry window",
          any(a[0] >= 1 and a[1] > 0 for _, a in angry)),
         ("state panel angry window counts down", any(0 < a[2] - t <= a[3] for t, a in angry)),

@@ -423,7 +423,7 @@ class _State:
             chain = self._chain(task.get_coro())
             if not chain:
                 continue
-            tasks.append(" → ".join(name for name, _ in chain))
+            tasks.append((" → ".join(name for name, _ in chain), self._numbers(chain)))
             top_name, top_frame = chain[0]
             try:
                 if top_name == "motion_sense":
@@ -433,6 +433,27 @@ class _State:
             except (KeyError, TypeError, AttributeError):
                 pass
         simhw.set_state(events, sorted(tasks), angry, idle)
+
+    @staticmethod
+    def _numbers(chain):
+        """[(label, text)] for every int and float local in the chain's firmware
+        frames, so a new counter or timer shows up without a simulator change.
+        Locals of functions below the task's own are labelled "func.name"."""
+        numbers = []
+        for depth, (name, frame) in enumerate(chain):
+            if not _heap._is_firmware(frame.f_code.co_filename):
+                continue
+            for key, value in list(frame.f_locals.items()):
+                if key.startswith("_") or isinstance(value, bool):
+                    continue
+                if isinstance(value, int):
+                    text = str(value)
+                elif isinstance(value, float):
+                    text = "{:.2f}".format(value)
+                else:
+                    continue
+                numbers.append((key if depth == 0 else "{}.{}".format(name, key), text))
+        return numbers
 
     @staticmethod
     def _chain(coro):

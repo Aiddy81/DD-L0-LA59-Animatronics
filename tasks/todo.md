@@ -5,7 +5,8 @@ Branch: `feature/simulator-state-panel` (off `Documentation`).
 - [x] `sim_runtime.py`: `_State` snapshot at 10 Hz real time: hardware.py's `asyncio.Event`s, task await chains, `motion_sense`'s nudge count / angry window and the idle `_wait_for` deadline, read from coroutine frames; cleared when the run ends
 - [x] `hw.rs` / `pyhost.rs`: `FwState` + `simhw.set_state`
 - [x] `ui.rs` / `prefs.rs`: State section (event badges, two countdown bars, task list), open state saved
-- [x] `tests/simhw.py` + `headless.py`: 7 new state checks
+- [x] `tests/simhw.py` + `headless.py`: 8 new state checks
+- [x] Every int/float local in each task's firmware frames shown under the task (`func.name` for called functions), so new counters need no simulator change
 - [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
 - [x] `headless.py` passes: all 25 checks and 7 scenarios (firmware unchanged)
 - [x] README updated

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 
-use crate::hw::{hw, AngryWindow, AudioCmd, FwState, IdleWait, ScenarioStatus};
+use crate::hw::{hw, AngryWindow, AudioCmd, FwState, IdleWait, ScenarioStatus, TaskState};
 
 /// Hardware stand-ins, compiled into the exe so it runs on its own. Shims in
 /// `dist\shims\` override these or add new ones; sim_runtime.py reads that
@@ -180,18 +180,22 @@ mod simhw {
         hw().behaviour_running = (!name.is_empty()).then(|| name.to_owned());
     }
 
-    /// A State panel snapshot: `angry` is (count, needed, deadline, length),
-    /// `idle` is (deadline, length), each `None` when it can't be read.
+    /// A State panel snapshot: each task is (await chain, [(name, value)]),
+    /// `angry` is (count, needed, deadline, length), `idle` is (deadline,
+    /// length), each `None` when it can't be read.
     #[pyfunction]
     fn set_state(
         events: Vec<(String, bool)>,
-        tasks: Vec<String>,
+        tasks: Vec<(String, Vec<(String, String)>)>,
         angry: Option<(u32, u32, f64, f64)>,
         idle: Option<(f64, f64)>,
     ) {
         hw().fw_state = FwState {
             events,
-            tasks,
+            tasks: tasks
+                .into_iter()
+                .map(|(chain, numbers)| TaskState { chain, numbers })
+                .collect(),
             angry: angry.map(|(count, needed, deadline, length)| AngryWindow {
                 count,
                 needed,

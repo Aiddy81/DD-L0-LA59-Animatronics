@@ -1196,8 +1196,19 @@ fn state_panel(ui: &mut egui::Ui) {
         }
     }
 
-    for task in &state.tasks {
-        ui.label(egui::RichText::new(task).monospace().small());
+    for (i, task) in state.tasks.iter().enumerate() {
+        ui.label(egui::RichText::new(&task.chain).monospace().small());
+        if !task.numbers.is_empty() {
+            let numbers: Vec<String> = task
+                .numbers
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            ui.indent(("task_numbers", i), |vars| {
+                vars.label(egui::RichText::new(numbers.join("  ")).small().weak())
+                    .on_hover_text("Every number variable in this task's firmware functions");
+            });
+        }
     }
 }
 
