@@ -294,6 +294,7 @@ class _ScaledSelector(selectors.SelectSelector):
         _heap.sample()
         _behaviours.poll(self.loop)
         _scenario.poll()
+        _state.poll(self.loop)
         return super().select(0)
 
 
@@ -394,6 +395,106 @@ class _Behaviours:
 
 
 _behaviours = _Behaviours()
+
+
+class _State:
+    """The UI's State panel: hardware.py's events, the running tasks, and the
+    nudge count and idle timer that motion_sense and idle_attention keep in
+    local variables. Read from the suspended coroutines' frames, so the
+    firmware needs no changes; a renamed local just blanks its row. Times are
+    sent as virtual-time deadlines so the UI counts down between snapshots."""
+
+    _PERIOD_S = 0.1  # real seconds between snapshots
+
+    def __init__(self):
+        self._last = 0.0
+
+    def poll(self, loop):
+        now = _real_time.monotonic()
+        if now - self._last < self._PERIOD_S:
+            return
+        self._last = now
+        events, tasks, angry, idle = [], [], None, None
+        hardware = sys.modules.get("hardware")
+        for name, obj in sorted(vars(hardware).items()) if hardware else ():
+            if isinstance(obj, asyncio.Event):
+                events.append((name, obj.is_set()))
+        for task in asyncio.all_tasks(loop):
+            chain = self._chain(task.get_coro())
+            if not chain:
+                continue
+            tasks.append((" → ".join(name for name, _ in chain), self._numbers(chain)))
+            top_name, top_frame = chain[0]
+            try:
+                if top_name == "motion_sense":
+                    angry = self._angry(top_frame.f_locals)
+                elif top_name == "idle_attention":
+                    idle = self._idle(chain)
+            except (KeyError, TypeError, AttributeError):
+                pass
+        simhw.set_state(events, sorted(tasks), angry, idle)
+
+    @staticmethod
+    def _numbers(chain):
+        """[(label, text)] for every int and float local in the chain's firmware
+        frames, so a new counter or timer shows up without a simulator change.
+        Locals of functions below the task's own are labelled "func.name"."""
+        numbers = []
+        for depth, (name, frame) in enumerate(chain):
+            if not _heap._is_firmware(frame.f_code.co_filename):
+                continue
+            for key, value in list(frame.f_locals.items()):
+                if key.startswith("_") or isinstance(value, bool):
+                    continue
+                if isinstance(value, int):
+                    text = str(value)
+                elif isinstance(value, float):
+                    text = "{:.2f}".format(value)
+                else:
+                    continue
+                numbers.append((key if depth == 0 else "{}.{}".format(name, key), text))
+        return numbers
+
+    @staticmethod
+    def _chain(coro):
+        """[(name, frame)] from the task's coroutine down to what it's awaiting,
+        stopping after the first coroutine outside the firmware (asyncio.sleep,
+        wait_for) so asyncio's own internals stay out of the list. Tasks that
+        asyncio starts for itself (wait_for's inner wait) give []."""
+        code = getattr(coro, "cr_code", None)
+        if code is None or not (code is _Behaviours._run.__code__
+                                or _heap._is_firmware(code.co_filename)):
+            return []
+        chain = []
+        while coro is not None and getattr(coro, "cr_frame", None) is not None:
+            code = coro.cr_code
+            if code is _Behaviours._run.__code__:
+                chain.append(("[button]", coro.cr_frame))
+            else:
+                chain.append((code.co_name.lstrip("_"), coro.cr_frame))
+                if len(chain) > 1 and not _heap._is_firmware(code.co_filename):
+                    break
+            coro = coro.cr_await
+        if chain and chain[0][0] == "[button]" and len(chain) > 1:
+            chain[0:2] = [("[button] " + chain[1][0], chain[1][1])]
+        return chain
+
+    @staticmethod
+    def _angry(local):
+        needed = getattr(sys.modules.get("config"), "ANGRY_NUDGES", 0)
+        length = float(local["angry_window_length"])
+        deadline = float(local["angry_window_start"]) + length
+        return (int(local["motion_count"]), int(needed), deadline, length)
+
+    @staticmethod
+    def _idle(chain):
+        for _, frame in chain:
+            if frame.f_code is _wait_for.__code__:
+                return (float(frame.f_locals["deadline"]), float(frame.f_locals["timeout"]))
+        return None
+
+
+_state = _State()
 
 
 # Duty at which an eye channel is at full brightness: set_pulse_width_range(0,
@@ -1058,6 +1159,7 @@ def run(code_path, shims, shim_dir=None, scenario=None):
         _behaviours.start(set())
         simhw.set_behaviours([])
         simhw.set_behaviour_running("")
+        simhw.set_state([], [], None, None)
         asyncio.wait_for = _original_wait_for
         asyncio.set_event_loop_policy(saved["policy"])
         if saved["time"] is not None:

@@ -43,6 +43,40 @@ pub struct ScenarioStatus {
     pub results: Vec<(String, String)>,
 }
 
+/// What code.py's behaviours are doing, read by sim_runtime.py from
+/// hardware.py and the running coroutines. Deadlines are in virtual seconds.
+#[derive(Clone, Default)]
+pub struct FwState {
+    /// Each `asyncio.Event` in hardware.py and whether it is set.
+    pub events: Vec<(String, bool)>,
+    pub tasks: Vec<TaskState>,
+    pub angry: Option<AngryWindow>,
+    /// `None` while idle_attention isn't waiting (its animation is running).
+    pub idle: Option<IdleWait>,
+}
+
+#[derive(Clone)]
+pub struct TaskState {
+    /// The await chain, e.g. "motion_sense → nose_boops → sleep".
+    pub chain: String,
+    /// Every number variable in the chain's firmware functions, as (name, value).
+    pub numbers: Vec<(String, String)>,
+}
+
+#[derive(Clone, Copy)]
+pub struct AngryWindow {
+    pub count: u32,
+    pub needed: u32,
+    pub deadline: f64,
+    pub length: f64,
+}
+
+#[derive(Clone, Copy)]
+pub struct IdleWait {
+    pub deadline: f64,
+    pub length: f64,
+}
+
 pub struct HwState {
     /// 16-bit duty cycle per PCA9685 channel, `None` until first written.
     pub pca_duty: [Option<u16>; 16],
@@ -75,6 +109,7 @@ pub struct HwState {
     pub behaviour_running: Option<String>,
     /// The scenario this run is playing, if any.
     pub scenario: Option<ScenarioStatus>,
+    pub fw_state: FwState,
     /// Hold code.py to what CircuitPython 9 offers (imports, APIs, float precision).
     pub strict: bool,
     /// Make hardware calls take as long as on the robot.
@@ -111,6 +146,7 @@ impl HwState {
             behaviour_request: None,
             behaviour_running: None,
             scenario: None,
+            fw_state: FwState::default(),
             strict: true,
             board_speed: true,
             board: BoardCfg::default(),
