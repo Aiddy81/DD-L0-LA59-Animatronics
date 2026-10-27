@@ -1871,6 +1871,7 @@ dependencies = [
  "pyo3",
  "serde",
  "toml",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

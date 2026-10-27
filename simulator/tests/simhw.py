@@ -20,6 +20,7 @@ white = [0]
 audio = []
 looped_audio = []  # (time, name) of sounds started on a loop
 audio_stops = []   # times stop_audio() was called
+mixer_formats = []  # (rate, channels, bits, signed) of each Mixer created
 log_lines = []
 heap_peak = [0.0]
 unsimulated_libs = []
@@ -180,6 +181,10 @@ def play_wav(path, level, looped):
     audio.append((round(now(), 1), name))
     if looped:
         looped_audio.append((round(now(), 1), name))
+
+
+def mixer_format(rate, channels, bits, signed):
+    mixer_formats.append((rate, channels, bits, signed))
 
 
 def stop_audio():

@@ -34,6 +34,11 @@ pub struct Prefs {
     pub open_plot: bool,
     pub open_settings: bool,
     pub open_state: bool,
+    pub open_audio: bool,
+    /// The simulator's output volume (0..1) and mute; the firmware's own
+    /// mixer level still applies on top.
+    pub volume: f32,
+    pub muted: bool,
     pub show_firmware: bool,
     pub show_sim: bool,
     /// The plot's time window, in seconds.
@@ -62,6 +67,9 @@ impl Default for Prefs {
             open_plot: true,
             open_settings: true,
             open_state: true,
+            open_audio: false,
+            volume: 1.0,
+            muted: false,
             show_firmware: true,
             show_sim: true,
             plot_window_s: 20.0,

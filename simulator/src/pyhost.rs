@@ -10,6 +10,7 @@ use pyo3::types::{PyDict, PyModule};
 use crate::hw::{
     hw, AngryWindow, AudioCmd, FwState, IdleWait, MarkerKind, ScenarioStatus, TaskState,
 };
+use crate::wav::MixerFormat;
 
 /// Hardware stand-ins, compiled into the exe so it runs on its own. Shims in
 /// `dist\shims\` override these or add new ones; sim_runtime.py reads that
@@ -105,6 +106,16 @@ mod simhw {
             path,
             level,
             looped,
+        });
+    }
+
+    #[pyfunction]
+    fn mixer_format(rate: u32, channels: u16, bits: u16, signed: bool) {
+        hw().mixer = Some(MixerFormat {
+            rate,
+            channels,
+            bits,
+            signed,
         });
     }
 

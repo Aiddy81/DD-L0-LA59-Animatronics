@@ -71,15 +71,16 @@ def stage_firmware(code_path, workdir):
     for source in sources:
         with open(source, encoding="utf-8") as f:
             referenced |= set(re.findall(r'"([\w.-]+\.wav)"', f.read()))
-    # Silent stand-ins for any sound not on disk (all of them in CI).
+    # Silent stand-ins for any sound not on disk (all of them in CI), in the
+    # mixer's format: stereo, as the mixer rejects any other.
     for name in sorted(referenced | set(DEFAULT_SOUNDS)):
         if os.path.exists(os.path.join(sounds, name)):
             continue
         with wave.open(os.path.join(sounds, name), "wb") as w:
-            w.setnchannels(1)
+            w.setnchannels(2)
             w.setsampwidth(2)
             w.setframerate(22050)
-            w.writeframes(b"\x00\x00" * 2205)
+            w.writeframes(b"\x00\x00\x00\x00" * 2205)
 
 
 def led_bursts(times, gap=0.5):
@@ -144,6 +145,40 @@ def blocking_task_holds(simhw, sim_runtime):
         return list(simhw.task_holds)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+class FakeSample:
+    """Just what Mixer checks on a sample, plus the duration and path it plays."""
+
+    def __init__(self, sample_rate=22050, channel_count=2, bits_per_sample=16, signed=True):
+        self.sample_rate = sample_rate
+        self.channel_count = channel_count
+        self.bits_per_sample = bits_per_sample
+        self._signed = signed
+        self.duration = 1.0
+        self.path = None
+
+
+def mixer_rejection(simhw):
+    """Plays samples through the audiomixer shim with a 22050 Hz stereo 16-bit
+    mixer. Returns the ValueError message for each mismatched sample (None if
+    it was accepted), and whether the Mixer reported its format."""
+    import audiomixer
+
+    mixer = audiomixer.Mixer(voice_count=1, sample_rate=22050, channel_count=2,
+                             bits_per_sample=16, samples_signed=True)
+    messages = {}
+    for what, sample in (("rate", FakeSample(sample_rate=44100)),
+                         ("channels", FakeSample(channel_count=1)),
+                         ("bits", FakeSample(bits_per_sample=8, signed=True)),
+                         ("signed", FakeSample(signed=False))):
+        try:
+            mixer.voice[0].play(sample)
+            messages[what] = None
+        except ValueError as e:
+            messages[what] = str(e)
+    mixer.voice[0].play(FakeSample())
+    return messages, simhw.mixer_formats[-1] == (22050, 2, 16, True)
 
 
 def run_scenarios(code_path, names, sim_cfg, simhw, sim_runtime):
@@ -299,6 +334,18 @@ def main():
     blocker_holds = blocking_task_holds(simhw, sim_runtime)
     checks.append(("a blocking time.sleep(0.2) is timed against its task",
                    any(name == "blocker" and 0.15 < secs < 0.3 for name, secs in blocker_holds)))
+    rejected, mixer_reported = mixer_rejection(simhw)
+    checks += [
+        ("mixer reports its format to the simulator", mixer_reported),
+        ("a sample with another rate is rejected",
+         rejected["rate"] == "The sample's sample_rate does not match"),
+        ("a sample with another channel count is rejected",
+         rejected["channels"] == "The sample's channel_count does not match"),
+        ("a sample with another bit depth is rejected",
+         rejected["bits"] == "The sample's bits_per_sample does not match"),
+        ("a sample with other signedness is rejected",
+         rejected["signed"] == "The sample's signedness does not match"),
+    ]
     print("Audio played: {}".format(simhw.audio))
     print("LED bursts: {}".format(["{:.1f}-{:.1f}s".format(a, b) for a, b in bursts]))
     print("Heap peak ~{:.0f} KB of {:.0f} KB".format(simhw.heap_peak[0] / 1024, simhw.HEAP_BUDGET / 1024))
