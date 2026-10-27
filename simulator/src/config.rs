@@ -66,13 +66,16 @@ impl Default for BoardCfg {
     }
 }
 
-/// The physical servo: which pulse widths it maps onto its travel.
+/// The physical servo: which pulse widths it maps onto its travel, and how
+/// fast it can get there.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct ServoCfg {
     pub min_pulse_us: f32,
     pub max_pulse_us: f32,
     pub range_deg: f32,
+    /// Rated speed: seconds to turn 60 degrees. 0 or less means instant.
+    pub sec_per_60deg: f32,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -136,6 +139,7 @@ impl Default for ServoCfg {
             min_pulse_us: 544.0,
             max_pulse_us: 2400.0,
             range_deg: 180.0,
+            sec_per_60deg: 0.12,
         }
     }
 }
@@ -160,6 +164,11 @@ impl ServoCfg {
     pub fn angle_for_pulse(&self, pulse_us: f32) -> f32 {
         let span = (self.max_pulse_us - self.min_pulse_us).max(1.0);
         ((pulse_us - self.min_pulse_us) / span * self.range_deg).clamp(0.0, self.range_deg)
+    }
+
+    /// Fastest the servo can turn, in degrees per second; `None` = instant.
+    pub fn max_speed_dps(&self) -> Option<f32> {
+        (self.sec_per_60deg > 0.0).then(|| 60.0 / self.sec_per_60deg)
     }
 }
 

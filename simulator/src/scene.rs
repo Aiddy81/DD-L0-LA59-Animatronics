@@ -20,6 +20,76 @@ pub enum Side {
     Left,
 }
 
+impl Side {
+    const BOTH: [Side; 2] = [Side::Right, Side::Left];
+
+    fn index(self) -> usize {
+        match self {
+            Side::Right => 0,
+            Side::Left => 1,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Side::Right => "right",
+            Side::Left => "left",
+        }
+    }
+}
+
+/// A lag smaller than this (servo degrees) counts as keeping up.
+const LAG_WARN_DEG: f32 = 10.0;
+/// How long (virtual seconds) the lag must last to be worth a warning. One
+/// snap across the servo's whole travel catches up sooner than this.
+const LAG_SUSTAIN_S: f64 = 0.4;
+
+/// Moves `actual` toward `target` by at most `max_step` degrees.
+fn slew(actual: f32, target: f32, max_step: f32) -> f32 {
+    actual + (target - actual).clamp(-max_step, max_step)
+}
+
+/// Where one physical servo is, as opposed to where code.py told it to go.
+#[derive(Default)]
+struct ServoTrack {
+    /// Servo degrees; `None` until the first command (it then starts there).
+    actual: Option<f32>,
+    /// Virtual time the current lag began.
+    lag_since: Option<f64>,
+    warned: bool,
+}
+
+impl ServoTrack {
+    /// Follows `target` for one frame. Returns how far behind it is and for
+    /// how long, once per stretch of falling more than LAG_WARN_DEG behind
+    /// for longer than LAG_SUSTAIN_S.
+    fn follow(&mut self, target: f32, max_step: f32, now: f64) -> Option<(f32, f64)> {
+        let actual = self.actual.map_or(target, |a| slew(a, target, max_step));
+        self.actual = Some(actual);
+        let lag = (target - actual).abs();
+        if lag <= LAG_WARN_DEG {
+            self.lag_since = None;
+            self.warned = false;
+            return None;
+        }
+        let behind_s = now - *self.lag_since.get_or_insert(now);
+        if self.warned || behind_s < LAG_SUSTAIN_S {
+            return None;
+        }
+        self.warned = true;
+        Some((lag, behind_s))
+    }
+}
+
+/// The wing servos' real positions, turning no faster than `[servo]
+/// sec_per_60deg` in virtual time: a pause freezes a move part-way, and at
+/// high clock speeds the servo gets that much robot time to catch up.
+#[derive(Resource, Default)]
+pub struct ServoSlew {
+    tracks: [ServoTrack; 2],
+    last_now: Option<f64>,
+}
+
 #[derive(Component)]
 pub struct Wing {
     pub side: Side,
@@ -124,6 +194,7 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DragDistance>()
+            .init_resource::<ServoSlew>()
             .insert_resource(AmbientLight {
                 color: Color::WHITE,
                 brightness: 250.0,
@@ -136,7 +207,7 @@ impl Plugin for ScenePlugin {
                     spawn_model.run_if(resource_changed::<ModelChoice>),
                     bind_gltf_nodes,
                     adopt_glow_materials,
-                    drive_wings,
+                    (slew_servos, drive_wings).chain(),
                     drive_glow,
                     orbit_camera,
                 ),
@@ -329,29 +400,72 @@ fn adopt_glow_materials(
     }
 }
 
-fn wing_angle(cfg: &SimConfig, side: Side) -> Option<f32> {
-    let wing = if side == Side::Right {
+fn wing_cfg(cfg: &SimConfig, side: Side) -> &crate::config::WingCfg {
+    if side == Side::Right {
         &cfg.wing_right
     } else {
         &cfg.wing_left
-    };
-    let pulse = hw().pulse_us(wing.channel)?;
-    if pulse <= 0.0 {
-        return None; // unpowered servo: leave the wing where it is
     }
-    Some(wing.elevation_deg(cfg.servo.angle_for_pulse(pulse)))
 }
 
-fn drive_wings(cfg: Res<SimConfig>, mut wings: Query<(&Wing, &mut Transform)>) {
+/// The servo angle code.py is asking for; `None` while the servo is unpowered.
+fn commanded_angle(cfg: &SimConfig, side: Side) -> Option<f32> {
+    let pulse = hw().pulse_us(wing_cfg(cfg, side).channel)?;
+    (pulse > 0.0).then(|| cfg.servo.angle_for_pulse(pulse))
+}
+
+/// Moves each servo toward its command at the servo's rated speed and warns
+/// when code.py keeps asking for more than that. Tracked even with the
+/// toolbar's limit off, so the warning still shows.
+fn slew_servos(cfg: Res<SimConfig>, mut slew: ResMut<ServoSlew>) {
+    let now = hw().clock.now();
+    let last = slew.last_now.replace(now).unwrap_or(now);
+    if now < last {
+        // A restart reset the clock. The servos stay where they physically
+        // were; only the lag timing starts over.
+        for track in &mut slew.tracks {
+            track.lag_since = None;
+            track.warned = false;
+        }
+    }
+    let dt = (now - last).max(0.0) as f32;
+    let max_step = cfg
+        .servo
+        .max_speed_dps()
+        .map_or(f32::INFINITY, |dps| dps * dt);
+    for side in Side::BOTH {
+        let Some(target) = commanded_angle(&cfg, side) else {
+            continue; // unpowered: the servo stays put
+        };
+        let track = &mut slew.tracks[side.index()];
+        if let Some((lag, behind_s)) = track.follow(target, max_step, now) {
+            let at = track.actual.unwrap_or(target);
+            hw().push_line(format!(
+                "[sim] {} wing servo can't keep up: asked for {target:.0}\u{b0}, still at {at:.0}\u{b0} ({lag:.0}\u{b0} behind for {behind_s:.1} s); it turns 60\u{b0} in {} s",
+                side.name(),
+                cfg.servo.sec_per_60deg
+            ));
+        }
+    }
+}
+
+fn drive_wings(
+    cfg: Res<SimConfig>,
+    slew: Res<ServoSlew>,
+    mut wings: Query<(&Wing, &mut Transform)>,
+) {
+    let limited = hw().servo_speed;
     for (wing, mut transform) in &mut wings {
-        let Some(elevation) = wing_angle(&cfg, wing.side) else {
-            continue;
-        };
-        let wing_cfg = if wing.side == Side::Right {
-            &cfg.wing_right
+        let servo = if limited {
+            slew.tracks[wing.side.index()].actual
         } else {
-            &cfg.wing_left
+            commanded_angle(&cfg, wing.side)
         };
+        let Some(servo) = servo else {
+            continue; // unpowered: leave the wing where it is
+        };
+        let wing_cfg = wing_cfg(&cfg, wing.side);
+        let elevation = wing_cfg.elevation_deg(servo);
         let axis = wing.axis.unwrap_or_else(|| {
             Vec3::from(wing_cfg.hinge_axis)
                 .try_normalize()
@@ -477,4 +591,82 @@ fn apply_view(cam: &mut OrbitCam, view: CameraView, eye_focus: Vec3) {
         },
         CameraView::Reset => OrbitCam::home(),
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FS90: 60 degrees in 0.12 s.
+    const DPS: f32 = 500.0;
+    const FRAME_S: f64 = 1.0 / 60.0;
+
+    /// Feeds `target` for `frames` frames from `t0`; returns the warnings.
+    fn run(track: &mut ServoTrack, target: f32, frames: usize, t0: f64) -> Vec<(f32, f64)> {
+        (1..=frames)
+            .filter_map(|i| {
+                let now = t0 + i as f64 * FRAME_S;
+                track.follow(target, DPS * FRAME_S as f32, now)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn slew_limits_both_directions() {
+        assert_eq!(slew(50.0, 90.0, 10.0), 60.0);
+        assert_eq!(slew(90.0, 50.0, 10.0), 80.0);
+        assert_eq!(slew(50.0, 55.0, 10.0), 55.0);
+        assert_eq!(slew(50.0, 90.0, f32::INFINITY), 90.0);
+        assert_eq!(slew(50.0, 90.0, 0.0), 50.0);
+    }
+
+    #[test]
+    fn first_command_starts_there() {
+        let mut track = ServoTrack::default();
+        assert!(track.follow(120.0, 0.0, 0.0).is_none());
+        assert_eq!(track.actual, Some(120.0));
+    }
+
+    #[test]
+    fn full_travel_snap_does_not_warn() {
+        let mut track = ServoTrack::default();
+        track.follow(0.0, 0.0, 0.0);
+        assert!(run(&mut track, 180.0, 60, 0.0).is_empty());
+        assert_eq!(track.actual, Some(180.0));
+    }
+
+    #[test]
+    fn sustained_lag_warns_once() {
+        // Command a move the servo can't finish: actual held back by a
+        // much slower servo (60 degrees in 2 s).
+        let mut track = ServoTrack::default();
+        track.follow(0.0, 0.0, 0.0);
+        let slow = 30.0 * FRAME_S as f32;
+        let warnings: Vec<_> = (1..=60)
+            .filter_map(|i| track.follow(90.0, slow, i as f64 * FRAME_S))
+            .collect();
+        assert_eq!(warnings.len(), 1);
+        let (lag, behind_s) = warnings[0];
+        assert!(lag > LAG_WARN_DEG);
+        assert!(behind_s >= LAG_SUSTAIN_S);
+    }
+
+    #[test]
+    fn catching_up_allows_a_new_warning() {
+        let mut track = ServoTrack::default();
+        track.follow(0.0, 0.0, 0.0);
+        let slow = 30.0 * FRAME_S as f32;
+        let first = (1..=60)
+            .filter_map(|i| track.follow(90.0, slow, i as f64 * FRAME_S))
+            .count();
+        assert_eq!(first, 1);
+        // Let it arrive, then lag again.
+        let arrived = track.actual.unwrap_or(0.0);
+        assert!(run(&mut track, arrived, 1, 1.0).is_empty());
+        assert!(track.lag_since.is_none() && !track.warned);
+        let again = (1..=60)
+            .filter_map(|i| track.follow(0.0, slow, 2.0 + i as f64 * FRAME_S))
+            .count();
+        assert_eq!(again, 1);
+    }
 }

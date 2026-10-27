@@ -112,6 +112,7 @@ fn main() {
         let mut s = hw();
         s.strict = prefs.strict;
         s.board_speed = prefs.board_speed;
+        s.servo_speed = prefs.servo_speed;
     }
 
     pyhost::init_python();

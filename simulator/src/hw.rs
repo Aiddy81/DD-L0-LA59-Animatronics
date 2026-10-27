@@ -134,6 +134,8 @@ pub struct HwState {
     pub strict: bool,
     /// Make hardware calls take as long as on the robot.
     pub board_speed: bool,
+    /// Turn the 3D wings no faster than the real servo (`[servo]` in sim.toml).
+    pub servo_speed: bool,
     pub board: BoardCfg,
     /// Board time owed but not yet slept, in virtual seconds.
     debt_s: f64,
@@ -173,6 +175,7 @@ impl HwState {
             fw_state: FwState::default(),
             strict: true,
             board_speed: true,
+            servo_speed: true,
             board: BoardCfg::default(),
             debt_s: 0.0,
             heap_bytes: 0.0,
@@ -191,6 +194,7 @@ impl HwState {
         let speed = if self.skipping { 1.0 } else { self.clock.speed };
         let strict = self.strict;
         let board_speed = self.board_speed;
+        let servo_speed = self.servo_speed;
         let board = self.board.clone();
         let log = std::mem::take(&mut self.log);
         *self = Self::new();
@@ -199,6 +203,7 @@ impl HwState {
         self.clock.speed = speed;
         self.strict = strict;
         self.board_speed = board_speed;
+        self.servo_speed = servo_speed;
         self.board = board;
         self.log = log;
     }

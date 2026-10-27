@@ -280,9 +280,9 @@ fn save_prefs(
         .ok()
         .filter(|&(w, h)| w >= MIN_SAVED_WINDOW && h >= MIN_SAVED_WINDOW)
         .unwrap_or((saved.window_width, saved.window_height));
-    let (strict, board_speed) = {
+    let (strict, board_speed, servo_speed) = {
         let s = hw();
-        (s.strict, s.board_speed)
+        (s.strict, s.board_speed, s.servo_speed)
     };
     let current = Prefs {
         window_width: width,
@@ -292,6 +292,7 @@ fn save_prefs(
         model_gltf: model.map(|m| m.use_gltf).or(saved.model_gltf),
         strict,
         board_speed,
+        servo_speed,
         auto_reload: ui.auto_reload,
         open_motion: ui.open_motion,
         open_pca: ui.open_pca,
@@ -693,6 +694,14 @@ fn panels(
                 .changed()
             {
                 hw().board_speed = board_speed;
+            }
+            let mut servo_speed = hw().servo_speed;
+            if row
+                .checkbox(&mut servo_speed, "Servo speed limit")
+                .on_hover_text("The 3D wings turn no faster than the real servo (sec_per_60deg in sim.toml [servo]). The log warns about moves it can't follow either way.")
+                .changed()
+            {
+                hw().servo_speed = servo_speed;
             }
             row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved")
                 .on_hover_text("Also when a shim in dist\\shims\\ is added, saved or deleted.");

@@ -1,11 +1,15 @@
 # How the simulator maps PCA9685 outputs onto the 3D droid.
 # Saved changes apply live, except [model] kind (start-up only).
 
-# The physical wing servos: pulse width range that covers their full travel.
+# The physical wing servos (FEETECH FS90): pulse width range that covers their
+# full travel, and their rated speed. With "Servo speed limit" on (toolbar) the
+# 3D wings turn no faster than this; either way the log warns when code.py asks
+# for faster moves than the servo can follow. 0 = instant.
 [servo]
 min_pulse_us = 544
 max_pulse_us = 2400
 range_deg = 180
+sec_per_60deg = 0.12    # FS90 at 4.8 V (0.10 at 6 V)
 
 # The wings are the two rear white panels. Each hinges along its front edge
 # (the Y-shaped groove), so the back of the panel lifts. hinge_axis below is

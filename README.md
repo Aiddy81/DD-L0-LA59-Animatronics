@@ -15,7 +15,7 @@ This project implements interactive animatronic behaviors for a custom device us
 ## Hardware Requirements
 - Adafruit PropMaker Feather (with I2C, PWM, and I2S support, accelerometer, audio amplifier) - [https://www.adafruit.com/product/5768](https://www.adafruit.com/product/5768)
 - 8-Channel PWM or Servo FeatherWing Add-on For All Feather Boards (for servos and LEDs) - [https://www.adafruit.com/product/2928](https://www.adafruit.com/product/2928)
-- Servos (x2, for wing movement)
+- FEETECH FS90 9 g micro servos, 180°, 1.5 kg·cm (x2, for wing movement)
 - RGB LEDs (main and small "eyes"))
 
 ## File Structure
@@ -139,6 +139,7 @@ The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and 
 The RP2040 is much slower than a PC and has far less memory, so the simulator models both:
 
 - **Board speed** (toolbar, on by default): every servo/LED write, accelerometer read and scheduler pass takes as long as it does on the robot. So an animation runs at the speed the robot will really manage, not just the speed the code asks for.
+- **Servo speed limit** (toolbar, on by default): the 3D wings turn no faster than the real servo, set by `sec_per_60deg` in `sim.toml` `[servo]` (0.12 s per 60° for the FS90 at 4.8 V). The time is the firmware's clock, so *Pause* stops a wing part-way through a move. Whether it's on or off, the log warns (`[sim] … wing servo can't keep up`) when the firmware's command stays more than 10° ahead of where the servo can be for over 0.4 s. That means the animation will look slower or fall short on the robot. A single snap, even across the full travel, catches up before then. The plot and the PCA9685 panel still show the angle the firmware asked for.
 - **Heap gauge** (Board panel): an estimate of how much of the board's free memory the firmware (`code.py` and its modules, bytecode included) uses. It warns in the log at 80% and 100%. `gc.mem_free()` and `gc.mem_alloc()` return the estimate too. It's approximate: it catches "this clearly won't fit", not the last few KB.
 - **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel. To make it do something, write a shim for it (see [Custom shims](#custom-shims)).
 
@@ -215,7 +216,7 @@ There are two models, switchable live with **Model** in the toolbar (`[model] ki
   `simulator/assets/src/lola.blend` is the same model as an editable Blender file, with modifiers still live and a camera and lights. It's generated too: add its path as a second argument after `droid.glb` to regenerate it. If you edit the `.blend` by hand, export it to `droid.glb` with *+Y Up* and *Apply Modifiers* ticked, keeping the node names above. The script's output would overwrite those hand edits.
 - **Primitive**: the simple built-in version (`simulator/src/droid.rs`), always available.
 
-Any model can drive the simulator if it has nodes named `wing_right` and `wing_left` (the rear white panels, each with its origin on its hinge line; on Lola that is the front edge of the panel), plus `eye_main`, `eye_small` and `led_white` (the lenses). The meshes inside them must have different names. `simulator/sim.toml` sets how servo angles map onto panel rotation: neutral angle, direction, linkage gain, travel limits and hinge axis per wing.
+Any model can drive the simulator if it has nodes named `wing_right` and `wing_left` (the rear white panels, each with its origin on its hinge line; on Lola that is the front edge of the panel), plus `eye_main`, `eye_small` and `led_white` (the lenses). The meshes inside them must have different names. `simulator/sim.toml` sets how servo angles map onto panel rotation: neutral angle, direction, linkage gain, travel limits and hinge axis per wing. Its `[servo]` section also sets the servos' pulse range and speed.
 
 ## License
 
