@@ -1,3 +1,16 @@
+# Simulator UI polish (#50, #52, #56, #59)
+
+Branch: `feature/simulator-ui-polish` (off `Documentation`). One commit per issue, one PR.
+
+- [ ] #50 PCA9685 grid: servo angle for ch 0/1, colour swatch per eye
+- [ ] #52 Log: search, Firmware / [sim] toggles, red tracebacks, Clear / Copy / Save
+- [ ] #56 Camera views (Front, Side, Top, Eyes, Reset), Screenshot, Record frames
+- [ ] #59 Collapsible sections, saved prefs (`ddl0-sim.prefs.toml` next to the exe), shortcuts, Pause
+- [ ] `build.ps1` succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [ ] Headless test passes
+- [ ] Interactive scenario checks (boot, breathing, boop, angry, attention) and each new control
+- [ ] README updated
+
 # Trench run idle animation (Top Gun: Maverick)
 
 Branch: `feature/trench-run` (off `Documentation`).

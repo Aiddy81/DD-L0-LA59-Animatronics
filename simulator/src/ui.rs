@@ -104,6 +104,54 @@ fn servo_angle(cfg: &SimConfig, channel: usize) -> Option<f32> {
     (pulse > 0.0).then(|| cfg.servo.angle_for_pulse(pulse))
 }
 
+/// Duty at which an eye channel is at full brightness: set_pulse_width_range(0, 6550)
+/// at 50 Hz is a 20 000 us period, so the channel never usefully exceeds 32.75%.
+const EYE_PEAK_DUTY: f32 = 6550.0 / 20_000.0;
+
+/// What the "view" column of the PCA9685 grid shows for one channel.
+enum ChannelView {
+    Angle(Option<f32>),
+    Eye(Vec3),
+    Blank,
+}
+
+/// Picks the readout for a channel. Locks hw() via the helpers, so call it
+/// while no hw() guard is held.
+fn channel_view(cfg: &SimConfig, ch: usize) -> ChannelView {
+    if ch == cfg.wing_right.channel || ch == cfg.wing_left.channel {
+        ChannelView::Angle(servo_angle(cfg, ch))
+    } else if ch == cfg.eyes.main[0] {
+        ChannelView::Eye(glow_rgb(cfg, GlowSource::MainEye))
+    } else if ch == cfg.eyes.small[0] {
+        ChannelView::Eye(glow_rgb(cfg, GlowSource::SmallEye))
+    } else {
+        ChannelView::Blank
+    }
+}
+
+/// Colour swatch of an eye's duty-cycle RGB, scaled so the peak duty is full
+/// brightness (the raw duty tops out near a third, which would look dim).
+fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3) -> egui::Response {
+    let scaled = (duty_rgb / EYE_PEAK_DUTY).clamp(Vec3::ZERO, Vec3::ONE);
+    // egui::Rgba is linear; converting to Color32 applies the sRGB gamma.
+    let colour = Color32::from(egui::Rgba::from_rgb(scaled.x, scaled.y, scaled.z));
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, colour);
+    painter.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, Color32::GRAY),
+        egui::StrokeKind::Inside,
+    );
+    response.on_hover_text(format!(
+        "R {:.0}%  G {:.0}%  B {:.0}% of peak",
+        scaled.x * 100.0,
+        scaled.y * 100.0,
+        scaled.z * 100.0
+    ))
+}
+
 fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
     let t = ui.started.elapsed().as_secs_f32();
     let sample = Sample {
@@ -148,6 +196,7 @@ fn panels(
     mut ui: ResMut<UiState>,
     mut host: ResMut<Host>,
     model: Option<ResMut<ModelChoice>>,
+    cfg: Res<SimConfig>,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else {
         return;
@@ -264,12 +313,15 @@ fn panels(
                     grid.label("part");
                     grid.label("duty");
                     grid.label("pulse");
+                    grid.label("view");
                     grid.end_row();
                     let names = [
                         "R wing", "L wing", "main R", "main G", "main B", "small R", "small G",
                         "small B",
                     ];
                     for (ch, name) in names.iter().enumerate() {
+                        // Before hw() is locked below: these helpers lock it too.
+                        let view = channel_view(&cfg, ch);
                         let s = hw();
                         grid.label(ch.to_string());
                         grid.label(*name);
@@ -283,6 +335,12 @@ fn panels(
                                 grid.label("-");
                             }
                         }
+                        match view {
+                            ChannelView::Angle(Some(a)) => grid.label(format!("{a:5.1}°")),
+                            ChannelView::Angle(None) => grid.label("-"),
+                            ChannelView::Eye(rgb) => eye_swatch(grid, rgb),
+                            ChannelView::Blank => grid.label(""),
+                        };
                         grid.end_row();
                     }
                 });
