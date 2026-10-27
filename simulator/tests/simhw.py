@@ -26,6 +26,9 @@ unsimulated_libs = []
 # (virtual time, (x, y, z) in g) readings queued for the accelerometer.
 scheduled_accel = []
 idle_trigger_at = []
+# Behaviour buttons: what sim_runtime.py offered, and (time, name) clicks.
+behaviours = []
+behaviour_request_at = []
 # Virtual times of right-wing writes, white-LED writes and accelerometer
 # reads, so headless.py can tell whether behaviours overlap.
 wing_writes = []
@@ -68,6 +71,22 @@ def take_idle_trigger():
         idle_trigger_at.pop(0)
         return True
     return False
+
+
+def set_behaviours(names):
+    # Keep the last non-empty list; the run ends by clearing it.
+    if names:
+        behaviours[:] = names
+
+
+def take_behaviour_request():
+    if behaviour_request_at and now() >= behaviour_request_at[0][0]:
+        return behaviour_request_at.pop(0)[1]
+    return None
+
+
+def set_behaviour_running(name):
+    pass
 
 
 def set_pca(channel, duty):

@@ -510,6 +510,30 @@ fn panels(
                 controls.toggle_record = true;
             }
         });
+        // Cloned out so the lock isn't held while a click writes the request.
+        let (behaviours, running) = {
+            let s = hw();
+            (s.behaviours.clone(), s.behaviour_running.clone())
+        };
+        if !behaviours.is_empty() {
+            bar.horizontal_wrapped(|row| {
+                row.label("Behaviours")
+                    .on_hover_text("Each no-argument async function in behaviours/ that code.py doesn't already run as a task");
+                for name in behaviours {
+                    let clicked = row
+                        .add_enabled(running.is_none(), egui::Button::new(&name))
+                        .on_hover_text(format!("Run {name}() once now, with breathing paused"))
+                        .on_disabled_hover_text(format!(
+                            "Wait for {}() to finish",
+                            running.as_deref().unwrap_or_default()
+                        ))
+                        .clicked();
+                    if clicked {
+                        hw().behaviour_request = Some(name);
+                    }
+                }
+            });
+        }
     });
 
     let side_panel = egui::SidePanel::right("hardware")

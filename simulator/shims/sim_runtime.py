@@ -8,9 +8,11 @@ In CircuitPython strict mode, code.py also only sees what CircuitPython 9 has:
 other imports fail, a few stdlib modules shrink to their CircuitPython API, and
 time.monotonic() has CircuitPython's reduced float precision.
 """
+import ast
 import asyncio
 import builtins
 import gc as _real_gc
+import inspect
 import json
 import linecache
 import marshal
@@ -288,6 +290,7 @@ class _ScaledSelector(selectors.SelectSelector):
             _real_time.sleep(_POLL_S)
         simhw.charge("loop")
         _heap.sample()
+        _behaviours.poll(self.loop)
         return super().select(0)
 
 
@@ -302,6 +305,92 @@ class _SimPolicy(asyncio.DefaultEventLoopPolicy):
         loop = _SimLoop(selector)
         selector.loop = loop
         return loop
+
+
+def _background_names(source):
+    """Names of the functions code.py starts with create_task(f()). They run
+    all the time, so they get no behaviour button."""
+    names = set()
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Call)):
+            continue
+        func = node.func
+        if getattr(func, "attr", None) != "create_task" and getattr(func, "id", None) != "create_task":
+            continue
+        target = node.args[0].func
+        name = getattr(target, "attr", None) or getattr(target, "id", None)
+        if name:
+            names.add(name)
+    return names
+
+
+class _Behaviours:
+    """The UI's behaviour buttons. Every async function in the firmware's
+    behaviours package that can be called with no arguments gets one, except
+    those code.py already runs as tasks and names starting with "_", so a new
+    behaviour shows up without touching the simulator. A button runs its
+    function once as a new task, with hardware.pause_breathing set like the
+    firmware's own triggers do."""
+
+    def __init__(self):
+        self.start(set())
+
+    def start(self, background):
+        self._background = background
+        self._module_count = -1
+        self._funcs = {}
+        self._running = False
+
+    def _scan(self):
+        # Firmware imports finish before the loop runs, so a rescan is only
+        # needed when a module was imported since the last one.
+        if len(sys.modules) == self._module_count:
+            return
+        self._module_count = len(sys.modules)
+        funcs = {}
+        for mod_name in sorted(n for n in sys.modules if n.startswith("behaviours.")):
+            for name, obj in list(vars(sys.modules[mod_name]).items()):
+                if (name.startswith("_") or name in self._background
+                        or not inspect.iscoroutinefunction(obj)
+                        or obj.__module__ != mod_name):
+                    continue
+                params = inspect.signature(obj).parameters.values()
+                if all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+                       for p in params):
+                    funcs[name] = obj
+        if list(funcs) != list(self._funcs):
+            simhw.set_behaviours(list(funcs))
+        self._funcs = funcs
+
+    def poll(self, loop):
+        self._scan()
+        name = simhw.take_behaviour_request()
+        if name and not self._running and name in self._funcs:
+            self._running = True
+            simhw.set_behaviour_running(name)
+            loop.create_task(self._run(name, self._funcs[name]))
+
+    async def _run(self, name, func):
+        pause = getattr(sys.modules.get("hardware"), "pause_breathing", None)
+        # Clear only a pause this button set; a firmware trigger clears its own.
+        owned = pause is not None and not pause.is_set()
+        print("[sim] running", name)
+        if owned:
+            pause.set()
+        try:
+            await func()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            traceback.print_exc()
+        finally:
+            if owned:
+                pause.clear()
+            self._running = False
+            simhw.set_behaviour_running("")
+
+
+_behaviours = _Behaviours()
 
 
 _original_wait_for = asyncio.wait_for
@@ -636,6 +725,7 @@ def run(code_path, shims, shim_dir=None):
         sys.meta_path.insert(1, firmware)
         env = {"__name__": "__main__", "__file__": code_path, "__builtins__": code_builtins}
         code_obj = compile(source, code_path, "exec")
+        _behaviours.start(_background_names(source))
         _heap.start(code_path, code_obj)
         exec(code_obj, env)
         print("\nCode done running.")
@@ -646,6 +736,9 @@ def run(code_path, shims, shim_dir=None):
         print("\nCode done running.")
     finally:
         _heap.stop()
+        _behaviours.start(set())
+        simhw.set_behaviours([])
+        simhw.set_behaviour_running("")
         asyncio.wait_for = _original_wait_for
         asyncio.set_event_loop_policy(saved["policy"])
         if saved["time"] is not None:

@@ -163,6 +163,22 @@ mod simhw {
     fn take_idle_trigger() -> bool {
         std::mem::take(&mut hw().idle_trigger)
     }
+
+    #[pyfunction]
+    fn set_behaviours(names: Vec<String>) {
+        hw().behaviours = names;
+    }
+
+    #[pyfunction]
+    fn take_behaviour_request() -> Option<String> {
+        hw().behaviour_request.take()
+    }
+
+    /// An empty name means nothing button-started is running.
+    #[pyfunction]
+    fn set_behaviour_running(name: &str) {
+        hw().behaviour_running = (!name.is_empty()).then(|| name.to_owned());
+    }
 }
 
 /// Must run before anything touches Python.
