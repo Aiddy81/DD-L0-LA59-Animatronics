@@ -105,12 +105,34 @@ fn toggle_pause() {
     s.clock.set_paused(!paused);
 }
 
+/// Steps of the paused clock offered on the toolbar, in virtual seconds.
+const STEP_SHORT_S: f64 = 0.01;
+const STEP_LONG_S: f64 = 0.1;
+const SPEED_PRESETS: [f64; 3] = [1.0, 10.0, 100.0];
+
+/// Advances a paused clock by `dt`; does nothing while it runs.
+fn step_clock(dt: f64) {
+    let mut s = hw();
+    if s.clock.is_paused() {
+        s.clock.step(dt);
+    }
+}
+
+fn toggle_skip() {
+    let mut s = hw();
+    if s.skipping {
+        s.set_speed(1.0);
+        s.push_line("[sim] skip cancelled".to_owned());
+    } else {
+        s.start_skip();
+    }
+}
+
 #[derive(Resource)]
 pub struct Host(pub PyHost);
 
 #[derive(Resource)]
 pub struct UiState {
-    speed: f64,
     tipped: bool,
     auto_reload: bool,
     code_mtime: Option<SystemTime>,
@@ -152,7 +174,6 @@ impl UiState {
         prefs: &Prefs,
     ) -> Self {
         Self {
-            speed: 1.0,
             tipped: false,
             auto_reload: prefs.auto_reload,
             code_mtime,
@@ -448,7 +469,7 @@ fn panels(
     // Consumed (not just read) so a button that kept focus after a click
     // doesn't also activate on Space. Skipped while a text field has focus.
     if !ctx.wants_keyboard_input() {
-        let (space, n, s, r, i) = ctx.input_mut(|inp| {
+        let (space, n, s, r, i, period, f) = ctx.input_mut(|inp| {
             let mut key = |k| inp.consume_key(egui::Modifiers::NONE, k);
             (
                 key(egui::Key::Space),
@@ -456,10 +477,18 @@ fn panels(
                 key(egui::Key::S),
                 key(egui::Key::R),
                 key(egui::Key::I),
+                key(egui::Key::Period),
+                key(egui::Key::F),
             )
         });
         if space {
             toggle_pause();
+        }
+        if period {
+            step_clock(STEP_LONG_S);
+        }
+        if f {
+            toggle_skip();
         }
         if n {
             let dir = hw().nudge_dir;
@@ -501,18 +530,51 @@ fn panels(
             {
                 toggle_pause();
             }
+            if row
+                .add_enabled(paused, egui::Button::new("+10 ms"))
+                .on_hover_text("Run the paused clock for 10 ms")
+                .clicked()
+            {
+                step_clock(STEP_SHORT_S);
+            }
+            if row
+                .add_enabled(paused, egui::Button::new("+100 ms"))
+                .on_hover_text("Run the paused clock for 100 ms (.)")
+                .clicked()
+            {
+                step_clock(STEP_LONG_S);
+            }
             row.label(if running { "running" } else { "stopped" });
             row.separator();
             row.label("Speed");
+            let (mut speed, skipping) = {
+                let s = hw();
+                (s.clock.speed, s.skipping)
+            };
+            // Read back every frame so the slider follows presets and the end of a skip.
             if row
-                .add(
-                    egui::Slider::new(&mut ui.speed, 1.0..=200.0)
+                .add_enabled(
+                    !skipping,
+                    egui::Slider::new(&mut speed, 1.0..=200.0)
                         .logarithmic(true)
                         .suffix("x"),
                 )
                 .changed()
+                && !skipping
             {
-                hw().clock.set_speed(ui.speed);
+                hw().set_speed(speed);
+            }
+            for preset in SPEED_PRESETS {
+                if row.button(format!("{preset}x")).clicked() {
+                    hw().set_speed(preset);
+                }
+            }
+            if row
+                .button(if skipping { "Stop skip" } else { "Skip to next event" })
+                .on_hover_text("Run flat out until a behaviour starts (a sound plays or a hardware.py event changes), then drop back to 1x (F)")
+                .clicked()
+            {
+                toggle_skip();
             }
             if row
                 .button("Trigger idle now")

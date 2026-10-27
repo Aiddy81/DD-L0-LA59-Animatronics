@@ -10,6 +10,9 @@ use crate::config::BoardCfg;
 /// PCA9685 runs the servo FeatherWing at 50 Hz, so one period is 20 ms.
 pub const PWM_PERIOD_US: f32 = 20_000.0;
 const LOG_CAP: usize = 4000;
+/// Clock speed while skipping to the next behaviour: the longest idle wait
+/// (120 min) passes in about 7 s.
+const SKIP_SPEED: f64 = 1000.0;
 
 pub enum AudioCmd {
     Play {
@@ -99,6 +102,8 @@ pub struct HwState {
     /// Audio commands from `code.py`, drained by the audio system.
     pub audio: Vec<AudioCmd>,
     pub clock: SimClock,
+    /// Running at `SKIP_SPEED` until a behaviour starts.
+    pub skipping: bool,
     pub stop_requested: bool,
     pub idle_trigger: bool,
     /// Behaviours code.py can be asked to run once, found by sim_runtime.py.
@@ -140,6 +145,7 @@ impl HwState {
             in_traceback: false,
             audio: Vec::new(),
             clock: SimClock::new(),
+            skipping: false,
             stop_requested: false,
             idle_trigger: false,
             behaviours: Vec::new(),
@@ -160,10 +166,11 @@ impl HwState {
 
     /// Clears everything a fresh run of `code.py` should not inherit. The held
     /// accelerometer value, its nudge direction and clock speed are user settings, so they survive.
+    /// A skip is not: the new run starts at 1x.
     pub fn reset_for_run(&mut self) {
         let accel = self.accel_g;
         let nudge_dir = self.nudge_dir;
-        let speed = self.clock.speed;
+        let speed = if self.skipping { 1.0 } else { self.clock.speed };
         let strict = self.strict;
         let board_speed = self.board_speed;
         let board = self.board.clone();
@@ -176,6 +183,30 @@ impl HwState {
         self.board_speed = board_speed;
         self.board = board;
         self.log = log;
+    }
+
+    /// Fast-forwards until a behaviour starts (see `end_skip`).
+    pub fn start_skip(&mut self) {
+        self.skipping = true;
+        self.clock.set_paused(false);
+        self.clock.set_speed(SKIP_SPEED);
+        self.push_line("[sim] skipping to the next behaviour".to_owned());
+    }
+
+    /// Drops back to 1x if a skip is running, logging what ended it.
+    pub fn end_skip(&mut self, reason: &str) {
+        if !self.skipping {
+            return;
+        }
+        self.skipping = false;
+        self.clock.set_speed(1.0);
+        self.push_line(format!("[sim] skip stopped: {reason}"));
+    }
+
+    /// Sets the clock speed, ending any skip.
+    pub fn set_speed(&mut self, speed: f64) {
+        self.skipping = false;
+        self.clock.set_speed(speed);
     }
 
     /// Books the board's cost for one hardware call. Returns real seconds to
@@ -291,6 +322,8 @@ pub struct SimClock {
     /// While set, `now()` stands still. `reset_for_run` builds a fresh clock
     /// (keeping only the speed), so restarting code.py also unpauses.
     paused: bool,
+    /// End of a single step. The clock runs up to it and then reads as paused.
+    stop_at: Option<f64>,
 }
 
 impl SimClock {
@@ -300,18 +333,24 @@ impl SimClock {
             anchor_virtual: 0.0,
             speed: 1.0,
             paused: false,
+            stop_at: None,
         }
+    }
+
+    fn running_time(&self) -> f64 {
+        self.anchor_virtual + self.anchor_real.elapsed().as_secs_f64() * self.speed
     }
 
     pub fn now(&self) -> f64 {
         if self.paused {
             return self.anchor_virtual;
         }
-        self.anchor_virtual + self.anchor_real.elapsed().as_secs_f64() * self.speed
+        let t = self.running_time();
+        self.stop_at.map_or(t, |stop| t.min(stop))
     }
 
     pub fn is_paused(&self) -> bool {
-        self.paused
+        self.paused || self.stop_at.is_some_and(|stop| self.running_time() >= stop)
     }
 
     pub fn set_paused(&mut self, paused: bool) {
@@ -320,6 +359,17 @@ impl SimClock {
         self.anchor_virtual = self.now();
         self.anchor_real = Instant::now();
         self.paused = paused;
+        self.stop_at = None;
+    }
+
+    /// Runs the clock for `dt` virtual seconds, then stops it again. Running
+    /// rather than jumping lets every animation frame inside the step happen.
+    pub fn step(&mut self, dt: f64) {
+        let start = self.now();
+        self.anchor_virtual = start;
+        self.anchor_real = Instant::now();
+        self.paused = false;
+        self.stop_at = Some(start + dt);
     }
 
     pub fn set_speed(&mut self, speed: f64) {
@@ -336,4 +386,86 @@ static HW: LazyLock<Mutex<HwState>> = LazyLock::new(|| Mutex::new(HwState::new()
 /// whole simulator down, so poisoning is ignored.
 pub fn hw() -> MutexGuard<'static, HwState> {
     HW.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Waits (briefly, in real time) until the clock reads as paused.
+    fn wait_until_paused(clock: &SimClock) {
+        let start = Instant::now();
+        while !clock.is_paused() {
+            assert!(start.elapsed().as_secs() < 5, "step never finished");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn step_runs_exactly_dt_then_pauses() {
+        let mut clock = SimClock::new();
+        clock.set_speed(1000.0);
+        clock.set_paused(true);
+        let start = clock.now();
+        clock.step(0.1);
+        wait_until_paused(&clock);
+        assert_eq!(clock.now(), start + 0.1);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert_eq!(clock.now(), start + 0.1, "time moved after the step");
+    }
+
+    #[test]
+    fn resume_after_step_runs_freely() {
+        let mut clock = SimClock::new();
+        clock.set_speed(1000.0);
+        clock.set_paused(true);
+        clock.step(0.01);
+        wait_until_paused(&clock);
+        let stepped = clock.now();
+        clock.set_paused(false);
+        assert!(!clock.is_paused());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(
+            clock.now() > stepped + 0.5,
+            "clock still held at the step's end"
+        );
+    }
+
+    #[test]
+    fn speed_change_keeps_time_continuous() {
+        let mut clock = SimClock::new();
+        clock.set_paused(true);
+        let before = clock.now();
+        clock.set_speed(100.0);
+        assert_eq!(clock.now(), before);
+    }
+
+    #[test]
+    fn skip_ends_on_first_reason_only() {
+        let mut s = HwState::new();
+        s.start_skip();
+        assert_eq!(s.clock.speed, SKIP_SPEED);
+        s.end_skip("youWho.wav started");
+        s.end_skip("pause_breathing set");
+        assert!(!s.skipping);
+        assert_eq!(s.clock.speed, 1.0);
+        let stops = s
+            .log
+            .iter()
+            .filter(|l| l.text.starts_with("[sim] skip stopped"))
+            .count();
+        assert_eq!(stops, 1);
+    }
+
+    #[test]
+    fn restart_during_skip_comes_back_at_1x() {
+        let mut s = HwState::new();
+        s.set_speed(10.0);
+        s.reset_for_run();
+        assert_eq!(s.clock.speed, 10.0);
+        s.start_skip();
+        s.reset_for_run();
+        assert_eq!(s.clock.speed, 1.0);
+        assert!(!s.skipping);
+    }
 }
