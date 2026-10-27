@@ -6,6 +6,7 @@ mod audio;
 mod capture;
 mod config;
 mod droid;
+mod editor;
 mod hw;
 mod prefs;
 mod pyhost;
@@ -38,6 +39,9 @@ pub struct Paths {
     /// Drop-in shims that override or add to the built-in ones. Next to the
     /// exe; rebuilding keeps it.
     pub shims: PathBuf,
+    /// The writable layer of the simulated CIRCUITPY drive (log.txt, log_mode).
+    /// Next to the exe; rebuilding keeps it.
+    pub fs: PathBuf,
 }
 
 impl Paths {
@@ -75,6 +79,7 @@ impl Paths {
             captures: exe_dir.join("captures"),
             prefs: exe_dir.join("ddl0-sim.prefs.toml"),
             shims: exe_dir.join("shims"),
+            fs: exe_dir.join("fs"),
             simulator,
         })
     }
@@ -116,7 +121,7 @@ fn main() {
     }
 
     pyhost::init_python();
-    let mut host = PyHost::new(paths.code.clone(), paths.shims.clone());
+    let mut host = PyHost::new(paths.code.clone(), paths.shims.clone(), paths.fs.clone());
     host.start();
     let code_mtime = ui::firmware_mtime(&paths.code);
     let shims_mtime = ui::shims_mtime(&paths.shims);

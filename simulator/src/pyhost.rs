@@ -286,14 +286,17 @@ pub fn init_python() {
 pub struct PyHost {
     code_path: PathBuf,
     shim_dir: PathBuf,
+    /// Writable layer of the simulated CIRCUITPY drive.
+    fs_dir: PathBuf,
     thread: Option<JoinHandle<()>>,
 }
 
 impl PyHost {
-    pub fn new(code_path: PathBuf, shim_dir: PathBuf) -> Self {
+    pub fn new(code_path: PathBuf, shim_dir: PathBuf, fs_dir: PathBuf) -> Self {
         Self {
             code_path,
             shim_dir,
+            fs_dir,
             thread: None,
         }
     }
@@ -333,8 +336,9 @@ impl PyHost {
         }
         let path = self.code_path.clone();
         let shim_dir = self.shim_dir.clone();
+        let fs_dir = self.fs_dir.clone();
         self.thread = Some(std::thread::spawn(move || {
-            run_code(&path, &shim_dir, scenario.as_ref())
+            run_code(&path, &shim_dir, &fs_dir, scenario.as_ref())
         }));
     }
 
@@ -371,7 +375,7 @@ fn scenario_dict<'py>(py: Python<'py>, run: &ScenarioRun) -> PyResult<Bound<'py,
     Ok(dict)
 }
 
-fn run_code(path: &Path, shim_dir: &Path, scenario: Option<&ScenarioRun>) {
+fn run_code(path: &Path, shim_dir: &Path, fs_dir: &Path, scenario: Option<&ScenarioRun>) {
     let result = Python::with_gil(|py| -> PyResult<()> {
         let runtime = PyModule::from_code(
             py,
@@ -389,6 +393,7 @@ fn run_code(path: &Path, shim_dir: &Path, scenario: Option<&ScenarioRun>) {
             shims,
             shim_dir.to_string_lossy().into_owned(),
             scenario,
+            fs_dir.to_string_lossy().into_owned(),
         ))?;
         Ok(())
     });

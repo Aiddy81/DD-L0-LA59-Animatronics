@@ -11,6 +11,7 @@ time.monotonic() has CircuitPython's reduced float precision.
 import ast
 import asyncio
 import builtins
+import errno
 import fnmatch
 import gc as _real_gc
 import inspect
@@ -21,8 +22,11 @@ import struct
 import importlib.abc
 import importlib.util
 import os
+import posixpath
 import selectors
+import shutil
 import sys
+import tempfile
 import time as _real_time
 import tomllib
 import traceback
@@ -1020,8 +1024,172 @@ def _not_simulated_module(name):
     return module
 
 
-def _os_module(strict, fw_dir):
-    """os with CircuitPython's getenv (settings.toml); in strict mode only CircuitPython's API."""
+# CircuitPython's wording for the errors firmware is likely to print.
+_CP_ERRORS = {
+    errno.ENOENT: "No such file/directory",
+    errno.EEXIST: "File exists",
+    errno.EACCES: "Permission denied",
+    errno.EROFS: "Read-only filesystem",
+    errno.ENOSPC: "No space left on device",
+}
+
+
+def _cp_error(code, note=""):
+    return OSError(code, _CP_ERRORS.get(code, os.strerror(code)) + note)
+
+
+class _BoardFs:
+    """The CIRCUITPY drive as code.py sees it: "/" is the firmware folder with a
+    writable folder (simulator/dist/fs) laid over it. Reads prefer the overlay;
+    every write lands in the overlay, so the firmware source is never changed.
+    Like the real board with USB connected, the drive is read-only to code
+    until boot.py calls storage.remount("/", readonly=False)."""
+
+    def __init__(self, fw_dir, fs_dir):
+        self.layers = (os.path.realpath(fs_dir), os.path.realpath(fw_dir))
+        self.cwd = "/"
+        self.writable = False
+        self.booting = False
+
+    def _board(self, path):
+        """Normalised absolute board path. Board paths are POSIX; ".." stops at
+        "/" as on a real drive."""
+        path = os.fspath(path)
+        if isinstance(path, bytes):
+            path = path.decode()
+        return posixpath.normpath(posixpath.join(self.cwd, path or "."))
+
+    def _host(self, layer, board):
+        host = os.path.realpath(os.path.join(layer, *board.strip("/").split("/")))
+        # Defence in depth: a drive letter, backslash or link must not escape.
+        try:
+            inside = os.path.commonpath([host, layer]) == layer
+        except ValueError:  # on another Windows drive
+            inside = False
+        if not inside:
+            raise _cp_error(errno.ENOENT)
+        return host
+
+    def _existing(self, board):
+        """Host path of the visible copy of `board`, or None."""
+        for layer in self.layers:
+            host = self._host(layer, board)
+            if os.path.exists(host):
+                return host
+        return None
+
+    def _overlay(self, board):
+        return self._host(self.layers[0], board)
+
+    def _for_write(self, board):
+        if not self.writable:
+            raise _cp_error(errno.EROFS)
+        parent = posixpath.dirname(board)
+        if self._existing(parent) is None:
+            raise _cp_error(errno.ENOENT)
+        host = self._overlay(board)
+        os.makedirs(os.path.dirname(host), exist_ok=True)
+        return host
+
+    def _overlay_only(self, board):
+        """Host path of `board` for remove/rename, which only touch the overlay."""
+        host = self._overlay(board)
+        if not os.path.exists(host):
+            if self._existing(board) is not None:
+                raise _cp_error(errno.EACCES, " (the simulator never changes PropMaker_Feather/)")
+            raise _cp_error(errno.ENOENT)
+        return host
+
+    def _call(self, func, *args):
+        """Runs a host call, reporting failures as CircuitPython would, without host paths."""
+        try:
+            return func(*args)
+        except OSError as e:
+            raise _cp_error(e.errno or errno.EIO) from None
+
+    def open(self, file, mode="r", *args, **kwargs):
+        if isinstance(file, int):
+            raise _cp_error(errno.EINVAL)
+        board = self._board(file)
+        if not any(c in mode for c in "wax+"):
+            host = self._existing(board)
+            if host is None:
+                raise _cp_error(errno.ENOENT)
+            return self._call(builtins.open, host, mode, *args, **kwargs)
+        host = self._for_write(board)
+        source = self._existing(board)
+        # Appending to or updating a firmware file starts from its contents.
+        if ("a" in mode or "+" in mode) and source is not None and source != host:
+            self._call(shutil.copyfile, source, host)
+        return self._call(builtins.open, host, mode, *args, **kwargs)
+
+    def stat(self, path):
+        host = self._existing(self._board(path))
+        if host is None:
+            raise _cp_error(errno.ENOENT)
+        return self._call(os.stat, host)
+
+    def listdir(self, path=""):
+        board = self._board(path)
+        names, found = [], False
+        for layer in self.layers:
+            host = self._host(layer, board)
+            if os.path.isdir(host):
+                found = True
+                names += [n for n in self._call(os.listdir, host) if n not in names]
+        if not found:
+            raise _cp_error(errno.ENOENT)
+        return names
+
+    def remove(self, path):
+        self._call(os.remove, self._overlay_only(self._board(path)))
+
+    def rmdir(self, path):
+        self._call(os.rmdir, self._overlay_only(self._board(path)))
+
+    def rename(self, old, new):
+        if not self.writable:
+            raise _cp_error(errno.EROFS)
+        source = self._overlay_only(self._board(old))
+        self._call(os.rename, source, self._for_write(self._board(new)))
+
+    def mkdir(self, path, *args):
+        board = self._board(path)
+        if self._existing(board) is not None:
+            raise _cp_error(errno.EEXIST)
+        self._call(os.mkdir, self._for_write(board))
+
+    def chdir(self, path):
+        board = self._board(path)
+        host = self._existing(board)
+        if host is None or not os.path.isdir(host):
+            raise _cp_error(errno.ENOENT)
+        self.cwd = board
+
+    def getcwd(self):
+        return self.cwd
+
+
+def _storage_module(drive):
+    """CircuitPython's storage: remount() makes the drive writable to code, which
+    the board allows only from boot.py while USB is connected."""
+    module = types.ModuleType("storage")
+
+    def remount(mount_path, readonly=False, disable_concurrent_write_protection=False):
+        if posixpath.normpath(mount_path) != "/":
+            raise OSError(errno.EINVAL, "Invalid argument")
+        if not readonly and not drive.booting:
+            raise RuntimeError("Cannot remount '/' when visible via USB.")
+        drive.writable = not readonly
+
+    module.remount = remount
+    module.__getattr__ = lambda attr: _NotSimulated("storage." + attr)
+    return module
+
+
+def _os_module(strict, fw_dir, drive):
+    """os with CircuitPython's getenv (settings.toml) and the board drive's file
+    calls; in strict mode only CircuitPython's API."""
     if strict:
         module = _cp_view(os, _CP_SURFACE["os"])
     else:
@@ -1030,14 +1198,16 @@ def _os_module(strict, fw_dir):
             if not key.startswith("__"):
                 setattr(module, key, getattr(os, key))
     module.getenv = _settings_getenv(fw_dir)
+    for name in ("stat", "listdir", "remove", "rmdir", "rename", "mkdir", "chdir", "getcwd"):
+        setattr(module, name, getattr(drive, name))
     return module
 
 
-def _code_builtins(code_path, strict, shims):
-    """Builtins for code.py and the firmware modules beside it. Their imports
-    get CircuitPython's gc and os.getenv, a stand-in for board libraries the
-    simulator doesn't model, and, in strict mode, only CircuitPython 9's
-    modules and APIs."""
+def _code_builtins(code_path, strict, shims, drive):
+    """Builtins for boot.py, code.py and the firmware modules beside them. Their
+    imports get CircuitPython's gc, storage and os.getenv, file access through
+    the board drive, a stand-in for board libraries the simulator doesn't model,
+    and, in strict mode, only CircuitPython 9's modules and APIs."""
     fw_dir = os.path.dirname(code_path)
     # Stand-ins model libraries the board has, so they're always importable.
     board_modules = set(_CP_MODULES) | {name.split(".")[0] for name in shims}
@@ -1046,13 +1216,17 @@ def _code_builtins(code_path, strict, shims):
     if os.path.isdir(lib):
         for entry in os.listdir(lib):
             board_modules.add(entry.split(".")[0])
-    views = {"gc": _gc_module(), "os": _os_module(strict, fw_dir)}
+    views = {
+        "gc": _gc_module(),
+        "os": _os_module(strict, fw_dir, drive),
+        "storage": _storage_module(drive),
+    }
     stubs = {}
 
     def cp_import(name, globals=None, locals=None, fromlist=(), level=0):
         top = name.split(".")[0]
-        if level == 0 and name == "gc":
-            return views["gc"]
+        if level == 0 and name in ("gc", "storage"):
+            return views[name]
         if level == 0 and name == "os":
             for wanted in fromlist or ():
                 if strict and wanted != "*" and wanted not in _CP_SURFACE["os"]:
@@ -1088,6 +1262,7 @@ def _code_builtins(code_path, strict, shims):
 
     gated = dict(builtins.__dict__)
     gated["__import__"] = cp_import
+    gated["open"] = drive.open
     return gated
 
 
@@ -1104,12 +1279,29 @@ class _LogStream:
         return False
 
 
-def run(code_path, shims, shim_dir=None, scenario=None):
-    """Execute code.py with the shims installed. Never raises.
+def _run_boot(boot_path, code_builtins):
+    """Runs boot.py first, as CircuitPython does after a reset. Its errors are
+    logged and code.py still runs, as on the board."""
+    print("[sim] running boot.py")
+    try:
+        with open(boot_path, encoding="utf-8") as f:
+            boot_obj = compile(f.read(), boot_path, "exec")
+        exec(boot_obj, {"__name__": "__main__", "__file__": boot_path,
+                        "__builtins__": code_builtins})
+    except (SimStop, KeyboardInterrupt):
+        raise
+    except BaseException:
+        traceback.print_exc()
+
+
+def run(code_path, shims, shim_dir=None, scenario=None, fs_dir=None):
+    """Execute boot.py (if present) then code.py with the shims installed.
+    Never raises.
 
     `shims` are the built-in stand-ins; any in `shim_dir` (read afresh each
     run) override them or add new ones. `scenario` (see _Scenario.start), if
-    given, is played against this run."""
+    given, is played against this run. `fs_dir` is the writable layer of the
+    board drive (log.txt lands there); without one a temporary folder is used."""
     saved = {
         "stdout": sys.stdout,
         "stderr": sys.stderr,
@@ -1118,6 +1310,9 @@ def run(code_path, shims, shim_dir=None, scenario=None):
         "policy": asyncio.get_event_loop_policy(),
     }
     firmware = None
+    temp_fs = None
+    if fs_dir is None:
+        fs_dir = temp_fs = tempfile.mkdtemp(prefix="ddl0-fs-")
     sys.stdout = sys.stderr = _LogStream()
     strict = simhw.strict()
     print("[sim] running", code_path, "(CircuitPython strict)" if strict else "")
@@ -1135,12 +1330,22 @@ def run(code_path, shims, shim_dir=None, scenario=None):
     asyncio.set_event_loop_policy(_SimPolicy())
     asyncio.wait_for = _wait_for
     try:
-        os.chdir(os.path.dirname(code_path))
+        fw_dir = os.path.dirname(code_path)
+        os.chdir(fw_dir)
         with open(code_path, encoding="utf-8") as f:
             source = f.read()
-        code_builtins = _code_builtins(code_path, strict, shims)
-        firmware = _FirmwareFinder(os.path.dirname(code_path), code_builtins)
+        os.makedirs(fs_dir, exist_ok=True)
+        drive = _BoardFs(fw_dir, fs_dir)
+        code_builtins = _code_builtins(code_path, strict, shims, drive)
+        firmware = _FirmwareFinder(fw_dir, code_builtins)
         sys.meta_path.insert(1, firmware)
+        boot_path = os.path.join(fw_dir, "boot.py")
+        if os.path.isfile(boot_path):
+            drive.booting = True
+            try:
+                _run_boot(boot_path, code_builtins)
+            finally:
+                drive.booting = False
         env = {"__name__": "__main__", "__file__": code_path, "__builtins__": code_builtins}
         code_obj = compile(source, code_path, "exec")
         _behaviours.start(_background_names(source))
@@ -1174,5 +1379,7 @@ def run(code_path, shims, shim_dir=None, scenario=None):
             for name in firmware.loaded:
                 sys.modules.pop(name, None)
         os.chdir(saved["cwd"])
+        if temp_fs is not None:
+            shutil.rmtree(temp_fs, ignore_errors=True)
         sys.stdout = saved["stdout"]
         sys.stderr = saved["stderr"]
