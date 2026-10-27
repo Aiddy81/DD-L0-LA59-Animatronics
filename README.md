@@ -133,7 +133,7 @@ The RP2040 is much slower than a PC and has far less memory, so the simulator mo
 
 - **Board speed** (toolbar, on by default): every servo/LED write, accelerometer read and scheduler pass takes as long as it does on the robot. So an animation runs at the speed the robot will really manage, not just the speed the code asks for.
 - **Heap gauge** (Board panel): an estimate of how much of the board's free memory the firmware (`code.py` and its modules, bytecode included) uses. It warns in the log at 80% and 100%. `gc.mem_free()` and `gc.mem_alloc()` return the estimate too. It's approximate: it catches "this clearly won't fit", not the last few KB.
-- **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel.
+- **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel. To make it do something, write a shim for it (see [Custom shims](#custom-shims)).
 
 The timing and memory figures in `simulator/sim.toml` `[board]` start as estimates. To measure your robot:
 
@@ -145,6 +145,12 @@ The bench runs inside the robot with no PC attached. It saves its results in the
 4. Paste that block over the one in `simulator/sim.toml`. Then, on the drive, delete the bench `code.py` and rename `code_main.py` back to `code.py`.
 
 If the Feather is plugged into USB and nothing is saved, the bench measures and prints straight away. That only works if the FeatherWing is attached.
+
+### Custom shims
+
+The hardware stand-ins ("shims") are compiled into the exe, so it runs on its own. To add one, or change a built-in one, without rebuilding, put a `.py` file in `simulator\dist\shims\` (create the folder). A file there replaces the built-in shim of the same name or adds a new one, and is read at the start of every run; the log names each shim taken from it. Rebuilding keeps the folder.
+
+[`simulator/docs/custom-shims.md`](simulator/docs/custom-shims.md) is a step-by-step guide: when you need a shim, mirroring the real library's API, the `simhw` calls a shim uses to reach the simulator, worked examples, testing, and when Rust changes are needed.
 
 ### Tests and CI
 

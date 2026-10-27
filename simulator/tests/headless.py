@@ -30,20 +30,6 @@ DEFAULT_SOUNDS = ["angry.wav", "noseBoops.wav", "youWho.wav", "trenchRun.wav",
 SHAKE_AT = 20.0
 
 
-def load_shims():
-    shims = {}
-    for root, _, files in os.walk(SHIMS):
-        for name in files:
-            if not name.endswith(".py") or name == "sim_runtime.py":
-                continue
-            rel = os.path.relpath(os.path.join(root, name), SHIMS).replace(os.sep, "/")[:-3]
-            is_pkg = rel.endswith("/__init__")
-            module = rel[: -len("/__init__")] if is_pkg else rel
-            with open(os.path.join(root, name), encoding="utf-8") as f:
-                shims[module.replace("/", ".")] = (f.read(), is_pkg)
-    return shims
-
-
 def stage_firmware(code_path, workdir):
     """Copy code.py, its modules, settings.toml and lib/ into workdir, with
     sounds (silent ones if missing)."""
@@ -146,7 +132,7 @@ def main():
     try:
         stage_firmware(os.path.abspath(args.code), workdir)
         simhw.reset()
-        sim_runtime.run(os.path.join(workdir, "code.py"), load_shims())
+        sim_runtime.run(os.path.join(workdir, "code.py"), sim_runtime.load_shim_dir(SHIMS))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
