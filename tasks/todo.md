@@ -1,3 +1,21 @@
+# Simulator: scenario checks in the Docker build (#60)
+
+Branch: `feature/headless-build-checks` (off `Documentation`).
+
+- [x] `Dockerfile`: `python3` listed explicitly (was only there through the base image)
+- [x] `build.sh`: runs `tests/headless.py` after staging `dist/`; failure exits 3
+- [x] `build.ps1`: exit 3 → "Scenario checks failed", says dist\ is still built
+- [x] README (Tests and CI) updated
+- [x] `build.ps1 -RebuildImage` succeeds with all 26 checks and 7 scenarios PASS; `cargo fmt --check` and `clippy -D warnings` clean
+- [x] Broken scenario (`boop.toml` expecting a sound that never plays) fails the build with `FAIL scenario boop`, exe still staged; reverted
+- [x] No `__pycache__` left in the checkout
+
+## Review
+- Hooked into `docker/build.sh`, not `build.ps1`, so CI's build job runs the same checks with no `.github/` change.
+- Checks run after staging `dist/`: broken firmware fails the build but still leaves a simulator to debug it in.
+- Exit code 3 is reserved for "checks failed", so `build.ps1` can tell it apart from a compile error.
+- Adds ~13 s to a build; Debian's Python 3.11 is enough (`tomllib`), so no new download.
+
 # Simulator live State panel (#39)
 
 Branch: `feature/simulator-state-panel` (off `Documentation`).

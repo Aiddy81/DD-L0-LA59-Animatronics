@@ -5,8 +5,10 @@ FROM rust:1.92-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 \
-        unzip ca-certificates curl \
+        unzip ca-certificates curl python3 \
  && rm -rf /var/lib/apt/lists/*
+
+# python3 runs tests/headless.py (the scenario checks) at the end of build.sh.
 
 RUN rustup target add x86_64-pc-windows-gnu \
  && rustup component add rustfmt clippy

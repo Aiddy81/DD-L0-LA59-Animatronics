@@ -13,6 +13,10 @@
     Rebuilding keeps simulator\dist\shims\ (drop-in shims), captures\ and
     ddl0-sim.prefs.toml.
 
+    After staging, tests\headless.py runs code.py against every scenario in
+    simulator\scenarios\. If any check fails the script fails and names it,
+    but dist\ is already built so the simulator can be used to debug it.
+
     Cargo's registry and target dirs live in Docker volumes, so the multi-GB
     Bevy build never lands in OneDrive.
 
@@ -71,6 +75,12 @@ docker run --rm `
     -e CARGO_TARGET_DIR=/target `
     -e "PROFILE=$profileDir" -e "LOCKED=$locked" `
     -w /workspace/simulator $Image bash docker/build.sh
+if ($LASTEXITCODE -eq 3) {
+    throw (@(
+        'Scenario checks failed: see the FAIL lines above.',
+        "The simulator was still built in $dist, so you can debug it there."
+    ) -join [Environment]::NewLine)
+}
 if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
 $exe = Join-Path $dist 'ddl0-sim.exe'
