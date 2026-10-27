@@ -19,9 +19,9 @@ use crate::settings::SettingsState;
 
 /// A gentle bump, added to the held reading along the chosen direction. From
 /// rest it clears the firmware's NUDGE_Z_MG (250 mg) threshold.
-const NUDGE_DELTA_G: f32 = 0.3;
+pub(crate) const NUDGE_DELTA_G: f32 = 0.3;
 /// A hard knock. From rest on +Z it reads 3 g, above HARD_MOTION_MG (2500 mg).
-const SHAKE_DELTA_G: f32 = 2.0;
+pub(crate) const SHAKE_DELTA_G: f32 = 2.0;
 /// Choices for the Motion panel's direction picker.
 const DIRECTIONS: [(&str, [f32; 3]); 6] = [
     ("+X", [1.0, 0.0, 0.0]),
@@ -84,7 +84,7 @@ pub fn shims_mtime(dir: &Path) -> Option<SystemTime> {
 }
 
 /// Queues one reading `delta` g past the held value along `dir`.
-fn bump(dir: [f32; 3], delta: f32) {
+pub fn boop(dir: [f32; 3], delta: f32) {
     let mut s = hw();
     let held = s.accel_g;
     s.accel_pulses
@@ -92,11 +92,20 @@ fn bump(dir: [f32; 3], delta: f32) {
 }
 
 pub fn nudge(dir: [f32; 3]) {
-    bump(dir, NUDGE_DELTA_G);
+    boop(dir, NUDGE_DELTA_G);
 }
 
 pub fn shake(dir: [f32; 3]) {
-    bump(dir, SHAKE_DELTA_G);
+    boop(dir, SHAKE_DELTA_G);
+}
+
+/// Label of the axis direction that `dir` points closest to.
+pub fn nearest_direction(dir: [f32; 3]) -> &'static str {
+    let dot = |d: &[f32; 3]| d.iter().zip(dir).map(|(a, b)| a * b).sum::<f32>();
+    DIRECTIONS
+        .iter()
+        .max_by(|(_, a), (_, b)| dot(a).total_cmp(&dot(b)))
+        .map_or("", |(name, _)| *name)
 }
 
 fn toggle_pause() {
@@ -701,7 +710,7 @@ fn panels(
                         let dir = hw().nudge_dir;
                         if row
                             .button("Nudge")
-                            .on_hover_text("One reading 0.3 g past the held value, in the chosen direction (or click the head) (N)")
+                            .on_hover_text("One reading 0.3 g past the held value, in the chosen direction (N). Clicking the droid also boops, harder the longer you hold, from the side you click")
                             .clicked()
                         {
                             nudge(dir);
