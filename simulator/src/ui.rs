@@ -174,6 +174,10 @@ struct Sample {
     main: Vec3,
     small: Vec3,
     white: f32,
+    /// What the firmware read from the sensor (after range clipping), in g.
+    accel: [f32; 3],
+    /// The held z reading, which the firmware treats as "at rest".
+    rest_z: f32,
 }
 
 impl UiState {
@@ -354,6 +358,10 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
         return;
     }
     let t = ui.started.elapsed().as_secs_f32();
+    let (accel, rest_z) = {
+        let s = hw();
+        (s.last_accel, s.accel_g[2])
+    };
     let sample = Sample {
         t,
         wings: [
@@ -363,6 +371,8 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
         main: glow_rgb(&cfg, GlowSource::MainEye),
         small: glow_rgb(&cfg, GlowSource::SmallEye),
         white: glow_rgb(&cfg, GlowSource::WhiteLed).x,
+        accel,
+        rest_z,
     };
     ui.history.push_back(sample);
     while ui.history.front().is_some_and(|s| t - s.t > PLOT_SECONDS) {
@@ -848,7 +858,10 @@ fn panels(
             side.separator();
             let plot_section = egui::CollapsingHeader::new(format!("Last {PLOT_SECONDS:.0} s"))
                 .default_open(ui.open_plot)
-                .show(side, |side| plot(side, &ui.history));
+                .show(side, |side| {
+                    let limits = AccelLimits::read(&ui.settings);
+                    plot(side, &ui.history, &limits)
+                });
             ui.open_plot = plot_section.openness > 0.5;
 
             side.separator();
@@ -1021,19 +1034,68 @@ fn save_log(dir: &Path, text: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-fn plot(ui: &mut egui::Ui, history: &VecDeque<Sample>) {
+/// The firmware's accelerometer thresholds in g, plus the sensor's clip level.
+struct AccelLimits {
+    nudge: f32,
+    animation: f32,
+    hard: f32,
+    clip: f32,
+}
+
+impl AccelLimits {
+    /// Thresholds as settings.toml (or config.py's default) gives them, so
+    /// the lines move when a setting is edited.
+    fn read(settings: &SettingsState) -> Self {
+        let g = |key: &str, fallback_mg: i64| {
+            settings.saved_value(key).unwrap_or(fallback_mg) as f32 / 1000.0
+        };
+        Self {
+            nudge: g("NUDGE_Z_MG", 250),
+            animation: g("ANIMATION_NUDGE_Z_MG", 800),
+            hard: g("HARD_MOTION_MG", 2500),
+            clip: hw().accel_range_g,
+        }
+    }
+}
+
+/// Draws a horizontal reference line at `y` with a small label at the right
+/// edge. A line outside `rect` (a threshold above the sensor's range can
+/// never be crossed) is left out.
+fn limit_line(painter: &egui::Painter, rect: egui::Rect, y: f32, color: Color32, label: &str) {
+    if y < rect.top() || y > rect.bottom() {
+        return;
+    }
+    let from = Pos2::new(rect.left(), y);
+    let to = Pos2::new(rect.right(), y);
+    painter.line_segment([from, to], Stroke::new(1.0, color));
+    painter.text(
+        Pos2::new(rect.right() - 2.0, y),
+        egui::Align2::RIGHT_BOTTOM,
+        label,
+        egui::FontId::proportional(10.0),
+        color,
+    );
+}
+
+fn plot(ui: &mut egui::Ui, history: &VecDeque<Sample>, limits: &AccelLimits) {
     let (response, painter) = ui.allocate_painter(
-        egui::vec2(ui.available_width(), 220.0),
+        egui::vec2(ui.available_width(), 330.0),
         egui::Sense::hover(),
     );
     let rect = response.rect;
     painter.rect_filled(rect, 4.0, Color32::from_gray(24));
     let Some(last) = history.back() else { return };
-    let half = rect.height() / 2.0;
+    let band = rect.height() / 3.0;
     let x = |t: f32| rect.right() - (last.t - t) / PLOT_SECONDS * rect.width();
-    // Top half: wing servo angles 0..180. Bottom half: LED duty 0..1.
-    let wing_y = |deg: f32| rect.top() + half * (1.0 - deg / 180.0);
-    let led_y = |v: f32| rect.bottom() - v * half;
+    // Top band: wing servo angles 0..180. Middle: LED duty 0..1. Bottom:
+    // accelerometer, +-clip g.
+    let wing_y = |deg: f32| rect.top() + band * (1.0 - deg / 180.0);
+    let led_y = |v: f32| rect.top() + 2.0 * band - v * band;
+    let accel_rect = egui::Rect::from_min_max(
+        Pos2::new(rect.left(), rect.top() + 2.0 * band),
+        rect.right_bottom(),
+    );
+    let accel_y = |g: f32| accel_rect.center().y - g / limits.clip * accel_rect.height() / 2.0;
 
     let line = |points: Vec<Pos2>, color: Color32| {
         if points.len() > 1 {
@@ -1076,27 +1138,72 @@ fn plot(ui: &mut egui::Ui, history: &VecDeque<Sample>) {
         small,
     );
 
-    painter.line_segment(
-        [
-            Pos2::new(rect.left(), rect.top() + half),
-            Pos2::new(rect.right(), rect.top() + half),
-        ],
-        Stroke::new(1.0, Color32::from_gray(60)),
-    );
+    // Firmware thresholds. It compares abs(z - rest) for the nudges and the
+    // absolute abs(z) for hard motion. Drawn first so the traces sit on top.
+    let rest = last.rest_z;
+    let thresholds = [
+        (rest, limits.nudge, "nudge", Color32::from_rgb(230, 200, 60)),
+        (
+            rest,
+            limits.animation,
+            "animation",
+            Color32::from_rgb(240, 140, 50),
+        ),
+        (0.0, limits.hard, "hard", Color32::from_rgb(230, 70, 70)),
+    ];
+    for (centre, offset, name, color) in thresholds {
+        // Label only the upper line of each pair.
+        limit_line(&painter, accel_rect, accel_y(centre + offset), color, name);
+        limit_line(&painter, accel_rect, accel_y(centre - offset), color, "");
+    }
+    // The sensor saturates one LSB below full scale.
+    let clip = limits.clip * (1.0 - 1.0 / 32768.0);
+    for y in [accel_y(clip), accel_y(-clip)] {
+        painter.extend(egui::Shape::dashed_line(
+            &[Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+            Stroke::new(1.0, Color32::GRAY),
+            4.0,
+            3.0,
+        ));
+    }
+    // z bright; x and y dim, to show that side boops are ignored.
+    let axes: [(usize, Color32); 3] = [
+        (0, Color32::from_rgb(120, 70, 70)),
+        (1, Color32::from_rgb(70, 110, 80)),
+        (2, Color32::WHITE),
+    ];
+    for (axis, color) in axes {
+        line(
+            history
+                .iter()
+                .map(|s| Pos2::new(x(s.t), accel_y(s.accel[axis])))
+                .collect(),
+            color,
+        );
+    }
+
+    for i in 1..3 {
+        let y = rect.top() + band * i as f32;
+        painter.line_segment(
+            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+            Stroke::new(1.0, Color32::from_gray(60)),
+        );
+    }
     let font = egui::FontId::proportional(11.0);
-    painter.text(
-        rect.left_top() + egui::vec2(4.0, 2.0),
-        egui::Align2::LEFT_TOP,
-        "wings (deg): R orange, L cyan",
-        font.clone(),
-        Color32::GRAY,
-    );
-    painter.text(
-        Pos2::new(rect.left() + 4.0, rect.top() + half + 2.0),
-        egui::Align2::LEFT_TOP,
-        "main eye R/G/B, small eye (max) purple, white LED",
-        font,
-        Color32::GRAY,
+    let label = |band_index: f32, text: &str| {
+        painter.text(
+            Pos2::new(rect.left() + 4.0, rect.top() + band * band_index + 2.0),
+            egui::Align2::LEFT_TOP,
+            text,
+            font.clone(),
+            Color32::GRAY,
+        );
+    };
+    label(0.0, "wings (deg): R orange, L cyan");
+    label(1.0, "main eye R/G/B, small eye (max) purple, white LED");
+    label(
+        2.0,
+        "accel (g): z white, x/y dim; nudge / animation / hard / clip",
     );
 }
 

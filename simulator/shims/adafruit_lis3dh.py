@@ -32,6 +32,7 @@ _FULL_SCALE_G = {RANGE_2_G: 2, RANGE_4_G: 4, RANGE_8_G: 8, RANGE_16_G: 16}
 class LIS3DH:
     def __init__(self, int1=None, int2=None):
         self._range = RANGE_4_G
+        simhw.accel_range(_FULL_SCALE_G[self._range])
         self.data_rate = DATARATE_400_HZ
 
     @property
@@ -41,6 +42,7 @@ class LIS3DH:
     @range.setter
     def range(self, value):
         self._range = value
+        simhw.accel_range(_FULL_SCALE_G[value])
 
     @property
     def acceleration(self):

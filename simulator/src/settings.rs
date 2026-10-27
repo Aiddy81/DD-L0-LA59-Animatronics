@@ -266,6 +266,14 @@ impl SettingsState {
             .or(t.default)
     }
 
+    /// `saved` for the tunable called `key`; None when config.py has no such key.
+    pub fn saved_value(&self, key: &str) -> Option<i64> {
+        self.tunables
+            .iter()
+            .find(|t| t.key == key)
+            .and_then(|t| self.saved(t))
+    }
+
     /// The value text in settings.toml when it isn't a whole number, so
     /// config.py ignores it.
     pub fn invalid(&self, t: &Tunable) -> Option<&str> {
