@@ -1,3 +1,21 @@
+# Simulator behaviour buttons (#38)
+
+Branch: `feature/simulator-behaviour-buttons` (off `Documentation`).
+
+- [x] `sim_runtime.py`: discover no-argument `async def`s in `behaviours.*`, minus `code.py`'s `create_task` targets (parsed with `ast`) and `_` names; run one on request with `pause_breathing` set
+- [x] `hw.rs` / `pyhost.rs`: list, request and running state; `simhw.set_behaviours`, `take_behaviour_request`, `set_behaviour_running`
+- [x] `ui.rs`: Behaviours toolbar row, greyed out while one runs
+- [x] Headless test: 3 new checks (buttons found, background loops excluded, boot_sequence button re-runs boot); all 18 pass
+- [x] `build.ps1` succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] README updated
+- [ ] Interactive: row shows 7 buttons, each runs, breathing pauses/resumes, buttons grey out, Restart/Stop clears the row; existing scenarios — user (computer use can't reach the sim window)
+
+## Review
+- Found today: attention_animation, boot_sequence, data_processing_led, settle, angry_animation, nose_boops, trench_run. `settle` is a helper; renaming it `_settle` would hide it (firmware change, user's call).
+- Background loops are found by parsing `code.py`, not by watching tasks, so the row doesn't change while boot runs.
+- A button only clears `pause_breathing` if it set it, so it never cuts short a pause a firmware trigger owns.
+- No `trench_active` special case: a button-started trench run doesn't hold off the LED scheduler (documented).
+
 # Simulator UI polish (#50, #52, #56, #59)
 
 Branch: `feature/simulator-ui-polish` (off `Documentation`). One commit per issue, one PR.

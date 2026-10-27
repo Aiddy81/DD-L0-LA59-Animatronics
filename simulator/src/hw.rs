@@ -54,6 +54,12 @@ pub struct HwState {
     pub clock: SimClock,
     pub stop_requested: bool,
     pub idle_trigger: bool,
+    /// Behaviours code.py can be asked to run once, found by sim_runtime.py.
+    pub behaviours: Vec<String>,
+    /// A behaviour button click, waiting for code.py's event loop.
+    pub behaviour_request: Option<String>,
+    /// The button-started behaviour currently running, if any.
+    pub behaviour_running: Option<String>,
     /// Hold code.py to what CircuitPython 9 offers (imports, APIs, float precision).
     pub strict: bool,
     /// Make hardware calls take as long as on the robot.
@@ -85,6 +91,9 @@ impl HwState {
             clock: SimClock::new(),
             stop_requested: false,
             idle_trigger: false,
+            behaviours: Vec::new(),
+            behaviour_request: None,
+            behaviour_running: None,
             strict: true,
             board_speed: true,
             board: BoardCfg::default(),

@@ -126,6 +126,8 @@ def main():
                               for i in range(4)]
     simhw.scheduled_accel += [(110.0, (0.0, 0.0, 2.0))]
     simhw.idle_trigger_at[:] = [45.0, 100.0]
+    # The "boot_sequence" behaviour button, after everything else has settled.
+    simhw.behaviour_request_at[:] = [(130.0, "boot_sequence")]
 
     random.seed(1)
     workdir = tempfile.mkdtemp(prefix="ddl0-headless-")
@@ -164,9 +166,17 @@ def main():
         ("white LED flickers", bool(bursts)),
         ("wings keep breathing during an LED flicker", any_during(simhw.wing_writes, bursts)),
         ("motion still sensed during an LED flicker", any_during(simhw.accel_reads, bursts)),
+        ("behaviour buttons found",
+         {"boot_sequence", "nose_boops", "angry_animation", "trench_run"} <= set(simhw.behaviours)),
+        ("no button for code.py's background tasks",
+         not {"motion_sense", "ambient_breathing", "idle_attention", "random_led_scheduler"}
+         & set(simhw.behaviours)),
+        ("boot_sequence button runs it again",
+         "[sim] running boot_sequence" in log and log.count("Boot sequence complete!") == 2),
         ("heap estimate within board budget", simhw.heap_peak[0] < simhw.HEAP_BUDGET),
     ]
     print()
+    print("Behaviour buttons: {}".format(", ".join(simhw.behaviours)))
     print("Audio played: {}".format(simhw.audio))
     print("LED bursts: {}".format(["{:.1f}-{:.1f}s".format(a, b) for a, b in bursts]))
     print("Heap peak ~{:.0f} KB of {:.0f} KB".format(simhw.heap_peak[0] / 1024, simhw.HEAP_BUDGET / 1024))
