@@ -86,7 +86,13 @@ mod simhw {
 
     #[pyfunction]
     fn play_wav(path: String, level: f32, looped: bool) {
-        hw().audio.push(AudioCmd::Play {
+        let mut s = hw();
+        // Every behaviour starts with a sound, so this is what ends a skip.
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+        s.end_skip(&format!("{name} started"));
+        s.audio.push(AudioCmd::Play {
             path,
             level,
             looped,
@@ -190,7 +196,21 @@ mod simhw {
         angry: Option<(u32, u32, f64, f64)>,
         idle: Option<(f64, f64)>,
     ) {
-        hw().fw_state = FwState {
+        let mut s = hw();
+        // A behaviour also shows as a hardware.py event flipping (e.g.
+        // pause_breathing). Snapshots are 0.1 s apart in real time, so a short
+        // flip can be missed at skip speed; the sound in play_wav is the sure sign.
+        let flipped = events.iter().find(|(name, set)| {
+            s.fw_state
+                .events
+                .iter()
+                .any(|(old, was)| old == name && was != set)
+        });
+        if let Some((name, set)) = flipped {
+            let change = if *set { "set" } else { "cleared" };
+            s.end_skip(&format!("{name} {change}"));
+        }
+        s.fw_state = FwState {
             events,
             tasks: tasks
                 .into_iter()
