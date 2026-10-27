@@ -209,6 +209,12 @@ def main():
     shake_response = next((name for t, name in simhw.audio if t >= SHAKE_AT
                            and name in ("angry.wav", "noseBoops.wav")), None)
     bursts = led_bursts(simhw.white_writes)
+    states = simhw.states
+    events = {name: {s for _, evs, _, _, _ in states for n, s in evs if n == name}
+              for name in ("pause_breathing", "reset_idle_event", "trench_active")}
+    tasks = {task.split(" → ")[0] for _, _, ts, _, _ in states for task in ts}
+    angry = [(t, a) for t, _, _, a, _ in states if a]
+    idle = [(t, i) for t, _, _, _, i in states if i]
     checks = [
         ("no traceback", "Traceback" not in log),
         ("boot sequence completes", "Boot sequence complete!" in log),
@@ -239,6 +245,15 @@ def main():
         ("boot_sequence button runs it again",
          "[sim] running boot_sequence" in log and log.count("Boot sequence complete!") == 2),
         ("heap estimate within board budget", simhw.heap_peak[0] < simhw.HEAP_BUDGET),
+        ("state panel lists hardware.py's events", all(events.values())),
+        ("state panel sees pause_breathing set and clear", events["pause_breathing"] == {True, False}),
+        ("state panel lists the background tasks",
+         {"motion_sense", "ambient_breathing", "idle_attention", "random_led_scheduler"} <= tasks),
+        ("state panel counts nudges in the angry window",
+         any(a[0] >= 1 and a[1] > 0 for _, a in angry)),
+        ("state panel angry window counts down", any(0 < a[2] - t <= a[3] for t, a in angry)),
+        ("state panel idle timer counts down", any(0 < i[0] - t <= i[1] for t, i in idle)),
+        ("state panel cleared when the run ends", bool(states) and states[-1][1:] == ([], [], None, None)),
     ]
     print()
     print("Behaviour buttons: {}".format(", ".join(simhw.behaviours)))

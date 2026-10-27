@@ -126,6 +126,7 @@ pub struct UiState {
     open_board: bool,
     open_plot: bool,
     open_settings: bool,
+    open_state: bool,
     settings: SettingsState,
     panel_width: f32,
     log_height: f32,
@@ -167,6 +168,7 @@ impl UiState {
             open_board: prefs.open_board,
             open_plot: prefs.open_plot,
             open_settings: prefs.open_settings,
+            open_state: prefs.open_state,
             settings: SettingsState::default(),
             panel_width: prefs.panel_width,
             log_height: prefs.log_height,
@@ -234,6 +236,7 @@ fn save_prefs(
         open_board: ui.open_board,
         open_plot: ui.open_plot,
         open_settings: ui.open_settings,
+        open_state: ui.open_state,
         show_firmware: ui.show_firmware,
         show_sim: ui.show_sim,
     };
@@ -691,6 +694,12 @@ fn panels(
             ui.open_motion = motion.openness > 0.5;
 
             side.separator();
+            let state = egui::CollapsingHeader::new("State")
+                .default_open(ui.open_state)
+                .show(side, state_panel);
+            ui.open_state = state.openness > 0.5;
+
+            side.separator();
             let pca = egui::CollapsingHeader::new("PCA9685")
                 .default_open(ui.open_pca)
                 .show(side, |side| {
@@ -1122,6 +1131,74 @@ fn settings_panel(ui: &mut egui::Ui, state: &mut SettingsState, dir: &Path, auto
             row.colored_label(pending, format!("{} unsaved", state.edits.len()));
         }
     });
+}
+
+/// Remaining seconds to `deadline` as a bar that empties towards it.
+fn countdown(
+    ui: &mut egui::Ui,
+    now: f64,
+    deadline: f64,
+    length: f64,
+    text: String,
+) -> egui::Response {
+    let left = (deadline - now).max(0.0);
+    let fraction = if length > 0.0 { left / length } else { 0.0 };
+    ui.add(egui::ProgressBar::new(fraction as f32).text(format!("{text} {left:.1} s")))
+}
+
+fn state_panel(ui: &mut egui::Ui) {
+    let (state, now) = {
+        let s = hw();
+        (s.fw_state.clone(), s.clock.now())
+    };
+    if state.events.is_empty() && state.tasks.is_empty() {
+        ui.label(egui::RichText::new("code.py isn't running").weak());
+        return;
+    }
+    ui.horizontal_wrapped(|row| {
+        for (name, set) in &state.events {
+            let text = egui::RichText::new(name).monospace();
+            if *set {
+                row.label(text.color(Color32::from_rgb(70, 170, 90)).strong())
+                    .on_hover_text("set");
+            } else {
+                row.label(text.weak()).on_hover_text("clear");
+            }
+        }
+    });
+
+    match state.angry {
+        Some(a) => {
+            countdown(
+                ui,
+                now,
+                a.deadline,
+                a.length,
+                format!("nudges {} / {} \u{b7} window", a.count, a.needed),
+            )
+            .on_hover_text(
+                "Nudges counted in the current angry window. motion_sense starts a new \
+                 window (count back to 0) the next time it checks after this runs out.",
+            );
+        }
+        None => {
+            ui.label(egui::RichText::new("angry window: not started").weak());
+        }
+    }
+    match state.idle {
+        Some(i) => {
+            countdown(ui, now, i.deadline, i.length, "idle trigger in".into())
+                .on_hover_text("A nudge restarts this wait with a new random length.");
+        }
+        None => {
+            ui.label(egui::RichText::new("idle trigger: not waiting").weak())
+                .on_hover_text("idle_attention is running its animation, or hasn't started.");
+        }
+    }
+
+    for task in &state.tasks {
+        ui.label(egui::RichText::new(task).monospace().small());
+    }
 }
 
 fn board_panel(ui: &mut egui::Ui) {

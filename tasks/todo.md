@@ -1,3 +1,22 @@
+# Simulator live State panel (#39)
+
+Branch: `feature/simulator-state-panel` (off `Documentation`).
+
+- [x] `sim_runtime.py`: `_State` snapshot at 10 Hz real time: hardware.py's `asyncio.Event`s, task await chains, `motion_sense`'s nudge count / angry window and the idle `_wait_for` deadline, read from coroutine frames; cleared when the run ends
+- [x] `hw.rs` / `pyhost.rs`: `FwState` + `simhw.set_state`
+- [x] `ui.rs` / `prefs.rs`: State section (event badges, two countdown bars, task list), open state saved
+- [x] `tests/simhw.py` + `headless.py`: 7 new state checks
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] `headless.py` passes: all 25 checks and 7 scenarios (firmware unchanged)
+- [x] README updated
+- [ ] Interactive: events flip during a boop, count 1→2→3 then angry resets it, idle countdown restarts on nudge, Trigger idle → "not waiting" + attention/trench task — user
+
+## Review
+- The count, window and idle wait are locals in the firmware's coroutines, so they're read from `cr_frame.f_locals`; the idle deadline comes from the simulator's own `_wait_for` frame, so it's exact. Firmware untouched.
+- Deadlines are sent in virtual time and the UI counts down from the clock, so bars move smoothly between snapshots even at high speed.
+- Events are discovered from `hardware.py`, not listed; a renamed firmware local only blanks its row.
+- Tasks asyncio starts for itself (wait_for's inner `Event.wait`) are hidden; chains stop at the first non-firmware coroutine.
+
 # Simulator Settings panel for settings.toml (#46)
 
 Branch: `feature/simulator-settings-editor` (off `Documentation`).

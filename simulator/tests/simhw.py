@@ -42,6 +42,8 @@ scenario = [None]
 wing_writes = []
 white_writes = []
 accel_reads = []
+# (virtual time, events, tasks, angry, idle) for each State panel snapshot.
+states = []
 
 _t0 = [time.monotonic()]
 _debt = [0.0]
@@ -146,6 +148,10 @@ def set_accel(x, y, z):
 
 def trigger_idle():
     idle_now[0] = True
+
+
+def set_state(events, tasks, angry, idle):
+    states.append((now(), list(events), list(tasks), angry, idle))
 
 
 def set_scenario(name, state, results):
