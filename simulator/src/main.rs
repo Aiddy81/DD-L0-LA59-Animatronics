@@ -13,6 +13,7 @@ mod prefs;
 mod pyhost;
 mod scene;
 mod settings;
+mod theme;
 mod ui;
 mod wav;
 
@@ -160,8 +161,10 @@ fn main() {
             &prefs,
         ))
         .insert_resource(audio::AudioMix::new(prefs.volume, prefs.muted))
+        .insert_resource(theme::ActiveTheme::new(prefs.theme, prefs.ui_scale))
         .insert_resource(prefs)
         .add_plugins((
+            theme::ThemePlugin,
             scene::ScenePlugin,
             audio::AudioPlugin,
             capture::CapturePlugin,

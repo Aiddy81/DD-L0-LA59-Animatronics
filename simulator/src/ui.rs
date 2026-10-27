@@ -21,6 +21,7 @@ use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice, RoomLight};
 use crate::settings::SettingsState;
+use crate::theme::{self, ActiveTheme, Palette, ThemeChoice};
 
 /// A gentle bump, added to the held reading along the chosen direction. From
 /// rest it clears the firmware's NUDGE_Z_MG (250 mg) threshold.
@@ -169,6 +170,9 @@ enum Cmd {
     Shake,
     ToggleHelp,
     CloseHelp,
+    ScaleUp,
+    ScaleDown,
+    ScaleReset,
 }
 
 /// One line of the Shortcuts window. Mouse-only controls have no binds or
@@ -209,6 +213,7 @@ const fn bound(
 }
 
 const NO_MODS: egui::Modifiers = egui::Modifiers::NONE;
+const CTRL: egui::Modifiers = egui::Modifiers::CTRL;
 
 const SHORTCUTS: &[Shortcut] = &[
     bound(
@@ -294,7 +299,56 @@ const SHORTCUTS: &[Shortcut] = &[
         &[(NO_MODS, egui::Key::Escape)],
         Cmd::CloseHelp,
     ),
+    bound(
+        "Window",
+        "Ctrl+=",
+        "Larger UI",
+        // Plus covers a layout where = needs Shift; egui ignores extra Shift.
+        &[(CTRL, egui::Key::Equals), (CTRL, egui::Key::Plus)],
+        Cmd::ScaleUp,
+    ),
+    bound(
+        "Window",
+        "Ctrl+-",
+        "Smaller UI",
+        &[(CTRL, egui::Key::Minus)],
+        Cmd::ScaleDown,
+    ),
+    bound(
+        "Window",
+        "Ctrl+0",
+        "Reset UI scale to 100%",
+        &[(CTRL, egui::Key::Num0)],
+        Cmd::ScaleReset,
+    ),
 ];
+
+/// Hover text for a control. When `cmd` has a key binding in `SHORTCUTS` the
+/// keys are appended, so a tooltip can't disagree with the Shortcuts window.
+/// Also shown while the control is disabled, when egui would otherwise show
+/// nothing.
+fn tip(resp: egui::Response, text: &str, cmd: Option<Cmd>) -> egui::Response {
+    let keys = cmd
+        .and_then(|c| SHORTCUTS.iter().find(|row| row.cmd == Some(c)))
+        .map(|row| row.keys);
+    let text = match keys {
+        Some(keys) => format!("{text} ({keys})"),
+        None => text.to_owned(),
+    };
+    resp.on_hover_text(text.clone())
+        .on_disabled_hover_text(text)
+}
+
+/// A collapsible right-panel section with the shared heading style. Returns
+/// whether it is open, for the caller to remember.
+fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) -> bool {
+    let heading = egui::RichText::new(title).text_style(egui::TextStyle::Heading);
+    let shown = egui::CollapsingHeader::new(heading)
+        .id_salt(title)
+        .default_open(open)
+        .show(ui, body);
+    shown.openness > 0.5
+}
 
 #[derive(Resource)]
 pub struct Host(pub PyHost);
@@ -334,6 +388,10 @@ pub struct UiState {
     /// The Shortcuts window; not saved to prefs.
     show_shortcuts: bool,
     deploy: DeployDlg,
+    /// UI scale (percent) while its slider is being dragged. Zooming the UI
+    /// under the cursor mid-drag would move the slider away from it, so the
+    /// scale is applied on release.
+    scale_drag: Option<f32>,
 }
 
 /// What the bottom panel shows: the console log, or a file on the simulated drive.
@@ -445,6 +503,7 @@ impl UiState {
             drive_file: DriveFile::default(),
             show_shortcuts: false,
             deploy: DeployDlg::Closed,
+            scale_drag: None,
         }
     }
 }
@@ -474,7 +533,12 @@ struct SaveState {
 /// `Last` so the AppExit event is still readable.
 fn save_prefs(
     ui: Res<UiState>,
-    (model, room, mix): (Option<Res<ModelChoice>>, Res<RoomLight>, Res<AudioMix>),
+    (model, room, mix, theme): (
+        Option<Res<ModelChoice>>,
+        Res<RoomLight>,
+        Res<AudioMix>,
+        Res<ActiveTheme>,
+    ),
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut saved: ResMut<Prefs>,
     paths: Res<crate::Paths>,
@@ -500,6 +564,8 @@ fn save_prefs(
         log_height: ui.log_height,
         model_gltf: model.map(|m| m.use_gltf).or(saved.model_gltf),
         room_light: *room,
+        theme: theme.choice,
+        ui_scale: theme.scale,
         strict,
         board_speed,
         servo_speed,
@@ -574,7 +640,7 @@ fn channel_view(cfg: &SimConfig, ch: usize) -> ChannelView {
 
 /// Colour swatch of an eye's duty-cycle RGB, scaled so the peak duty is full
 /// brightness (the raw duty tops out near a third, which would look dim).
-fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3) -> egui::Response {
+fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3, outline: Color32) -> egui::Response {
     let scaled = (duty_rgb / EYE_PEAK_DUTY).clamp(Vec3::ZERO, Vec3::ONE);
     // egui::Rgba is linear; converting to Color32 applies the sRGB gamma.
     let colour = Color32::from(egui::Rgba::from_rgb(scaled.x, scaled.y, scaled.z));
@@ -584,7 +650,7 @@ fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3) -> egui::Response {
     painter.rect_stroke(
         rect,
         3.0,
-        Stroke::new(1.0, Color32::GRAY),
+        Stroke::new(1.0, outline),
         egui::StrokeKind::Inside,
     );
     response.on_hover_text(format!(
@@ -775,12 +841,14 @@ fn panels(
     mut host: ResMut<Host>,
     model: Option<ResMut<ModelChoice>>,
     mut room: ResMut<RoomLight>,
-    (cfg, mut audio): (Res<SimConfig>, AudioUi),
+    (cfg, mut audio, mut theme): (Res<SimConfig>, AudioUi, ResMut<ActiveTheme>),
     mut captures: Captures,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else {
         return;
     };
+    let palette = theme.palette;
+    let scale = theme.scale;
 
     // Consumed (not just read) so a button that kept focus after a click
     // doesn't also activate on Space. Skipped while a text field has focus.
@@ -822,45 +890,59 @@ fn panels(
                 }
                 Cmd::ToggleHelp => ui.show_shortcuts = !ui.show_shortcuts,
                 Cmd::CloseHelp => ui.show_shortcuts = false,
+                Cmd::ScaleUp => theme.set_scale(theme::step_scale(scale, 1)),
+                Cmd::ScaleDown => theme.set_scale(theme::step_scale(scale, -1)),
+                Cmd::ScaleReset => theme.set_scale(1.0),
             }
         }
     }
 
     egui::TopBottomPanel::top("toolbar").show(ctx, |bar| {
-        bar.horizontal(|row| {
+        bar.horizontal_wrapped(|row| {
             let running = host.0.is_running();
-            if row
-                .button(if running { "Restart" } else { "Run" })
-                .on_hover_text("Run code.py from the start (R)")
-                .clicked()
+            if tip(
+                row.button(if running { "Restart" } else { "Run" }),
+                "Run code.py from the start",
+                Some(Cmd::Restart),
+            )
+            .clicked()
             {
                 host.0.start();
             }
-            if row
-                .add_enabled(running, egui::Button::new("Stop"))
-                .clicked()
+            if tip(
+                row.add_enabled(running, egui::Button::new("Stop")),
+                "Stop code.py",
+                None,
+            )
+            .clicked()
             {
                 host.0.stop();
             }
             let paused = hw().clock.is_paused();
-            if row
-                .button(if paused { "Resume" } else { "Pause" })
-                .on_hover_text("Freeze code.py's clock (Space)")
-                .clicked()
+            if tip(
+                row.button(if paused { "Resume" } else { "Pause" }),
+                "Freeze code.py's clock",
+                Some(Cmd::Pause),
+            )
+            .clicked()
             {
                 toggle_pause();
             }
-            if row
-                .add_enabled(paused, egui::Button::new("+10 ms"))
-                .on_hover_text("Run the paused clock for 10 ms")
-                .clicked()
+            if tip(
+                row.add_enabled(paused, egui::Button::new("+10 ms")),
+                "Run the paused clock for 10 ms",
+                None,
+            )
+            .clicked()
             {
                 step_clock(STEP_SHORT_S);
             }
-            if row
-                .add_enabled(paused, egui::Button::new("+100 ms"))
-                .on_hover_text("Run the paused clock for 100 ms (.)")
-                .clicked()
+            if tip(
+                row.add_enabled(paused, egui::Button::new("+100 ms")),
+                "Run the paused clock for 100 ms",
+                Some(Cmd::Step),
+            )
+            .clicked()
             {
                 step_clock(STEP_LONG_S);
             }
@@ -872,98 +954,130 @@ fn panels(
                 (s.clock.speed, s.skipping)
             };
             // Read back every frame so the slider follows presets and the end of a skip.
-            if row
-                .add_enabled(
-                    !skipping,
-                    egui::Slider::new(&mut speed, 1.0..=200.0)
-                        .logarithmic(true)
-                        .suffix("x"),
-                )
-                .changed()
+            let slider = row.add_enabled(
+                !skipping,
+                egui::Slider::new(&mut speed, 1.0..=200.0)
+                    .logarithmic(true)
+                    .suffix("x"),
+            );
+            if tip(
+                slider,
+                "How fast code.py's clock runs against real time (1x to 200x)",
+                None,
+            )
+            .changed()
                 && !skipping
             {
                 hw().set_speed(speed);
             }
             for preset in SPEED_PRESETS {
-                if row.button(format!("{preset}x")).clicked() {
+                if tip(
+                    row.button(format!("{preset}x")),
+                    &format!("Run at {preset}x"),
+                    None,
+                )
+                .clicked()
+                {
                     hw().set_speed(preset);
                 }
             }
-            if row
-                .button(if skipping { "Stop skip" } else { "Skip to next event" })
-                .on_hover_text("Run flat out until a behaviour starts (a sound plays or a hardware.py event changes), then drop back to 1x (F)")
-                .clicked()
+            if tip(
+                row.button(if skipping { "Stop skip" } else { "Skip to next event" }),
+                "Run flat out until a behaviour starts (a sound plays or a hardware.py event changes), then drop back to 1x",
+                Some(Cmd::Skip),
+            )
+            .clicked()
             {
                 toggle_skip();
             }
-            if row
-                .button("Trigger idle now")
-                .on_hover_text("Ends the idle wait so attention_animation or trench_run runs (I)")
-                .clicked()
+            if tip(
+                row.button("Trigger idle now"),
+                "Ends the idle wait so attention_animation or trench_run runs",
+                Some(Cmd::Idle),
+            )
+            .clicked()
             {
                 hw().trigger_idle();
             }
             row.separator();
             let mut strict = hw().strict;
-            if row
-                .checkbox(&mut strict, "CircuitPython strict")
-                .on_hover_text("Only CircuitPython 9 modules and APIs, and its float precision for time.monotonic(). Applies on restart.")
-                .changed()
+            if tip(
+                row.checkbox(&mut strict, "CircuitPython strict"),
+                "Only CircuitPython 9 modules and APIs, and its float precision for time.monotonic(). Applies on restart.",
+                None,
+            )
+            .changed()
             {
                 hw().strict = strict;
             }
             let mut board_speed = hw().board_speed;
-            if row
-                .checkbox(&mut board_speed, "Board speed")
-                .on_hover_text("Each servo/LED write, accelerometer read and scheduler pass takes as long as on the robot ([board] in sim.toml).")
-                .changed()
+            if tip(
+                row.checkbox(&mut board_speed, "Board speed"),
+                "Each servo/LED write, accelerometer read and scheduler pass takes as long as on the robot ([board] in sim.toml).",
+                None,
+            )
+            .changed()
             {
                 hw().board_speed = board_speed;
             }
             let mut servo_speed = hw().servo_speed;
-            if row
-                .checkbox(&mut servo_speed, "Servo speed limit")
-                .on_hover_text("The 3D wings turn no faster than the real servo (sec_per_60deg in sim.toml [servo]). The log warns about moves it can't follow either way.")
-                .changed()
+            if tip(
+                row.checkbox(&mut servo_speed, "Servo speed limit"),
+                "The 3D wings turn no faster than the real servo (sec_per_60deg in sim.toml [servo]). The log warns about moves it can't follow either way.",
+                None,
+            )
+            .changed()
             {
                 hw().servo_speed = servo_speed;
             }
             log_mode_checkbox(row, &captures.paths.fs);
-            row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved")
-                .on_hover_text("Also when a shim in dist\\shims\\ is added, saved or deleted.");
+            tip(
+                row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved"),
+                "Also when a shim in dist\\shims\\ is added, saved or deleted.",
+                None,
+            );
             if let Some(mut model) = model {
                 row.separator();
                 row.label("Model");
                 let mut use_gltf = model.use_gltf;
                 row.add_enabled_ui(model.gltf_available, |r| {
-                    r.selectable_value(&mut use_gltf, true, "Lola")
-                        .on_disabled_hover_text("Build simulator/assets/droid.glb first (see README)");
+                    let lola = r.selectable_value(&mut use_gltf, true, "Lola");
+                    if model.gltf_available {
+                        lola.on_hover_text("The droid model from assets/droid.glb");
+                    } else {
+                        lola.on_disabled_hover_text("Build simulator/assets/droid.glb first (see README)");
+                    }
                 });
-                row.selectable_value(&mut use_gltf, false, "Primitive");
+                row.selectable_value(&mut use_gltf, false, "Primitive")
+                    .on_hover_text("The simple built-in shapes");
                 // Only touch the resource on a real change, so the model isn't rebuilt every frame.
                 if use_gltf != model.use_gltf {
                     model.use_gltf = use_gltf;
                 }
             }
             let deploying = matches!(ui.deploy, DeployDlg::Running(_));
-            if row
-                .add_enabled(!deploying, egui::Button::new("Deploy to CIRCUITPY"))
-                .on_hover_text("Copy the changed firmware files to the board (never lib/ or boot_out.txt)")
-                .clicked()
+            if tip(
+                row.add_enabled(!deploying, egui::Button::new("Deploy to CIRCUITPY")),
+                "Copy the changed firmware files to the board (never lib/ or boot_out.txt)",
+                None,
+            )
+            .clicked()
             {
                 let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
                 ui.deploy = open_deploy(fw_dir);
             }
-            if row
-                .button("Shortcuts")
-                .on_hover_text("List every key and mouse control (? or F1)")
-                .clicked()
+            if tip(
+                row.button("Shortcuts"),
+                "List every key and mouse control",
+                Some(Cmd::ToggleHelp),
+            )
+            .clicked()
             {
                 ui.show_shortcuts = !ui.show_shortcuts;
             }
             row.label(format!("sim time {:.1} s", hw().clock.now()));
         });
-        bar.horizontal(|row| {
+        bar.horizontal_wrapped(|row| {
             let controls = &mut captures.controls;
             row.label("View");
             for (label, view) in [
@@ -971,25 +1085,29 @@ fn panels(
                 ("Side", CameraView::Side),
                 ("Top", CameraView::Top),
             ] {
-                if row.button(label).clicked() {
+                if tip(
+                    row.button(label),
+                    &format!("Look at the droid from the {}", label.to_lowercase()),
+                    None,
+                )
+                .clicked()
+                {
                     controls.camera = Some(view);
                 }
             }
-            if row
-                .button("Eyes")
-                .on_hover_text("Close-up of the eyes")
-                .clicked()
-            {
+            if tip(row.button("Eyes"), "Close-up of the eyes", None).clicked() {
                 controls.camera = Some(CameraView::Eyes);
             }
-            if row.button("Reset").clicked() {
+            if tip(row.button("Reset"), "Back to the starting view", None).clicked() {
                 controls.camera = Some(CameraView::Reset);
             }
             row.separator();
-            if row
-                .button("Screenshot")
-                .on_hover_text("Save a PNG of the window to the captures folder next to the exe")
-                .clicked()
+            if tip(
+                row.button("Screenshot"),
+                "Save a PNG of the window to the captures folder next to the exe",
+                None,
+            )
+            .clicked()
             {
                 controls.screenshot = true;
             }
@@ -998,10 +1116,12 @@ fn panels(
             } else {
                 "Record"
             };
-            if row
-                .button(record_label)
-                .on_hover_text("Save a PNG every 0.1 s, up to 30 s, for making a GIF")
-                .clicked()
+            if tip(
+                row.button(record_label),
+                "Save a PNG every 0.1 s, up to 30 s, for making a GIF",
+                None,
+            )
+            .clicked()
             {
                 controls.toggle_record = true;
             }
@@ -1010,11 +1130,25 @@ fn panels(
                 .on_hover_text("Room lighting, to judge how bright the eyes and white LED look in a dim room");
             let mut light = *room;
             for choice in RoomLight::ALL {
-                row.selectable_value(&mut light, choice, choice.label());
+                tip(
+                    row.selectable_value(&mut light, choice, choice.label()),
+                    &format!("{} room lighting", choice.label()),
+                    None,
+                );
             }
             // Only touch the resource on a real change, so the lights aren't reset every frame.
             if light != *room {
                 *room = light;
+            }
+            row.separator();
+            let (picked, new_scale) =
+                appearance_controls(row, theme.choice, theme.scale, &mut ui.scale_drag);
+            // Written only on a real change so the apply system's change check stays quiet.
+            if let Some(choice) = picked.filter(|c| *c != theme.choice) {
+                theme.set_choice(choice);
+            }
+            if let Some(s) = new_scale {
+                theme.set_scale(s);
             }
         });
         // Cloned out so the lock isn't held while a click writes the request.
@@ -1042,7 +1176,9 @@ fn panels(
             });
         }
         if !ui.scenarios.is_empty() {
-            bar.horizontal(|row| scenario_row(row, &mut ui, &mut host.0, &cfg, &captures.paths));
+            bar.horizontal(|row| {
+                scenario_row(row, &mut ui, &mut host.0, &cfg, &captures.paths, palette)
+            });
         }
     });
 
@@ -1050,29 +1186,37 @@ fn panels(
     let side_panel = egui::SidePanel::right("hardware")
         .default_width(ui.panel_width)
         .show(ctx, |side| {
-            let motion = egui::CollapsingHeader::new("Motion (LIS3DH)")
-                .default_open(ui.open_motion)
-                .show(side, |side| {
+            let motion_open = section(side, "Motion (LIS3DH)", ui.open_motion, |side| {
                     side.horizontal_wrapped(|row| {
                         let dir = hw().nudge_dir;
-                        if row
-                            .button("Nudge")
-                            .on_hover_text("One reading 0.3 g past the held value, in the chosen direction (N). Clicking the droid also boops, harder the longer you hold, from the side you click")
-                            .clicked()
+                        if tip(
+                            row.button("Nudge"),
+                            "One reading 0.3 g past the held value, in the chosen direction. Clicking the droid also boops, harder the longer you hold, from the side you click",
+                            Some(Cmd::Nudge),
+                        )
+                        .clicked()
                         {
                             nudge(dir);
                         }
-                        if row
-                            .button("Hard shake")
-                            .on_hover_text("One reading 2 g past the held value, in the chosen direction (S)")
-                            .clicked()
+                        if tip(
+                            row.button("Hard shake"),
+                            "One reading 2 g past the held value, in the chosen direction",
+                            Some(Cmd::Shake),
+                        )
+                        .clicked()
                         {
                             shake(dir);
                         }
-                        if row.checkbox(&mut ui.tipped, "Tipped over").changed() {
+                        if tip(
+                            row.checkbox(&mut ui.tipped, "Tipped over"),
+                            "Hold the sensor upside down (z reads -1 g)",
+                            None,
+                        )
+                        .changed()
+                        {
                             hw().accel_g = [0.0, 0.0, if ui.tipped { -1.0 } else { 1.0 }];
                         }
-                        if row.button("Rest").clicked() {
+                        if tip(row.button("Rest"), "Back to lying flat (z reads +1 g)", None).clicked() {
                             hw().accel_g = [0.0, 0.0, 1.0];
                             ui.tipped = false;
                         }
@@ -1101,26 +1245,27 @@ fn panels(
                         .iter_mut()
                         .zip(["held x (g)", "held y (g)", "held z (g)"])
                     {
-                        changed |= side
-                            .add(egui::Slider::new(value, -3.0..=3.0).text(label))
-                            .changed();
+                        changed |= tip(
+                            side.add(egui::Slider::new(value, -3.0..=3.0).text(label)),
+                            "The accelerometer reading held between nudges",
+                            None,
+                        )
+                        .changed();
                     }
                     if changed {
                         hw().accel_g = held;
                     }
                 });
-            ui.open_motion = motion.openness > 0.5;
+            ui.open_motion = motion_open;
 
             side.separator();
-            let state = egui::CollapsingHeader::new("State")
-                .default_open(ui.open_state)
-                .show(side, state_panel);
-            ui.open_state = state.openness > 0.5;
+            let state_open = section(side, "State", ui.open_state, |side| {
+                state_panel(side, palette)
+            });
+            ui.open_state = state_open;
 
             side.separator();
-            let pca = egui::CollapsingHeader::new("PCA9685")
-                .default_open(ui.open_pca)
-                .show(side, |side| {
+            let pca_open = section(side, "PCA9685", ui.open_pca, |side| {
                     egui::Grid::new("channels")
                         .striped(true)
                         .show(side, |grid| {
@@ -1158,7 +1303,7 @@ fn panels(
                                 match view {
                                     ChannelView::Angle(Some(a)) => grid.label(format!("{a:5.1}°")),
                                     ChannelView::Angle(None) => grid.label("-"),
-                                    ChannelView::Eye(rgb) => eye_swatch(grid, rgb),
+                                    ChannelView::Eye(rgb) => eye_swatch(grid, rgb, palette.muted),
                                     ChannelView::Blank => grid.label(""),
                                 };
                                 grid.end_row();
@@ -1184,26 +1329,24 @@ fn panels(
                         .weak(),
                     );
                 });
-            ui.open_pca = pca.openness > 0.5;
+            ui.open_pca = pca_open;
 
             side.separator();
-            let board = egui::CollapsingHeader::new("Board")
-                .default_open(ui.open_board)
-                .show(side, board_panel);
-            ui.open_board = board.openness > 0.5;
+            let board_open = section(side, "Board", ui.open_board, |side| {
+                board_panel(side, palette)
+            });
+            ui.open_board = board_open;
 
             side.separator();
-            let audio_section = egui::CollapsingHeader::new("Audio")
-                .default_open(ui.open_audio)
-                .show(side, |side| audio_panel(side, &mut audio, fw_dir));
-            ui.open_audio = audio_section.openness > 0.5;
+            let audio_open = section(side, "Audio", ui.open_audio, |side| {
+                audio_panel(side, &mut audio, fw_dir, palette)
+            });
+            ui.open_audio = audio_open;
             // The panel's sound list is only re-scanned while it is showing.
             audio.sounds.wanted = ui.open_audio;
 
             side.separator();
-            let plot_section = egui::CollapsingHeader::new("Plot")
-                .default_open(ui.open_plot)
-                .show(side, |side| {
+            let plot_open = section(side, "Plot", ui.open_plot, |side| {
                     let limits = AccelLimits::read(&ui.settings);
                     let heap_budget_kb = hw().board.heap_budget_kb as f32;
                     let state: &mut UiState = &mut ui;
@@ -1214,18 +1357,17 @@ fn panels(
                         &state.markers,
                         &limits,
                         heap_budget_kb,
+                        palette,
                     )
                 });
-            ui.open_plot = plot_section.openness > 0.5;
+            ui.open_plot = plot_open;
 
             side.separator();
             let auto_reload = ui.auto_reload;
-            let settings = egui::CollapsingHeader::new("Settings (settings.toml)")
-                .default_open(ui.open_settings)
-                .show(side, |side| {
-                    settings_panel(side, &mut ui.settings, fw_dir, auto_reload);
-                });
-            ui.open_settings = settings.openness > 0.5;
+            let settings_open = section(side, "Settings (settings.toml)", ui.open_settings, |side| {
+                settings_panel(side, &mut ui.settings, fw_dir, auto_reload, palette);
+            });
+            ui.open_settings = settings_open;
         });
     ui.panel_width = side_panel.response.rect.width();
 
@@ -1240,27 +1382,51 @@ fn panels(
                     (LogTab::File(LOG_FILES[0]), LOG_FILES[0]),
                     (LogTab::File(LOG_FILES[1]), LOG_FILES[1]),
                 ] {
-                    row.selectable_value(&mut ui.log_tab, tab, label);
+                    let hint = match tab {
+                        LogTab::Console => {
+                            "The console output of code.py and the simulator".to_owned()
+                        }
+                        LogTab::File(name) => format!("{name} on the simulated drive"),
+                    };
+                    tip(
+                        row.selectable_value(&mut ui.log_tab, tab, label),
+                        &hint,
+                        None,
+                    );
                 }
                 row.separator();
                 if let LogTab::File(name) = ui.log_tab {
                     drive_file_header(row, &ui.drive_file, fs_dir, name);
                     return;
                 }
-                row.add(
-                    egui::TextEdit::singleline(&mut ui.log_filter)
-                        .hint_text("search")
-                        .desired_width(180.0),
+                tip(
+                    row.add(
+                        egui::TextEdit::singleline(&mut ui.log_filter)
+                            .hint_text("search")
+                            .desired_width(180.0),
+                    ),
+                    "Show only the log lines containing this text",
+                    None,
                 );
-                row.checkbox(&mut ui.show_firmware, "Firmware");
-                row.checkbox(&mut ui.show_sim, "[sim]");
-                if row.button("Clear").clicked() {
+                tip(
+                    row.checkbox(&mut ui.show_firmware, "Firmware"),
+                    "Show lines printed by code.py",
+                    None,
+                );
+                tip(
+                    row.checkbox(&mut ui.show_sim, "[sim]"),
+                    "Show the simulator's own messages",
+                    None,
+                );
+                if tip(row.button("Clear"), "Empty the log", None).clicked() {
                     hw().clear_log();
                 }
-                if row
-                    .button("Copy")
-                    .on_hover_text("Copy the lines shown to the clipboard")
-                    .clicked()
+                if tip(
+                    row.button("Copy"),
+                    "Copy the lines shown to the clipboard",
+                    None,
+                )
+                .clicked()
                 {
                     let filter = ui.log_filter.to_lowercase();
                     // Released before copy_text so the lock is never held across egui calls.
@@ -1273,10 +1439,12 @@ fn panels(
                         .join("\n");
                     row.ctx().copy_text(text);
                 }
-                if row
-                    .button("Save")
-                    .on_hover_text("Save the whole log to the captures folder next to the exe")
-                    .clicked()
+                if tip(
+                    row.button("Save"),
+                    "Save the whole log to the captures folder next to the exe",
+                    None,
+                )
+                .clicked()
                 {
                     // Snapshot first: file IO must not run under the shared lock.
                     let text = hw()
@@ -1330,7 +1498,7 @@ fn panels(
                                     egui::Label::new(
                                         egui::RichText::new(&line.text)
                                             .monospace()
-                                            .color(Color32::from_rgb(110, 170, 255)),
+                                            .color(palette.link),
                                     )
                                     .sense(egui::Sense::click()),
                                 )
@@ -1343,7 +1511,7 @@ fn panels(
                             area.label(
                                 egui::RichText::new(&line.text)
                                     .monospace()
-                                    .color(Color32::from_rgb(235, 90, 80)),
+                                    .color(palette.error),
                             );
                         } else {
                             area.monospace(&line.text);
@@ -1403,6 +1571,60 @@ fn shortcuts_window(win: &mut egui::Ui) {
     );
 }
 
+/// Theme picker and UI scale controls for the toolbar. Returns what changed,
+/// for the caller to write to the `ActiveTheme` resource.
+fn appearance_controls(
+    row: &mut egui::Ui,
+    choice: ThemeChoice,
+    scale: f32,
+    scale_drag: &mut Option<f32>,
+) -> (Option<ThemeChoice>, Option<f32>) {
+    row.label("Theme");
+    let mut picked = choice;
+    let combo = egui::ComboBox::from_id_salt("theme")
+        .selected_text(choice.label())
+        .show_ui(row, |list| {
+            for option in ThemeChoice::ALL {
+                list.selectable_value(&mut picked, option, option.label());
+            }
+        });
+    tip(
+        combo.response,
+        "Follow system tracks the Windows light/dark setting",
+        None,
+    );
+
+    row.label("UI scale");
+    let mut percent = scale_drag.unwrap_or(scale * 100.0);
+    let slider = row.add(
+        egui::Slider::new(
+            &mut percent,
+            theme::SCALE_MIN * 100.0..=theme::SCALE_MAX * 100.0,
+        )
+        .suffix("%")
+        .integer(),
+    );
+    let slider = tip(slider, "Scale the whole interface", None);
+    let mut new_scale = None;
+    if slider.dragged() {
+        *scale_drag = Some(percent);
+    } else if slider.drag_stopped() || slider.changed() {
+        *scale_drag = None;
+        new_scale = Some(percent / 100.0);
+    }
+    if tip(
+        row.button("Reset scale"),
+        "Reset the UI scale",
+        Some(Cmd::ScaleReset),
+    )
+    .clicked()
+    {
+        *scale_drag = None;
+        new_scale = Some(1.0);
+    }
+    (Some(picked), new_scale)
+}
+
 /// Scenario picker, Run scenario button and the current scenario's verdict.
 fn scenario_row(
     row: &mut egui::Ui,
@@ -1410,19 +1632,21 @@ fn scenario_row(
     host: &mut PyHost,
     cfg: &SimConfig,
     paths: &crate::Paths,
+    palette: &Palette,
 ) {
     row.label("Scenarios")
         .on_hover_text("Scripted inputs and expected behaviour, from simulator/scenarios/*.toml");
     if !ui.scenarios.contains(&ui.scenario_choice) {
         ui.scenario_choice = ui.scenarios[0].clone();
     }
-    egui::ComboBox::from_id_salt("scenario")
+    let picker = egui::ComboBox::from_id_salt("scenario")
         .selected_text(&ui.scenario_choice)
         .show_ui(row, |list| {
             for name in &ui.scenarios {
                 list.selectable_value(&mut ui.scenario_choice, name.clone(), name);
             }
         });
+    tip(picker.response, "Which scenario Run scenario plays", None);
     if row
         .button("Run scenario")
         .on_hover_text("Restart code.py and play the scenario against it")
@@ -1436,21 +1660,15 @@ fn scenario_row(
     let passed = status.results.iter().filter(|(_, s)| s == "pass").count();
     let total = status.results.len();
     let (text, colour) = match status.state.as_str() {
-        "pass" => (
-            format!("{} PASS {passed}/{total}", status.name),
-            Color32::from_rgb(70, 170, 90),
-        ),
+        "pass" => (format!("{} PASS {passed}/{total}", status.name), palette.ok),
         "running" => (
             format!("{} running {passed}/{total}", status.name),
-            Color32::from_rgb(230, 170, 40),
+            palette.warn,
         ),
-        "error" => (
-            format!("{} ERROR", status.name),
-            Color32::from_rgb(220, 60, 60),
-        ),
+        "error" => (format!("{} ERROR", status.name), palette.error),
         _ => (
             format!("{} FAIL {passed}/{total}", status.name),
-            Color32::from_rgb(220, 60, 60),
+            palette.error,
         ),
     };
     let details = status
@@ -1624,27 +1842,18 @@ struct SeriesDef {
     group: &'static str,
     short: &'static str,
     band: Band,
-    color: Color32,
+    /// Looked up in the active palette when drawn.
+    color: fn(&Palette) -> Color32,
     /// The small eye is dashed so it reads apart from the main eye.
     dashed: bool,
     get: fn(&Sample) -> Option<f32>,
 }
 
-const WING_R: Color32 = Color32::from_rgb(240, 170, 60);
-const WING_L: Color32 = Color32::from_rgb(90, 200, 230);
-const RED: Color32 = Color32::from_rgb(230, 60, 60);
-const GREEN: Color32 = Color32::from_rgb(60, 210, 90);
-const BLUE: Color32 = Color32::from_rgb(80, 120, 255);
-// The heap bar's colours, shared with the plot's heap band.
-const HEAP_OK: Color32 = Color32::from_rgb(70, 170, 90);
-const HEAP_HIGH: Color32 = Color32::from_rgb(230, 170, 40);
-const HEAP_OVER: Color32 = Color32::from_rgb(220, 60, 60);
-
 const fn series(
     group: &'static str,
     short: &'static str,
     band: Band,
-    color: Color32,
+    color: fn(&Palette) -> Color32,
     get: fn(&Sample) -> Option<f32>,
 ) -> SeriesDef {
     SeriesDef {
@@ -1662,42 +1871,63 @@ const fn dashed(s: SeriesDef) -> SeriesDef {
 }
 
 const SERIES: [SeriesDef; 13] = [
-    series("Wings", "R", Band::Wings, WING_R, |s| s.wings[0]),
-    series("Wings", "L", Band::Wings, WING_L, |s| s.wings[1]),
-    series("Main eye", "R", Band::Leds, RED, |s| Some(s.main.x)),
-    series("Main eye", "G", Band::Leds, GREEN, |s| Some(s.main.y)),
-    series("Main eye", "B", Band::Leds, BLUE, |s| Some(s.main.z)),
-    dashed(series("Small eye", "R", Band::Leds, RED, |s| {
-        Some(s.small.x)
-    })),
-    dashed(series("Small eye", "G", Band::Leds, GREEN, |s| {
-        Some(s.small.y)
-    })),
-    dashed(series("Small eye", "B", Band::Leds, BLUE, |s| {
-        Some(s.small.z)
-    })),
-    series("White LED", "W", Band::Leds, Color32::from_gray(220), |s| {
-        Some(s.white)
-    }),
+    series("Wings", "R", Band::Wings, |p| p.wing_r, |s| s.wings[0]),
+    series("Wings", "L", Band::Wings, |p| p.wing_l, |s| s.wings[1]),
+    series("Main eye", "R", Band::Leds, |p| p.ch_r, |s| Some(s.main.x)),
+    series("Main eye", "G", Band::Leds, |p| p.ch_g, |s| Some(s.main.y)),
+    series("Main eye", "B", Band::Leds, |p| p.ch_b, |s| Some(s.main.z)),
+    dashed(series(
+        "Small eye",
+        "R",
+        Band::Leds,
+        |p| p.ch_r,
+        |s| Some(s.small.x),
+    )),
+    dashed(series(
+        "Small eye",
+        "G",
+        Band::Leds,
+        |p| p.ch_g,
+        |s| Some(s.small.y),
+    )),
+    dashed(series(
+        "Small eye",
+        "B",
+        Band::Leds,
+        |p| p.ch_b,
+        |s| Some(s.small.z),
+    )),
+    series(
+        "White LED",
+        "W",
+        Band::Leds,
+        |p| p.white_led,
+        |s| Some(s.white),
+    ),
     // z bright; x and y dim, since the firmware ignores side boops.
     series(
         "Accel",
         "x",
         Band::Accel,
-        Color32::from_rgb(150, 80, 80),
+        |p| p.accel_x,
         |s| Some(s.accel[0]),
     ),
     series(
         "Accel",
         "y",
         Band::Accel,
-        Color32::from_rgb(80, 140, 95),
+        |p| p.accel_y,
         |s| Some(s.accel[1]),
     ),
-    series("Accel", "z", Band::Accel, Color32::WHITE, |s| {
-        Some(s.accel[2])
-    }),
-    series("Heap", "KB", Band::Heap, HEAP_OK, |s| Some(s.heap_kb)),
+    series(
+        "Accel",
+        "z",
+        Band::Accel,
+        |p| p.accel_z,
+        |s| Some(s.accel[2]),
+    ),
+    // The heap bar's colour in the Board panel.
+    series("Heap", "KB", Band::Heap, |p| p.heap_ok, |s| Some(s.heap_kb)),
 ];
 
 /// The checkbox rows and readout groups, in display order.
@@ -1750,21 +1980,21 @@ impl PlotState {
     }
 }
 
-fn marker_style(kind: MarkerKind) -> (Color32, bool) {
+fn marker_style(kind: MarkerKind, palette: &Palette) -> (Color32, bool) {
     match kind {
-        MarkerKind::Motion => (Color32::from_rgb(230, 200, 60), false),
-        MarkerKind::Sound => (Color32::from_rgb(190, 120, 240), false),
-        MarkerKind::Idle => (Color32::from_rgb(90, 210, 140), false),
-        MarkerKind::Restart => (Color32::GRAY, true),
+        MarkerKind::Motion => (palette.marker_motion, false),
+        MarkerKind::Sound => (palette.marker_sound, false),
+        MarkerKind::Idle => (palette.marker_idle, false),
+        MarkerKind::Restart => (palette.marker_restart, true),
     }
 }
 
 /// A vertical line per marker in view; `labels` adds their names along the
 /// top edge (only the top band, so they aren't repeated three times).
-fn draw_markers(p: &mut egui_plot::PlotUi, markers: &[&Marker], labels: bool) {
+fn draw_markers(p: &mut egui_plot::PlotUi, markers: &[&Marker], labels: bool, palette: &Palette) {
     let top_y = labels.then(|| p.plot_bounds().max()[1]);
     for m in markers {
-        let (color, dashed) = marker_style(m.kind);
+        let (color, dashed) = marker_style(m.kind, palette);
         let x = f64::from(m.t);
         let mut line = VLine::new(m.label.as_str(), x).color(color).width(1.0);
         if dashed {
@@ -1837,6 +2067,7 @@ fn plot_panel(
     markers: &VecDeque<Marker>,
     limits: &AccelLimits,
     heap_budget_kb: f32,
+    palette: &Palette,
 ) {
     ui.horizontal_wrapped(|row| {
         egui::ComboBox::from_id_salt("plot_window")
@@ -1870,9 +2101,10 @@ fn plot_panel(
         {
             state.following = true;
         }
-        row.checkbox(&mut state.show_markers, MARKERS_NAME)
-            .on_hover_text(
+        tip(
+            row.checkbox(&mut state.show_markers, MARKERS_NAME),
             "Lines where a nudge, shake or boop, a sound, an idle trigger or a restart happened",
+            None,
         );
     });
     for group in GROUPS {
@@ -1881,7 +2113,7 @@ fn plot_panel(
             for (i, s) in SERIES.iter().enumerate().filter(|(_, s)| s.group == group) {
                 row.checkbox(
                     &mut state.visible[i],
-                    egui::RichText::new(s.short).color(s.color),
+                    egui::RichText::new(s.short).color((s.color)(palette)),
                 );
             }
         });
@@ -1959,7 +2191,7 @@ fn plot_panel(
                         continue;
                     }
                     let mut line = Line::new(series_name(i), decimate(shown, s.get, buckets))
-                        .color(s.color)
+                        .color((s.color)(palette))
                         .width(1.5);
                     if s.dashed {
                         line = line.style(LineStyle::dashed_dense());
@@ -1967,12 +2199,12 @@ fn plot_panel(
                     p.line(line);
                 }
                 if band == Band::Accel {
-                    accel_limits(p, limits, last.rest_z, x1);
+                    accel_limits(p, limits, last.rest_z, x1, palette);
                 }
                 if band == Band::Heap {
-                    heap_limits(p, heap_budget_kb, x1);
+                    heap_limits(p, heap_budget_kb, x1, palette);
                 }
-                draw_markers(p, in_view, n == 0);
+                draw_markers(p, in_view, n == 0, palette);
                 p.response()
                     .hovered()
                     .then(|| p.pointer_coordinate())
@@ -2005,21 +2237,22 @@ fn plot_panel(
 /// The firmware's thresholds: it compares abs(z - rest) for the nudges and
 /// abs(z) for hard motion. Plus the sensor's clip level, one LSB below full
 /// scale. Each pair is labelled once, on its upper line.
-fn accel_limits(p: &mut egui_plot::PlotUi, limits: &AccelLimits, rest_z: f32, right_x: f64) {
+fn accel_limits(
+    p: &mut egui_plot::PlotUi,
+    limits: &AccelLimits,
+    rest_z: f32,
+    right_x: f64,
+    palette: &Palette,
+) {
     let lines = [
-        (
-            rest_z,
-            limits.nudge,
-            "nudge",
-            Color32::from_rgb(230, 200, 60),
-        ),
+        (rest_z, limits.nudge, "nudge", palette.line_nudge),
         (
             rest_z,
             limits.animation,
             "animation",
-            Color32::from_rgb(240, 140, 50),
+            palette.line_animation,
         ),
-        (0.0, limits.hard, "hard", Color32::from_rgb(230, 70, 70)),
+        (0.0, limits.hard, "hard", palette.line_hard),
     ];
     for (centre, offset, name, color) in lines {
         for y in [centre + offset, centre - offset] {
@@ -2039,7 +2272,7 @@ fn accel_limits(p: &mut egui_plot::PlotUi, limits: &AccelLimits, rest_z: f32, ri
     for y in [clip, -clip] {
         p.hline(
             HLine::new("clip", y)
-                .color(Color32::GRAY)
+                .color(palette.line_clip)
                 .width(1.0)
                 .style(LineStyle::dashed_dense()),
         );
@@ -2047,10 +2280,10 @@ fn accel_limits(p: &mut egui_plot::PlotUi, limits: &AccelLimits, rest_z: f32, ri
 }
 
 /// The heap bar's thresholds: amber from 80% of the budget, red at the budget.
-fn heap_limits(p: &mut egui_plot::PlotUi, budget_kb: f32, right_x: f64) {
+fn heap_limits(p: &mut egui_plot::PlotUi, budget_kb: f32, right_x: f64, palette: &Palette) {
     for (y, name, color) in [
-        (budget_kb * 0.8, "80%", HEAP_HIGH),
-        (budget_kb, "budget", HEAP_OVER),
+        (budget_kb * 0.8, "80%", palette.heap_high),
+        (budget_kb, "budget", palette.heap_over),
     ] {
         p.hline(HLine::new(name, y).color(color).width(1.0));
         p.text(
@@ -2115,9 +2348,15 @@ fn readout(
 /// Every tunable config.py reads, with its value in settings.toml and its
 /// default. Edits stay pending until Save writes them into settings.toml. The
 /// left-wing calibration is shown but locked: it matches the physical build.
-fn settings_panel(ui: &mut egui::Ui, state: &mut SettingsState, dir: &Path, auto_reload: bool) {
-    let pending = Color32::from_rgb(230, 170, 40);
-    let red = Color32::from_rgb(220, 60, 60);
+fn settings_panel(
+    ui: &mut egui::Ui,
+    state: &mut SettingsState,
+    dir: &Path,
+    auto_reload: bool,
+    palette: &Palette,
+) {
+    let pending = palette.warn;
+    let red = palette.error;
     if let Some(error) = &state.error {
         ui.colored_label(red, error);
     }
@@ -2229,7 +2468,7 @@ fn countdown(
     ui.add(egui::ProgressBar::new(fraction as f32).text(format!("{text} {left:.1} s")))
 }
 
-fn state_panel(ui: &mut egui::Ui) {
+fn state_panel(ui: &mut egui::Ui, palette: &Palette) {
     let (state, now) = {
         let s = hw();
         (s.fw_state.clone(), s.clock.now())
@@ -2242,7 +2481,7 @@ fn state_panel(ui: &mut egui::Ui) {
         for (name, set) in &state.events {
             let text = egui::RichText::new(name).monospace();
             if *set {
-                row.label(text.color(Color32::from_rgb(70, 170, 90)).strong())
+                row.label(text.color(palette.ok).strong())
                     .on_hover_text("set");
             } else {
                 row.label(text.weak()).on_hover_text("clear");
@@ -2295,7 +2534,7 @@ fn state_panel(ui: &mut egui::Ui) {
     }
 }
 
-fn board_panel(ui: &mut egui::Ui) {
+fn board_panel(ui: &mut egui::Ui, palette: &Palette) {
     let s = hw();
     let b = &s.board;
     let source = if b.measured {
@@ -2316,11 +2555,11 @@ fn board_panel(ui: &mut egui::Ui) {
     let budget = s.heap_budget();
     let used = (s.heap_bytes / budget) as f32;
     let colour = if used >= 1.0 {
-        HEAP_OVER
+        palette.heap_over
     } else if used >= 0.8 {
-        HEAP_HIGH
+        palette.heap_high
     } else {
-        HEAP_OK
+        palette.heap_ok
     };
     ui.add(
         egui::ProgressBar::new(used.min(1.0))
@@ -2343,7 +2582,7 @@ fn board_panel(ui: &mut egui::Ui) {
         None => ("longest step: none over 1 ms yet".to_owned(), false),
     };
     let text = egui::RichText::new(text);
-    ui.label(if over { text.color(HEAP_HIGH) } else { text })
+    ui.label(if over { text.color(palette.warn) } else { text })
         .on_hover_text(format!(
             "The longest any task ran between two awaits this run, in board time. Nothing else runs meanwhile, so over {limit:.0} ms (loop_hold_warn_ms in sim.toml) the other behaviours visibly stall."
         ));
@@ -2351,7 +2590,7 @@ fn board_panel(ui: &mut egui::Ui) {
     if !s.unsimulated.is_empty() {
         ui.label(
             egui::RichText::new(format!("Not simulated: {}", s.unsimulated.join(", ")))
-                .color(Color32::from_rgb(230, 170, 40)),
+                .color(palette.warn),
         )
         .on_hover_text("These libraries are stand-ins that accept every call and do nothing.");
     }
@@ -2366,7 +2605,7 @@ struct AudioUi<'w> {
     sounds: ResMut<'w, Sounds>,
 }
 
-fn audio_panel(ui: &mut egui::Ui, audio: &mut AudioUi, fw_dir: &Path) {
+fn audio_panel(ui: &mut egui::Ui, audio: &mut AudioUi, fw_dir: &Path, palette: &Palette) {
     let mixer = hw().mixer;
     ui.label(match mixer {
         Some(m) => format!(
@@ -2401,7 +2640,7 @@ fn audio_panel(ui: &mut egui::Ui, audio: &mut AudioUi, fw_dir: &Path) {
         ui.add(
             egui::ProgressBar::new(level)
                 .desired_height(10.0)
-                .fill(HEAP_OK),
+                .fill(palette.ok),
         );
         ui.ctx().request_repaint();
     }
