@@ -6,8 +6,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Color32, Pos2, Stroke};
+use bevy_egui::egui::{self, Color32, Stroke};
 use bevy_egui::EguiContexts;
+use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text};
 
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
@@ -31,7 +32,10 @@ const DIRECTIONS: [(&str, [f32; 3]); 6] = [
     ("+Z", [0.0, 0.0, 1.0]),
     ("\u{2212}Z", [0.0, 0.0, -1.0]),
 ];
-const PLOT_SECONDS: f32 = 20.0;
+/// History kept for the plot: its longest window.
+const HISTORY_SECONDS: f32 = 300.0;
+/// The plot's window choices, in seconds.
+const PLOT_WINDOWS: [f32; 7] = [5.0, 10.0, 20.0, 30.0, 60.0, 120.0, HISTORY_SECONDS];
 
 /// Folders next to code.py that hold no firmware source.
 const NOT_FIRMWARE: [&str; 4] = ["lib", "sounds", "sd", "__pycache__"];
@@ -154,6 +158,7 @@ pub struct UiState {
     sim_toml_mtime: Option<SystemTime>,
     last_check: Instant,
     history: VecDeque<Sample>,
+    plot: PlotState,
     started: Instant,
     log_filter: String,
     show_firmware: bool,
@@ -171,8 +176,6 @@ pub struct UiState {
     scenarios: Vec<String>,
     scenario_choice: String,
 }
-
-type Series = fn(&Sample) -> f32;
 
 struct Sample {
     t: f32,
@@ -201,6 +204,7 @@ impl UiState {
             sim_toml_mtime,
             last_check: Instant::now(),
             history: VecDeque::new(),
+            plot: PlotState::new(prefs),
             started: Instant::now(),
             log_filter: String::new(),
             show_firmware: prefs.show_firmware,
@@ -281,6 +285,8 @@ fn save_prefs(
         open_state: ui.open_state,
         show_firmware: ui.show_firmware,
         show_sim: ui.show_sim,
+        plot_window_s: ui.plot.window_s,
+        plot_hidden: ui.plot.hidden(),
     };
     if current == *saved {
         return;
@@ -383,7 +389,11 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
         rest_z,
     };
     ui.history.push_back(sample);
-    while ui.history.front().is_some_and(|s| t - s.t > PLOT_SECONDS) {
+    while ui
+        .history
+        .front()
+        .is_some_and(|s| t - s.t > HISTORY_SECONDS)
+    {
         ui.history.pop_front();
     }
 }
@@ -891,11 +901,12 @@ fn panels(
             ui.open_board = board.openness > 0.5;
 
             side.separator();
-            let plot_section = egui::CollapsingHeader::new(format!("Last {PLOT_SECONDS:.0} s"))
+            let plot_section = egui::CollapsingHeader::new("Plot")
                 .default_open(ui.open_plot)
                 .show(side, |side| {
                     let limits = AccelLimits::read(&ui.settings);
-                    plot(side, &ui.history, &limits)
+                    let state: &mut UiState = &mut ui;
+                    plot_panel(side, &mut state.plot, &state.history, &limits)
                 });
             ui.open_plot = plot_section.openness > 0.5;
 
@@ -1093,153 +1104,417 @@ impl AccelLimits {
     }
 }
 
-/// Draws a horizontal reference line at `y` with a small label at the right
-/// edge. A line outside `rect` (a threshold above the sensor's range can
-/// never be crossed) is left out.
-fn limit_line(painter: &egui::Painter, rect: egui::Rect, y: f32, color: Color32, label: &str) {
-    if y < rect.top() || y > rect.bottom() {
-        return;
-    }
-    let from = Pos2::new(rect.left(), y);
-    let to = Pos2::new(rect.right(), y);
-    painter.line_segment([from, to], Stroke::new(1.0, color));
-    painter.text(
-        Pos2::new(rect.right() - 2.0, y),
-        egui::Align2::RIGHT_BOTTOM,
-        label,
-        egui::FontId::proportional(10.0),
-        color,
-    );
+#[derive(Clone, Copy, PartialEq)]
+enum Band {
+    Wings,
+    Leds,
+    Accel,
 }
 
-fn plot(ui: &mut egui::Ui, history: &VecDeque<Sample>, limits: &AccelLimits) {
-    let (response, painter) = ui.allocate_painter(
-        egui::vec2(ui.available_width(), 330.0),
-        egui::Sense::hover(),
-    );
-    let rect = response.rect;
-    painter.rect_filled(rect, 4.0, Color32::from_gray(24));
-    let Some(last) = history.back() else { return };
-    let band = rect.height() / 3.0;
-    let x = |t: f32| rect.right() - (last.t - t) / PLOT_SECONDS * rect.width();
-    // Top band: wing servo angles 0..180. Middle: LED duty 0..1. Bottom:
-    // accelerometer, +-clip g.
-    let wing_y = |deg: f32| rect.top() + band * (1.0 - deg / 180.0);
-    let led_y = |v: f32| rect.top() + 2.0 * band - v * band;
-    let accel_rect = egui::Rect::from_min_max(
-        Pos2::new(rect.left(), rect.top() + 2.0 * band),
-        rect.right_bottom(),
-    );
-    let accel_y = |g: f32| accel_rect.center().y - g / limits.clip * accel_rect.height() / 2.0;
-
-    let line = |points: Vec<Pos2>, color: Color32| {
-        if points.len() > 1 {
-            painter.add(egui::Shape::line(points, Stroke::new(1.5, color)));
+impl Band {
+    fn format(self, v: f32) -> String {
+        match self {
+            Band::Wings => format!("{v:.0}\u{b0}"),
+            Band::Leds => format!("{:.1}%", v * 100.0),
+            Band::Accel => format!("{v:.2} g"),
         }
-    };
-    for (i, color) in [
-        (0, Color32::from_rgb(240, 170, 60)),
-        (1, Color32::from_rgb(90, 200, 230)),
-    ] {
-        line(
-            history
-                .iter()
-                .filter_map(|s| s.wings[i].map(|a| Pos2::new(x(s.t), wing_y(a))))
-                .collect(),
-            color,
-        );
     }
-    let channels: [(Series, Color32); 4] = [
-        (|s| s.main.x, Color32::from_rgb(230, 60, 60)),
-        (|s| s.main.y, Color32::from_rgb(60, 210, 90)),
-        (|s| s.main.z, Color32::from_rgb(80, 120, 255)),
-        (|s| s.white, Color32::from_gray(220)),
-    ];
-    for (get, color) in channels {
-        line(
-            history
-                .iter()
-                .map(|s| Pos2::new(x(s.t), led_y(get(s))))
-                .collect(),
-            color,
-        );
-    }
-    let small = Color32::from_rgb(200, 120, 255);
-    line(
-        history
-            .iter()
-            .map(|s| Pos2::new(x(s.t), led_y(s.small.max_element())))
-            .collect(),
-        small,
-    );
+}
 
-    // Firmware thresholds. It compares abs(z - rest) for the nudges and the
-    // absolute abs(z) for hard motion. Drawn first so the traces sit on top.
-    let rest = last.rest_z;
-    let thresholds = [
-        (rest, limits.nudge, "nudge", Color32::from_rgb(230, 200, 60)),
+/// One plotted trace. Its group and short name label the checkbox rows and
+/// the hover readout.
+struct SeriesDef {
+    group: &'static str,
+    short: &'static str,
+    band: Band,
+    color: Color32,
+    /// The small eye is dashed so it reads apart from the main eye.
+    dashed: bool,
+    get: fn(&Sample) -> Option<f32>,
+}
+
+const WING_R: Color32 = Color32::from_rgb(240, 170, 60);
+const WING_L: Color32 = Color32::from_rgb(90, 200, 230);
+const RED: Color32 = Color32::from_rgb(230, 60, 60);
+const GREEN: Color32 = Color32::from_rgb(60, 210, 90);
+const BLUE: Color32 = Color32::from_rgb(80, 120, 255);
+
+const fn series(
+    group: &'static str,
+    short: &'static str,
+    band: Band,
+    color: Color32,
+    get: fn(&Sample) -> Option<f32>,
+) -> SeriesDef {
+    SeriesDef {
+        group,
+        short,
+        band,
+        color,
+        dashed: false,
+        get,
+    }
+}
+
+const fn dashed(s: SeriesDef) -> SeriesDef {
+    SeriesDef { dashed: true, ..s }
+}
+
+const SERIES: [SeriesDef; 12] = [
+    series("Wings", "R", Band::Wings, WING_R, |s| s.wings[0]),
+    series("Wings", "L", Band::Wings, WING_L, |s| s.wings[1]),
+    series("Main eye", "R", Band::Leds, RED, |s| Some(s.main.x)),
+    series("Main eye", "G", Band::Leds, GREEN, |s| Some(s.main.y)),
+    series("Main eye", "B", Band::Leds, BLUE, |s| Some(s.main.z)),
+    dashed(series("Small eye", "R", Band::Leds, RED, |s| {
+        Some(s.small.x)
+    })),
+    dashed(series("Small eye", "G", Band::Leds, GREEN, |s| {
+        Some(s.small.y)
+    })),
+    dashed(series("Small eye", "B", Band::Leds, BLUE, |s| {
+        Some(s.small.z)
+    })),
+    series("White LED", "W", Band::Leds, Color32::from_gray(220), |s| {
+        Some(s.white)
+    }),
+    // z bright; x and y dim, since the firmware ignores side boops.
+    series(
+        "Accel",
+        "x",
+        Band::Accel,
+        Color32::from_rgb(150, 80, 80),
+        |s| Some(s.accel[0]),
+    ),
+    series(
+        "Accel",
+        "y",
+        Band::Accel,
+        Color32::from_rgb(80, 140, 95),
+        |s| Some(s.accel[1]),
+    ),
+    series("Accel", "z", Band::Accel, Color32::WHITE, |s| {
+        Some(s.accel[2])
+    }),
+];
+
+/// The checkbox rows and readout groups, in display order.
+const GROUPS: [&str; 5] = ["Wings", "Main eye", "Small eye", "White LED", "Accel"];
+
+/// What the plot shows; kept in `UiState` so it lasts between frames.
+struct PlotState {
+    window_s: f32,
+    /// While set, the view ends at this run time; recording carries on.
+    frozen_at: Option<f32>,
+    /// True while the view tracks the window. Zooming or dragging clears it;
+    /// Reset or a double-click sets it again.
+    following: bool,
+    visible: [bool; SERIES.len()],
+    /// The x range the plot showed last frame.
+    view_x: (f64, f64),
+}
+
+impl PlotState {
+    fn new(prefs: &Prefs) -> Self {
+        let window_s = prefs.plot_window_s.clamp(PLOT_WINDOWS[0], HISTORY_SECONDS);
+        Self {
+            window_s,
+            frozen_at: None,
+            following: true,
+            visible: std::array::from_fn(|i| !prefs.plot_hidden.contains(&series_name(i))),
+            view_x: (-f64::from(window_s), 0.0),
+        }
+    }
+
+    /// Names of the unticked series, for the preferences file.
+    fn hidden(&self) -> Vec<String> {
+        (0..SERIES.len())
+            .filter(|&i| !self.visible[i])
+            .map(series_name)
+            .collect()
+    }
+}
+
+fn series_name(i: usize) -> String {
+    format!("{} {}", SERIES[i].group, SERIES[i].short)
+}
+
+fn window_label(seconds: f32) -> String {
+    if seconds >= 60.0 {
+        format!("{:.0} min", seconds / 60.0)
+    } else {
+        format!("{seconds:.0} s")
+    }
+}
+
+/// Keeps at most two points (the min and the max, in time order) per bucket,
+/// so a long window stays cheap to draw without losing short spikes.
+fn decimate(samples: &[&Sample], get: fn(&Sample) -> Option<f32>, buckets: usize) -> Vec<[f64; 2]> {
+    let point = |s: &Sample| get(s).map(|v| [f64::from(s.t), f64::from(v)]);
+    if samples.len() <= buckets * 2 {
+        return samples.iter().filter_map(|s| point(s)).collect();
+    }
+    let mut out = Vec::with_capacity(buckets * 2);
+    for part in samples.chunks(samples.len().div_ceil(buckets)) {
+        let mut lo: Option<[f64; 2]> = None;
+        let mut hi: Option<[f64; 2]> = None;
+        for p in part.iter().filter_map(|s| point(s)) {
+            if lo.is_none_or(|l| p[1] < l[1]) {
+                lo = Some(p);
+            }
+            if hi.is_none_or(|h| p[1] > h[1]) {
+                hi = Some(p);
+            }
+        }
+        if let (Some(lo), Some(hi)) = (lo, hi) {
+            let (first, second) = if lo[0] <= hi[0] { (lo, hi) } else { (hi, lo) };
+            out.push(first);
+            if second != first {
+                out.push(second);
+            }
+        }
+    }
+    out
+}
+
+/// Window, Freeze and Reset controls, the series checkboxes, three stacked
+/// plots with linked time axes, and a readout of every ticked series at the
+/// time under the pointer.
+fn plot_panel(
+    ui: &mut egui::Ui,
+    state: &mut PlotState,
+    history: &VecDeque<Sample>,
+    limits: &AccelLimits,
+) {
+    ui.horizontal_wrapped(|row| {
+        egui::ComboBox::from_id_salt("plot_window")
+            .selected_text(window_label(state.window_s))
+            .show_ui(row, |menu| {
+                for w in PLOT_WINDOWS {
+                    if menu
+                        .selectable_value(&mut state.window_s, w, window_label(w))
+                        .clicked()
+                    {
+                        state.following = true;
+                    }
+                }
+            });
+        let mut frozen = state.frozen_at.is_some();
+        if row
+            .toggle_value(&mut frozen, "Freeze")
+            .on_hover_text("Hold the view still. Recording carries on, so nothing is lost.")
+            .changed()
+        {
+            state.frozen_at = if frozen {
+                history.back().map(|s| s.t)
+            } else {
+                None
+            };
+        }
+        if row
+            .add_enabled(!state.following, egui::Button::new("Reset"))
+            .on_hover_text("Go back to following the window (or double-click a plot)")
+            .clicked()
+        {
+            state.following = true;
+        }
+    });
+    for group in GROUPS {
+        ui.horizontal(|row| {
+            row.label(egui::RichText::new(group).small());
+            for (i, s) in SERIES.iter().enumerate().filter(|(_, s)| s.group == group) {
+                row.checkbox(
+                    &mut state.visible[i],
+                    egui::RichText::new(s.short).color(s.color),
+                );
+            }
+        });
+    }
+
+    let Some(last) = history.back() else {
+        ui.label("No samples yet.");
+        return;
+    };
+    let end = f64::from(state.frozen_at.unwrap_or(last.t));
+    let (x0, x1) = if state.following {
+        (end - f64::from(state.window_s), end)
+    } else {
+        state.view_x
+    };
+    // The samples in view plus one either side, so lines run to the edges.
+    // Nothing after a freeze is shown.
+    let i0 = history
+        .partition_point(|s| f64::from(s.t) < x0)
+        .saturating_sub(1);
+    let mut i1 = history.partition_point(|s| f64::from(s.t) <= x1.min(end));
+    if history.get(i1).is_some_and(|s| f64::from(s.t) <= end) {
+        i1 += 1;
+    }
+    let shown: Vec<&Sample> = history.range(i0..i1.max(i0)).collect();
+    let buckets = (ui.available_width() as usize).max(50);
+
+    let clip = f64::from(limits.clip);
+    let bands = [
+        (Band::Wings, "plot_wings", "deg", 0.0, 180.0),
+        (Band::Leds, "plot_leds", "duty", 0.0, 1.0),
+        (Band::Accel, "plot_accel", "g", -clip, clip),
+    ];
+    let mut hover_t = None;
+    let mut moved = false;
+    let mut reset = false;
+    for (n, (band, id, unit, y0, y1)) in bands.into_iter().enumerate() {
+        let bottom = n == bands.len() - 1;
+        let following = state.following;
+        let visible = state.visible;
+        let shown = &shown;
+        let response = Plot::new(id)
+            .height(110.0)
+            .link_axis("sim_plot", [true, false])
+            .link_cursor("sim_plot", [true, false])
+            // The panel's own scrolling keeps the mouse wheel; Ctrl+scroll
+            // and right-drag zoom, drag pans.
+            .allow_scroll(false)
+            .allow_double_click_reset(false)
+            .show_axes([bottom, true])
+            .y_axis_label(unit)
+            .y_axis_min_width(28.0)
+            .show(ui, |p| {
+                if following {
+                    p.set_plot_bounds(PlotBounds::from_min_max([x0, y0], [x1, y1]));
+                }
+                for (i, s) in SERIES.iter().enumerate() {
+                    if s.band != band || !visible[i] {
+                        continue;
+                    }
+                    let mut line = Line::new(series_name(i), decimate(shown, s.get, buckets))
+                        .color(s.color)
+                        .width(1.5);
+                    if s.dashed {
+                        line = line.style(LineStyle::dashed_dense());
+                    }
+                    p.line(line);
+                }
+                if band == Band::Accel {
+                    accel_limits(p, limits, last.rest_z, x1);
+                }
+                p.response()
+                    .hovered()
+                    .then(|| p.pointer_coordinate())
+                    .flatten()
+                    .map(|c| c.x)
+            });
+        hover_t = hover_t.or(response.inner);
+        reset |= response.response.double_clicked();
+        let b = response.transform.bounds();
+        if n == 0 {
+            state.view_x = (b.min()[0], b.max()[0]);
+        }
+        let off = |a: f64, b: f64| (a - b).abs() > 1e-6 * (x1 - x0).abs().max(1.0);
+        if following && (off(b.min()[0], x0) || off(b.max()[0], x1)) {
+            moved = true;
+        }
+        if following && (off(b.min()[1], y0) || off(b.max()[1], y1)) {
+            moved = true;
+        }
+    }
+    if moved {
+        state.following = false;
+    }
+    if reset {
+        state.following = true;
+    }
+    readout(ui, state, history, hover_t, end);
+}
+
+/// The firmware's thresholds: it compares abs(z - rest) for the nudges and
+/// abs(z) for hard motion. Plus the sensor's clip level, one LSB below full
+/// scale. Each pair is labelled once, on its upper line.
+fn accel_limits(p: &mut egui_plot::PlotUi, limits: &AccelLimits, rest_z: f32, right_x: f64) {
+    let lines = [
         (
-            rest,
+            rest_z,
+            limits.nudge,
+            "nudge",
+            Color32::from_rgb(230, 200, 60),
+        ),
+        (
+            rest_z,
             limits.animation,
             "animation",
             Color32::from_rgb(240, 140, 50),
         ),
         (0.0, limits.hard, "hard", Color32::from_rgb(230, 70, 70)),
     ];
-    for (centre, offset, name, color) in thresholds {
-        // Label only the upper line of each pair.
-        limit_line(&painter, accel_rect, accel_y(centre + offset), color, name);
-        limit_line(&painter, accel_rect, accel_y(centre - offset), color, "");
+    for (centre, offset, name, color) in lines {
+        for y in [centre + offset, centre - offset] {
+            p.hline(HLine::new(name, y).color(color).width(1.0));
+        }
+        p.text(
+            Text::new(
+                name,
+                PlotPoint::new(right_x, centre + offset),
+                egui::RichText::new(name).small(),
+            )
+            .color(color)
+            .anchor(egui::Align2::RIGHT_BOTTOM),
+        );
     }
-    // The sensor saturates one LSB below full scale.
     let clip = limits.clip * (1.0 - 1.0 / 32768.0);
-    for y in [accel_y(clip), accel_y(-clip)] {
-        painter.extend(egui::Shape::dashed_line(
-            &[Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-            Stroke::new(1.0, Color32::GRAY),
-            4.0,
-            3.0,
-        ));
-    }
-    // z bright; x and y dim, to show that side boops are ignored.
-    let axes: [(usize, Color32); 3] = [
-        (0, Color32::from_rgb(120, 70, 70)),
-        (1, Color32::from_rgb(70, 110, 80)),
-        (2, Color32::WHITE),
-    ];
-    for (axis, color) in axes {
-        line(
-            history
-                .iter()
-                .map(|s| Pos2::new(x(s.t), accel_y(s.accel[axis])))
-                .collect(),
-            color,
+    for y in [clip, -clip] {
+        p.hline(
+            HLine::new("clip", y)
+                .color(Color32::GRAY)
+                .width(1.0)
+                .style(LineStyle::dashed_dense()),
         );
     }
+}
 
-    for i in 1..3 {
-        let y = rect.top() + band * i as f32;
-        painter.line_segment(
-            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-            Stroke::new(1.0, Color32::from_gray(60)),
-        );
-    }
-    let font = egui::FontId::proportional(11.0);
-    let label = |band_index: f32, text: &str| {
-        painter.text(
-            Pos2::new(rect.left() + 4.0, rect.top() + band * band_index + 2.0),
-            egui::Align2::LEFT_TOP,
-            text,
-            font.clone(),
-            Color32::GRAY,
-        );
+/// Every ticked series' value at the time under the pointer, grouped like
+/// the checkboxes; a hint while the pointer is elsewhere.
+fn readout(
+    ui: &mut egui::Ui,
+    state: &PlotState,
+    history: &VecDeque<Sample>,
+    hover_t: Option<f64>,
+    end: f64,
+) {
+    let small = |text: String| egui::RichText::new(text).small();
+    let sample = hover_t.and_then(|t| {
+        let t = t.min(end);
+        let i = history.partition_point(|s| f64::from(s.t) < t);
+        let after = history.get(i).filter(|s| f64::from(s.t) <= end);
+        let before = i.checked_sub(1).and_then(|j| history.get(j));
+        match (before, after) {
+            (Some(a), Some(b)) => Some(if t - f64::from(a.t) <= f64::from(b.t) - t {
+                a
+            } else {
+                b
+            }),
+            (a, b) => a.or(b),
+        }
+    });
+    let Some(s) = sample else {
+        ui.label(small(
+            "Hover for values. Drag to pan; Ctrl+scroll or right-drag to zoom.".to_owned(),
+        ));
+        return;
     };
-    label(0.0, "wings (deg): R orange, L cyan");
-    label(1.0, "main eye R/G/B, small eye (max) purple, white LED");
-    label(
-        2.0,
-        "accel (g): z white, x/y dim; nudge / animation / hard / clip",
-    );
+    ui.label(small(format!("t = {:.2} s", s.t)));
+    for group in GROUPS {
+        let values: Vec<String> = SERIES
+            .iter()
+            .enumerate()
+            .filter(|(i, d)| d.group == group && state.visible[*i])
+            .map(|(_, d)| match (d.get)(s) {
+                Some(v) => format!("{} {}", d.short, d.band.format(v)),
+                None => format!("{} -", d.short),
+            })
+            .collect();
+        if !values.is_empty() {
+            ui.label(small(format!("{group}: {}", values.join("  "))));
+        }
+    }
 }
 
 /// Every tunable config.py reads, with its value in settings.toml and its

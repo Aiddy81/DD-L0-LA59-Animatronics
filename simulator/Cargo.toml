@@ -32,7 +32,9 @@ bevy = { version = "=0.16.1", default-features = false, features = [
 ] }
 # manage_clipboard lets ctx.copy_text reach the OS clipboard (the log panel's Copy button).
 bevy_egui = { version = "=0.34.1", default-features = false, features = ["render", "default_fonts", "manage_clipboard"] }
-pyo3 = { version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
+# 0.32.1 is the last release on egui 0.31, which bevy_egui 0.34 uses.
+egui_plot = "=0.32.1"
+pyo3 ={ version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 

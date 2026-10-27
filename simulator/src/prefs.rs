@@ -32,6 +32,11 @@ pub struct Prefs {
     pub open_state: bool,
     pub show_firmware: bool,
     pub show_sim: bool,
+    /// The plot's time window, in seconds.
+    pub plot_window_s: f32,
+    /// Plot series that are unticked, by name ("Accel x"), so adding a
+    /// series later doesn't shift the others.
+    pub plot_hidden: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -53,6 +58,8 @@ impl Default for Prefs {
             open_state: true,
             show_firmware: true,
             show_sim: true,
+            plot_window_s: 20.0,
+            plot_hidden: Vec::new(),
         }
     }
 }

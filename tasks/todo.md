@@ -1,3 +1,24 @@
+# Simulator: hot-reload sim.toml (#47) + more capable plot (#48)
+
+Branch: `feature/sim-toml-reload-plot` (off `Documentation`).
+
+- [x] `config.rs`: `SimConfig::read` (Ok(None) missing / Err on parse); `load` built on it
+- [x] `ui.rs` `hot_reload`: watch sim.toml mtime, replace `SimConfig` + `hw().board`, log reload or warning (keep old config)
+- [x] `main.rs`: pass start-up sim.toml mtime; `sim.toml` header comment
+- [x] `egui_plot =0.32.1` (last release on egui 0.31); one egui in `cargo tree`
+- [x] `ui.rs` plot: 5 s–5 min window, Freeze, zoom + Reset, hover readout, per-series checkboxes, small eye R/G/B, min/max decimation
+- [x] `prefs.rs`: plot window + series visibility remembered
+- [x] README updated
+- [x] Docker build succeeds (locked); `cargo fmt --check` and `clippy -D warnings` clean; headless checks pass (7 scenarios)
+- [ ] Interactive: sim.toml edits live / broken TOML keeps old; plot controls; scenarios — user
+
+## Review
+- Everything already read `Res<SimConfig>` and `hw().board` live, so a reload is just replacing them. It isn't gated on Auto-reload, because nothing restarts.
+- The plot x axis is run time (s), not "seconds ago", so a zoomed or frozen view doesn't scroll. Following = setting the bounds each frame; any user change to the bounds turns following off.
+- Three plots share one x axis through `link_axis`; the mouse wheel is left to the panel (`allow_scroll(false)`), and Ctrl+scroll / right-drag zoom.
+- Adding `egui_plot` made cargo re-pick `windows-sys` 0.61 for one existing crate; I restored 0.52 by hand so the lock only adds `egui_plot` (`--locked` passes).
+- Couldn't drive the GUI from here (computer use can't find the sim window), so the interactive checks are left for the user.
+
 # Simulator: boop strength (#44) + accelerometer plot (#45)
 
 Branch: `feature/sim-boop-strength-accel-plot` (off `Documentation`).
