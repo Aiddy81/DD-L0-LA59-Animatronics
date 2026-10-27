@@ -97,7 +97,9 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let (cfg, cfg_warning) = SimConfig::load(&paths.simulator.join("sim.toml"));
+    let sim_toml = paths.simulator.join("sim.toml");
+    let (cfg, cfg_warning) = SimConfig::load(&sim_toml);
+    let sim_toml_mtime = ui::file_mtime(&sim_toml);
     if let Some(w) = cfg_warning {
         hw().push_line(w);
     }
@@ -143,7 +145,12 @@ fn main() {
         .insert_resource(cfg)
         .insert_resource(paths)
         .insert_resource(ui::Host(host))
-        .insert_resource(ui::UiState::new(code_mtime, shims_mtime, &prefs))
+        .insert_resource(ui::UiState::new(
+            code_mtime,
+            shims_mtime,
+            sim_toml_mtime,
+            &prefs,
+        ))
         .insert_resource(prefs)
         .add_plugins((
             scene::ScenePlugin,
