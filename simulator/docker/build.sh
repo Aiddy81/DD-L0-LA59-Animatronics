@@ -4,6 +4,8 @@
 # both call this.
 #   PROFILE=release|debug (default release)   LOCKED=1 to require Cargo.lock
 #   CHECK=1 also runs rustfmt --check and clippy with warnings as errors
+# Ends by running code.py headless against every scenario; a failure exits 3,
+# after dist/ is staged, so the built simulator can be used to debug it.
 set -euo pipefail
 
 TARGET=x86_64-pc-windows-gnu
@@ -31,3 +33,10 @@ for f in /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll \
          /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll; do
   cp "$f" dist/
 done
+
+echo "== Scenario checks (code.py headless)"
+# No __pycache__ in the mounted checkout (it would be root-owned).
+PYTHONDONTWRITEBYTECODE=1 python3 tests/headless.py || {
+  echo "Scenario checks failed: see the FAIL lines above."
+  exit 3
+}

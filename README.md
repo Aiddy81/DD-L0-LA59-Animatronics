@@ -195,6 +195,8 @@ The hardware stand-ins ("shims") are compiled into the exe, so it runs on its ow
 
 The Settings panel's `settings.toml` reader and writer (`simulator/src/settings.rs`) has unit tests that need only `rustc`: `docker run --rm -v "${PWD}:/workspace" -w /workspace/simulator ddl0-sim-dev bash -c "rustc --edition 2021 --test src/settings.rs -o /tmp/settings-test && /tmp/settings-test"`.
 
+`simulator\build.ps1` runs `headless.py` in the dev image as its last step, so a firmware change that breaks a behaviour fails the build. The failing checks and scenarios are listed as `FAIL` lines. The simulator is still built in `simulator\dist\`, so you can open it to see what went wrong.
+
 GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download.
 
 ### The 3D model
