@@ -1,3 +1,23 @@
+# Simulator scripted scenarios (#40)
+
+Branch: `feature/simulator-scenarios` (off `Documentation`).
+
+- [x] `sim_runtime.py`: `_Scenario` engine (TOML steps + expectations), simhw proxy that records audio/PCA/white LED, polled each loop pass
+- [x] `hw.rs` / `pyhost.rs` / `simhw.py`: `nudge`, `shake`, `set_accel`, `trigger_idle`, `set_scenario`
+- [x] `ui.rs`: Scenarios row (dropdown, Run scenario, PASS/FAIL badge)
+- [x] `simulator/scenarios/`: boot, breathing, boop, angry-nudges, angry-shake, idle
+- [x] `headless.py` runs every scenario after the existing checks; `--scenario NAME`. All 18 checks + 6 scenarios pass
+- [x] Negative checks: a missed `by` FAILs (exit 1), an unknown action is an ERROR, a SyntaxError in a firmware module FAILs the scenario
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] README updated
+- [ ] Interactive: each scenario from the dropdown passes in the app, badge + hover, Restart clears it — user
+
+## Review
+- One engine, in `sim_runtime.py`, shared by the app and headless, so they can't drift. Rust only passes the file in and shows the verdict.
+- The issue's one-line `[[step]] t = …` isn't valid TOML; one key per line instead.
+- Added `start = "<log line>"`: at 40x, Python's imports eat ~7 virtual s before boot, so absolute times would vary by machine.
+- A gentle nudge is ignored while a boop animates, so `angry-nudges` spaces its nudges 5 s apart.
+- `breathing` is its own scenario (timed from boot complete) so the boot sequence's own wing moves can't satisfy it.
 # Simulator behaviour buttons (#38)
 
 Branch: `feature/simulator-behaviour-buttons` (off `Documentation`).

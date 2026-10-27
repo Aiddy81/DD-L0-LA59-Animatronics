@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 
-use crate::hw::{hw, AudioCmd};
+use crate::hw::{hw, AudioCmd, ScenarioStatus};
 
 /// Hardware stand-ins, compiled into the exe so it runs on its own. Shims in
 /// `dist\shims\` override these or add new ones; sim_runtime.py reads that
@@ -179,6 +179,46 @@ mod simhw {
     fn set_behaviour_running(name: &str) {
         hw().behaviour_running = (!name.is_empty()).then(|| name.to_owned());
     }
+
+    /// Scenario steps: the same inputs as the Motion panel and toolbar.
+    #[pyfunction]
+    fn nudge() {
+        crate::ui::nudge();
+    }
+
+    #[pyfunction]
+    fn shake() {
+        crate::ui::shake();
+    }
+
+    #[pyfunction]
+    fn set_accel(x: f32, y: f32, z: f32) {
+        hw().accel_g = [x, y, z];
+    }
+
+    #[pyfunction]
+    fn trigger_idle() {
+        hw().idle_trigger = true;
+    }
+
+    #[pyfunction]
+    fn set_scenario(name: String, state: String, results: Vec<(String, String)>) {
+        hw().scenario = Some(ScenarioStatus {
+            name,
+            state,
+            results,
+        });
+    }
+}
+
+/// A scenario to play against a run: its name, TOML text, and the servo and
+/// channel map from sim.toml that turns PCA9685 writes into wing angles and
+/// LED levels.
+pub struct ScenarioRun {
+    pub name: String,
+    pub text: String,
+    pub servo: (f32, f32, f32),
+    pub channels: Vec<(String, usize)>,
 }
 
 /// Must run before anything touches Python.
@@ -215,6 +255,15 @@ impl PyHost {
     }
 
     pub fn start(&mut self) {
+        self.start_with(None);
+    }
+
+    /// Restarts code.py with a scenario played against it.
+    pub fn start_scenario(&mut self, scenario: ScenarioRun) {
+        self.start_with(Some(scenario));
+    }
+
+    fn start_with(&mut self, scenario: Option<ScenarioRun>) {
         self.stop();
         {
             let mut s = hw();
@@ -224,7 +273,9 @@ impl PyHost {
         }
         let path = self.code_path.clone();
         let shim_dir = self.shim_dir.clone();
-        self.thread = Some(std::thread::spawn(move || run_code(&path, &shim_dir)));
+        self.thread = Some(std::thread::spawn(move || {
+            run_code(&path, &shim_dir, scenario.as_ref())
+        }));
     }
 
     /// Asks code.py to unwind and waits briefly for it.
@@ -245,7 +296,22 @@ impl PyHost {
     }
 }
 
-fn run_code(path: &Path, shim_dir: &Path) {
+/// The scenario as the dict `_Scenario.start` takes.
+fn scenario_dict<'py>(py: Python<'py>, run: &ScenarioRun) -> PyResult<Bound<'py, PyDict>> {
+    let channels = PyDict::new(py);
+    for (name, channel) in &run.channels {
+        channels.set_item(name, channel)?;
+    }
+    channels.set_item("white", "white")?;
+    let dict = PyDict::new(py);
+    dict.set_item("name", &run.name)?;
+    dict.set_item("text", &run.text)?;
+    dict.set_item("servo", run.servo)?;
+    dict.set_item("channels", channels)?;
+    Ok(dict)
+}
+
+fn run_code(path: &Path, shim_dir: &Path, scenario: Option<&ScenarioRun>) {
     let result = Python::with_gil(|py| -> PyResult<()> {
         let runtime = PyModule::from_code(
             py,
@@ -257,10 +323,12 @@ fn run_code(path: &Path, shim_dir: &Path) {
         for (name, source, is_pkg) in SHIMS {
             shims.set_item(*name, (*source, *is_pkg))?;
         }
+        let scenario = scenario.map(|s| scenario_dict(py, s)).transpose()?;
         runtime.getattr("run")?.call1((
             path.to_string_lossy().into_owned(),
             shims,
             shim_dir.to_string_lossy().into_owned(),
+            scenario,
         ))?;
         Ok(())
     });

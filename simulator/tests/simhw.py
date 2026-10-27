@@ -29,6 +29,14 @@ idle_trigger_at = []
 # Behaviour buttons: what sim_runtime.py offered, and (time, name) clicks.
 behaviours = []
 behaviour_request_at = []
+# Scenario inputs: one-shot readings, the held reading, a pending idle
+# trigger; and the last set_scenario() report (name, state, results).
+NUDGE_G = 1.3
+SHAKE_G = 3.0
+accel_pulses = []
+held_accel = [(0.0, 0.0, 1.0)]
+idle_now = [False]
+scenario = [None]
 # Virtual times of right-wing writes, white-LED writes and accelerometer
 # reads, so headless.py can tell whether behaviours overlap.
 wing_writes = []
@@ -59,7 +67,9 @@ def paused():
 
 
 def stopping():
-    return now() >= DURATION
+    # A scenario run ends as soon as the scenario has its verdict.
+    done = scenario[0] is not None and scenario[0][1] in ("pass", "fail", "error")
+    return done or now() >= DURATION
 
 
 def strict():
@@ -67,6 +77,9 @@ def strict():
 
 
 def take_idle_trigger():
+    if idle_now[0]:
+        idle_now[0] = False
+        return True
     if idle_trigger_at and now() >= idle_trigger_at[0]:
         idle_trigger_at.pop(0)
         return True
@@ -109,7 +122,29 @@ def accel():
     accel_reads.append(now())
     if scheduled_accel and now() >= scheduled_accel[0][0]:
         return scheduled_accel.pop(0)[1]
-    return (0.0, 0.0, 1.0)
+    if accel_pulses:
+        return accel_pulses.pop(0)
+    return held_accel[0]
+
+
+def nudge():
+    accel_pulses.append((0.0, 0.0, NUDGE_G))
+
+
+def shake():
+    accel_pulses.append((0.0, 0.0, SHAKE_G))
+
+
+def set_accel(x, y, z):
+    held_accel[0] = (x, y, z)
+
+
+def trigger_idle():
+    idle_now[0] = True
+
+
+def set_scenario(name, state, results):
+    scenario[0] = (name, state, list(results))
 
 
 def log(text):

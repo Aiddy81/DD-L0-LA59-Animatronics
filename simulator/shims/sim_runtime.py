@@ -11,6 +11,7 @@ time.monotonic() has CircuitPython's reduced float precision.
 import ast
 import asyncio
 import builtins
+import fnmatch
 import gc as _real_gc
 import inspect
 import json
@@ -23,6 +24,7 @@ import os
 import selectors
 import sys
 import time as _real_time
+import tomllib
 import traceback
 import tracemalloc
 import types
@@ -291,6 +293,7 @@ class _ScaledSelector(selectors.SelectSelector):
         simhw.charge("loop")
         _heap.sample()
         _behaviours.poll(self.loop)
+        _scenario.poll()
         return super().select(0)
 
 
@@ -391,6 +394,305 @@ class _Behaviours:
 
 
 _behaviours = _Behaviours()
+
+
+# Duty at which an eye channel is at full brightness: set_pulse_width_range(0,
+# 6550) at 50 Hz never usefully drives it past 6550 / 20000 (as ui.rs shows it).
+_EYE_PEAK_DUTY = 6550.0 / 20000.0
+_PWM_PERIOD_US = 20000.0
+_ACTIONS = {"nudge", "shake", "tilt", "idle", "wait"}
+_EXPECT_KINDS = ("sound", "wing", "led", "log")
+_EXPECT_KEYS = {"by", "after", "never", "name", "above", "below"} | set(_EXPECT_KINDS)
+
+
+def _say(*parts):
+    """A [sim] log line written past _LogStream, so the scenario never reads
+    its own messages as code.py output."""
+    simhw.log(" ".join(str(p) for p in parts) + "\n")
+
+
+class _Expectation:
+    """One [[expect]]: something code.py must (or, with never, must not) do
+    between `after` and `by` virtual seconds."""
+
+    def __init__(self, spec, channels):
+        unknown = set(spec) - _EXPECT_KEYS
+        if unknown:
+            raise ValueError("unknown key(s) {}".format(", ".join(sorted(unknown))))
+        kinds = [k for k in _EXPECT_KINDS if k in spec]
+        if len(kinds) != 1:
+            raise ValueError("needs exactly one of sound, wing, led or log")
+        if "by" not in spec:
+            raise ValueError("needs by = <seconds>")
+        self.kind = kinds[0]
+        self.after = float(spec.get("after", 0.0))
+        self.by = float(spec["by"])
+        self.never = bool(spec.get("never", False))
+        self.above = spec.get("above")
+        self.below = spec.get("below")
+        value = spec[self.kind]
+        if self.kind == "sound":
+            self.patterns = [value] if isinstance(value, str) else list(value)
+            what = " or ".join(self.patterns) + " plays"
+        elif self.kind == "log":
+            self.text = str(value)
+            what = "log shows '{}'".format(self.text)
+        else:
+            key = value if self.kind == "led" else value + "_wing"
+            if key not in channels or (self.kind == "led" and key.endswith("_wing")):
+                raise ValueError("unknown {} '{}'".format(self.kind, value))
+            if self.above is None and self.below is None:
+                raise ValueError("{} needs above and/or below".format(self.kind))
+            self.target = key
+            unit = "°" if self.kind == "wing" else ""
+            bounds = []
+            if self.above is not None:
+                bounds.append(">= {}{}".format(self.above, unit))
+            if self.below is not None:
+                bounds.append("<= {}{}".format(self.below, unit))
+            what = "{} {} {}".format(value, "wing" if self.kind == "wing" else "LED",
+                                     " and ".join(bounds))
+        window = "by {:g} s".format(self.by) if not self.after else \
+            "between {:g} and {:g} s".format(self.after, self.by)
+        self.label = spec.get("name") or "{}{} {}".format("never: " if self.never else "", what,
+                                                           window)
+        self.state = "pending"
+        self.seen_at = None
+
+    def _in_range(self, value):
+        return ((self.above is None or value >= self.above)
+                and (self.below is None or value <= self.below))
+
+    def matches(self, kind, key, value):
+        if kind != self.kind:
+            return False
+        if kind == "sound":
+            return any(fnmatch.fnmatch(key, p) for p in self.patterns)
+        if kind == "log":
+            return self.text in key
+        return key == self.target and self._in_range(value)
+
+    def observe(self, t, kind, key, value):
+        if self.state != "pending" or not (self.after <= t <= self.by):
+            return False
+        if not self.matches(kind, key, value):
+            return False
+        self.seen_at = t
+        self.state = "fail" if self.never else "pass"
+        return True
+
+    def expire(self, t):
+        if self.state != "pending" or t <= self.by:
+            return False
+        self.state = "pass" if self.never else "fail"
+        return True
+
+
+class _Scenario:
+    """A scripted run from simulator/scenarios/*.toml: [[step]]s poke the
+    hardware at set virtual times, [[expect]]s say what code.py must do. Steps
+    fire from the event loop's poll; expectations are checked against every
+    sound, PCA9685/white-LED write and log line code.py makes. A traceback
+    always fails the scenario. Shared by the app and tests/headless.py."""
+
+    def __init__(self):
+        self.active = False
+
+    def start(self, scenario):
+        """`scenario` is {"name", "text" (the TOML), "servo": (min_us, max_us,
+        range_deg), "channels": {name: PCA channel or "white"}} or None."""
+        self.active = False
+        if not scenario:
+            return
+        self.name = scenario["name"]
+        self.servo = scenario["servo"]
+        self._channel_names = {}
+        for key, ch in scenario["channels"].items():
+            self._channel_names.setdefault(ch, []).append(key)
+        try:
+            spec = tomllib.loads(scenario["text"])
+            unknown = set(spec) - {"description", "start", "step", "expect"}
+            if unknown:
+                raise ValueError("unknown key(s) {}".format(", ".join(sorted(unknown))))
+            # Times count from this log line (e.g. the end of boot) if given:
+            # how long imports take in virtual time depends on the machine.
+            self.start_text = spec.get("start")
+            if self.start_text is not None and not isinstance(self.start_text, str):
+                raise ValueError("start must be a log line to wait for")
+            self.t0 = None if self.start_text else simhw.now()
+            self.steps =sorted(self._steps(spec.get("step", [])), key=lambda s: s["t"])
+            self.expects = []
+            for i, e in enumerate(spec.get("expect", []), 1):
+                try:
+                    self.expects.append(_Expectation(e, scenario["channels"]))
+                except (ValueError, TypeError, KeyError) as err:
+                    raise ValueError("[[expect]] #{}: {}".format(i, err))
+            if not self.expects:
+                raise ValueError("no [[expect]] entries")
+        except (ValueError, TypeError) as err:
+            _say("[sim] scenario {} error: {}".format(self.name, err))
+            simhw.set_scenario(self.name, "error", [(str(err), "fail")])
+            return
+        self.traceback = False
+        self._line = ""
+        self._dirty = True
+        self.active = True
+        _say("[sim] scenario {} started: {} step(s), {} expectation(s)".format(
+            self.name, len(self.steps), len(self.expects)))
+        self._report()
+
+    @staticmethod
+    def _steps(raw):
+        steps = []
+        for i, step in enumerate(raw, 1):
+            action = step.get("action")
+            if action not in _ACTIONS or "t" not in step:
+                raise ValueError("[[step]] #{}: needs t and action ({})".format(
+                    i, ", ".join(sorted(_ACTIONS))))
+            unknown = set(step) - {"t", "action", "g"}
+            if unknown:
+                raise ValueError("[[step]] #{}: unknown key(s) {}".format(
+                    i, ", ".join(sorted(unknown))))
+            g = step.get("g", [0.0, 0.0, -1.0])
+            if action == "tilt" and len(g) != 3:
+                raise ValueError("[[step]] #{}: g needs [x, y, z]".format(i))
+            steps.append({"t": float(step["t"]), "action": action, "g": [float(v) for v in g]})
+        return steps
+
+    def _results(self):
+        traceback_state = "fail" if self.traceback else ("pass" if self._final() else "pending")
+        return [(e.label, e.state) for e in self.expects] + [("no traceback", traceback_state)]
+
+    def _final(self):
+        return not self.steps and all(e.state != "pending" for e in self.expects)
+
+    def _report(self):
+        results = self._results()
+        if self.traceback:
+            state = "fail"
+        elif not self._final():
+            state = "running"
+        else:
+            state = "fail" if any(s == "fail" for _, s in results) else "pass"
+        simhw.set_scenario(self.name, state, results)
+        return state
+
+    def _note(self, e):
+        _say("[sim] scenario {}: {} {}".format(
+            self.name, e.state.upper(), e.label
+            + (" (at {:.1f} s)".format(e.seen_at) if e.seen_at is not None else "")))
+        self._dirty = True
+
+    def _observe(self, kind, key, value=None):
+        if self.t0 is None:
+            return
+        t = simhw.now() - self.t0
+        for e in self.expects:
+            if e.observe(t, kind, key, value):
+                self._note(e)
+
+    def poll(self):
+        if not self.active or self.t0 is None:
+            return
+        t = simhw.now() - self.t0
+        while self.steps and self.steps[0]["t"] <= t:
+            step = self.steps.pop(0)
+            action = step["action"]
+            if action == "nudge":
+                simhw.nudge()
+            elif action == "shake":
+                simhw.shake()
+            elif action == "tilt":
+                simhw.set_accel(*step["g"])
+            elif action == "idle":
+                simhw.trigger_idle()
+            _say("[sim] scenario {}: {} at {:.1f} s".format(self.name, action, t))
+            self._dirty = True
+        for e in self.expects:
+            if e.expire(t):
+                self._note(e)
+        if self._dirty:
+            self._dirty = False
+            state = self._report()
+            if state in ("pass", "fail"):
+                self._finish(state)
+
+    def _finish(self, state):
+        passed = sum(1 for _, s in self._results() if s == "pass")
+        _say("[sim] scenario {} {}: {} of {} passed".format(
+            self.name, state.upper(), passed, len(self._results())))
+        self.active = False
+
+    def stop(self):
+        """code.py ended (Stop, restart, crash) before the scenario finished."""
+        if not self.active:
+            return
+        for e in self.expects:
+            if e.state == "pending":
+                e.state = "fail"
+        self.steps = []
+        _say("[sim] scenario {}: code.py stopped before it finished".format(self.name))
+        self._report()
+        self._finish("fail")
+
+    def log_text(self, text):
+        if not self.active:
+            return
+        self._line += text
+        while "\n" in self._line:
+            line, self._line = self._line.split("\n", 1)
+            if "Traceback (most recent call last)" in line and not self.traceback:
+                self.traceback = True
+                self._dirty = True
+            if self.t0 is None and self.start_text in line:
+                self.t0 = simhw.now()
+                _say("[sim] scenario {}: timeline starts".format(self.name))
+            self._observe("log", line)
+
+    def proxy(self, real):
+        """A stand-in for the simhw module that the shims import during a
+        scenario: it forwards everything to `real` and lets the scenario see
+        each sound and PCA9685 / white-LED write."""
+        module = types.ModuleType("simhw")
+        module.__getattr__ = lambda name: getattr(real, name)
+        scenario = self
+
+        def play_wav(path, level, looped):
+            real.play_wav(path, level, looped)
+            if scenario.active:
+                scenario._observe("sound", path.replace("\\", "/").rsplit("/", 1)[-1])
+
+        def set_pca(channel, duty):
+            real.set_pca(channel, duty)
+            if scenario.active:
+                scenario._pca(channel, duty)
+
+        def set_pwm_pin(name, duty):
+            real.set_pwm_pin(name, duty)
+            if scenario.active and name == "EXTERNAL_NEOPIXELS":
+                for key in scenario._channel_names.get("white", []):
+                    scenario._observe("led", key, duty / 65535.0)
+
+        module.play_wav = play_wav
+        module.set_pca = set_pca
+        module.set_pwm_pin = set_pwm_pin
+        return module
+
+    def _pca(self, channel, duty):
+        fraction = duty / 65535.0
+        for key in self._channel_names.get(channel, []):
+            if key.endswith("_wing"):
+                lo, hi, span = self.servo
+                pulse = fraction * _PWM_PERIOD_US
+                if pulse <= 0:
+                    continue
+                angle = min(max((pulse - lo) / max(hi - lo, 1.0) * span, 0.0), span)
+                self._observe("wing", key, angle)
+            else:
+                self._observe("led", key, fraction / _EYE_PEAK_DUTY)
+
+
+_scenario = _Scenario()
 
 
 _original_wait_for = asyncio.wait_for
@@ -682,6 +984,7 @@ def _code_builtins(code_path, strict, shims):
 class _LogStream:
     def write(self, text):
         simhw.log(text)
+        _scenario.log_text(text)
         return len(text)
 
     def flush(self):
@@ -691,11 +994,12 @@ class _LogStream:
         return False
 
 
-def run(code_path, shims, shim_dir=None):
+def run(code_path, shims, shim_dir=None, scenario=None):
     """Execute code.py with the shims installed. Never raises.
 
     `shims` are the built-in stand-ins; any in `shim_dir` (read afresh each
-    run) override them or add new ones."""
+    run) override them or add new ones. `scenario` (see _Scenario.start), if
+    given, is played against this run."""
     saved = {
         "stdout": sys.stdout,
         "stderr": sys.stderr,
@@ -712,6 +1016,10 @@ def run(code_path, shims, shim_dir=None):
     # Fresh copies of every shim each run, so no state leaks between runs.
     for name in shims:
         sys.modules.pop(name, None)
+    _scenario.start(scenario)
+    if _scenario.active:
+        # The shims import simhw as they load, so they get the watching proxy.
+        sys.modules["simhw"] = _scenario.proxy(simhw)
     sys.meta_path.insert(0, finder)
     sys.modules["time"] = _virtual_time_module(strict)
     asyncio.set_event_loop_policy(_SimPolicy())
@@ -735,6 +1043,8 @@ def run(code_path, shims, shim_dir=None):
         traceback.print_exc()
         print("\nCode done running.")
     finally:
+        _scenario.stop()
+        sys.modules["simhw"] = simhw
         _heap.stop()
         _behaviours.start(set())
         simhw.set_behaviours([])

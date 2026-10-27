@@ -33,6 +33,16 @@ pub struct LogLine {
     pub text: String,
 }
 
+/// Progress of a scripted scenario, as sim_runtime.py reports it.
+#[derive(Clone)]
+pub struct ScenarioStatus {
+    pub name: String,
+    /// "running", "pass", "fail" or "error".
+    pub state: String,
+    /// Each expectation's description and "pending", "pass" or "fail".
+    pub results: Vec<(String, String)>,
+}
+
 pub struct HwState {
     /// 16-bit duty cycle per PCA9685 channel, `None` until first written.
     pub pca_duty: [Option<u16>; 16],
@@ -60,6 +70,8 @@ pub struct HwState {
     pub behaviour_request: Option<String>,
     /// The button-started behaviour currently running, if any.
     pub behaviour_running: Option<String>,
+    /// The scenario this run is playing, if any.
+    pub scenario: Option<ScenarioStatus>,
     /// Hold code.py to what CircuitPython 9 offers (imports, APIs, float precision).
     pub strict: bool,
     /// Make hardware calls take as long as on the robot.
@@ -94,6 +106,7 @@ impl HwState {
             behaviours: Vec::new(),
             behaviour_request: None,
             behaviour_running: None,
+            scenario: None,
             strict: true,
             board_speed: true,
             board: BoardCfg::default(),

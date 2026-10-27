@@ -1,0 +1,27 @@
+# ANGRY_NUDGES (3) nudges inside one angry window make the droid angry. The
+# first two boop; each comes after the previous boop ends, since a gentle
+# nudge is ignored while the wings are animating.
+description = "Three nudges in one window end in angry.wav"
+start = "Boot sequence complete!"
+
+[[step]]
+t = 5.0
+action = "nudge"
+
+[[step]]
+t = 10.0
+action = "nudge"
+
+[[step]]
+t = 15.0
+action = "nudge"
+
+[[expect]]
+sound = "angry.wav"
+after = 15.0
+by = 20.0
+
+[[expect]]
+sound = "angry.wav"
+by = 15.0
+never = true

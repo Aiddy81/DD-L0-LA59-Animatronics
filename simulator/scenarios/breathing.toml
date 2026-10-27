@@ -1,0 +1,24 @@
+# Breathing: once booted, the right wing rises and falls between
+# BREATH_ANGLE_MIN and BREATH_ANGLE_MAX (50-65°) every BREATH_PERIOD_S (4 s).
+description = "Wings breathe after boot"
+start = "Boot sequence complete!"
+
+[[expect]]
+name = "right wing breathes up (<= 52°)"
+wing = "right"
+below = 52.0
+by = 10.0
+
+[[expect]]
+name = "right wing breathes down (>= 63°)"
+wing = "right"
+above = 63.0
+by = 10.0
+
+[[expect]]
+name = "right wing stays in the breathing range (no lower than 45°)"
+wing = "right"
+below = 45.0
+after = 1.0
+by = 10.0
+never = true
