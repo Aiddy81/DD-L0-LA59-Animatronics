@@ -79,6 +79,12 @@ mod simhw {
         (x, y, z)
     }
 
+    /// The sensor's full-scale range in g, so the plot can draw its clip level.
+    #[pyfunction]
+    fn accel_range(g: f32) {
+        hw().accel_range_g = g;
+    }
+
     #[pyfunction]
     fn log(text: &str) {
         hw().write_log(text);

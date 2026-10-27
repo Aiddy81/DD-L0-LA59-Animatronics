@@ -142,6 +142,10 @@ def shake(x=0.0, y=0.0, z=1.0):
     _bump(x, y, z, SHAKE_DELTA_G)
 
 
+def accel_range(g):
+    pass
+
+
 def set_accel(x, y, z):
     held_accel[0] = (x, y, z)
 

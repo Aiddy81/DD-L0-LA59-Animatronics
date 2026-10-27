@@ -1,3 +1,21 @@
+# Simulator: boop strength (#44) + accelerometer plot (#45)
+
+Branch: `feature/sim-boop-strength-accel-plot` (off `Documentation`).
+
+- [x] `scene.rs`: boop strength from hold time (0.1 s → 0.3 g, 1 s → 2 g), direction from the hit normal, `[sim] boop … g from …` log
+- [x] `hw.rs` / `pyhost.rs` / shim: `last_accel` (clipped as read) and `simhw.accel_range`
+- [x] `settings.rs`: `saved_value(key)`
+- [x] `ui.rs`: accel band in the plot with nudge / animation / hard / clip lines
+- [x] `tests/simhw.py`, `docs/custom-shims.md`, README updated
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean; headless checks pass (7 scenarios)
+- [ ] Interactive: tap / hold / side click / clip test / scenarios — user
+
+## Review
+- Strength comes from `Pointer<Click>::duration` and direction from the mesh-picking hit normal, so no new input tracking was needed; the orbit-drag guard still applies.
+- The plot records what the firmware actually read (`next_accel`, clipped like the shim), not the held value, so a 2 g range visibly flattens a shake below the hard line.
+- Thresholds come from settings.toml / config.py defaults via the Settings state, so editing one moves its line.
+- `build.ps1` doesn't run fmt/clippy; ran `docker/build.sh` with `CHECK=1` for those.
+
 # Simulator: scenario checks in the Docker build (#60)
 
 Branch: `feature/headless-build-checks` (off `Documentation`).

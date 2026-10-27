@@ -217,14 +217,42 @@ fn spawn_model(
     }
 }
 
-/// Clicking the droid is a nose boop: one gentle accelerometer nudge. A drag
-/// to orbit the camera that happens to start on it doesn't count. Clicks on
-/// any part bubble up to the model's root, which has this observer.
-fn boop(_: Trigger<Pointer<Click>>, drag: Res<DragDistance>) {
-    if drag.0 < 4.0 {
-        let dir = crate::hw::hw().nudge_dir;
-        crate::ui::nudge(dir);
+/// A click at or under this long is the lightest boop.
+const BOOP_TAP_S: f32 = 0.1;
+/// A press this long or longer is the hardest boop.
+const BOOP_HARD_S: f32 = 1.0;
+
+/// Boop strength in g for a press of `held_s` seconds: NUDGE_DELTA_G for a
+/// tap up to SHAKE_DELTA_G for a long press, so clicking can reach every
+/// firmware threshold.
+fn boop_strength(held_s: f32) -> f32 {
+    let t = ((held_s - BOOP_TAP_S) / (BOOP_HARD_S - BOOP_TAP_S)).clamp(0.0, 1.0);
+    crate::ui::NUDGE_DELTA_G + (crate::ui::SHAKE_DELTA_G - crate::ui::NUDGE_DELTA_G) * t
+}
+
+/// The sensor-frame direction of a world-space surface normal. DroidRoot is
+/// unrotated, so sensor x = world +X, y = world -Z and z = world +Y (up).
+/// None if the normal is missing or degenerate.
+fn sensor_dir(normal: Option<Vec3>) -> Option<[f32; 3]> {
+    let n = normal?.try_normalize()?;
+    Some([n.x, -n.z, n.y])
+}
+
+/// Clicking the droid is a nose boop. The reading spikes along the surface
+/// normal where you clicked, harder the longer you hold. A drag to orbit the
+/// camera that happens to start on it doesn't count. Clicks on any part
+/// bubble up to the model's root, which has this observer.
+fn boop(click: Trigger<Pointer<Click>>, drag: Res<DragDistance>) {
+    if drag.0 >= 4.0 {
+        return;
     }
+    let dir = sensor_dir(click.hit.normal).unwrap_or_else(|| crate::hw::hw().nudge_dir);
+    let delta = boop_strength(click.duration.as_secs_f32());
+    crate::ui::boop(dir, delta);
+    crate::hw::hw().push_line(format!(
+        "[sim] boop {delta:.1} g from {}",
+        crate::ui::nearest_direction(dir)
+    ));
 }
 
 /// glTF models: attach behaviour to nodes by name once the scene spawns.

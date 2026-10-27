@@ -94,6 +94,10 @@ pub struct HwState {
     pub nudge_dir: [f32; 3],
     /// One-shot readings returned before falling back to `accel_g`.
     pub accel_pulses: VecDeque<[f32; 3]>,
+    /// The latest reading the firmware got, after the sensor's range clipping.
+    pub last_accel: [f32; 3],
+    /// Full-scale range of the LIS3DH in g, reported by the shim.
+    pub accel_range_g: f32,
     pub log: VecDeque<LogLine>,
     partial_line: String,
     /// Between a "Traceback" header and its exception message, so the whole
@@ -140,6 +144,8 @@ impl HwState {
             accel_g: [0.0, 0.0, 1.0],
             nudge_dir: [0.0, 0.0, 1.0],
             accel_pulses: VecDeque::new(),
+            last_accel: [0.0, 0.0, 1.0],
+            accel_range_g: 4.0,
             log: VecDeque::new(),
             partial_line: String::new(),
             in_traceback: false,
@@ -309,7 +315,12 @@ impl HwState {
     }
 
     pub fn next_accel(&mut self) -> [f32; 3] {
-        self.accel_pulses.pop_front().unwrap_or(self.accel_g)
+        let reading = self.accel_pulses.pop_front().unwrap_or(self.accel_g);
+        // Same saturation as the shim (one LSB below full scale), so the plot
+        // shows what the firmware actually read.
+        let limit = self.accel_range_g * (1.0 - 1.0 / 32768.0);
+        self.last_accel = reading.map(|v| v.clamp(-limit, limit));
+        reading
     }
 }
 
