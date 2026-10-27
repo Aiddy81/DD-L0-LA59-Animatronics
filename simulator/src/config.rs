@@ -67,6 +67,8 @@ pub struct BoardCfg {
     pub heap_budget_kb: f64,
     /// CircuitPython bytes per desktop-Python byte allocated (objects are smaller there).
     pub heap_scale: f64,
+    /// Warn when one task step holds the event loop longer than this; 0 turns it off.
+    pub loop_hold_warn_ms: f64,
 }
 
 impl Default for BoardCfg {
@@ -79,6 +81,7 @@ impl Default for BoardCfg {
             loop_ms: 0.25,
             heap_budget_kb: 130.0,
             heap_scale: 0.45,
+            loop_hold_warn_ms: 50.0,
         }
     }
 }

@@ -1,11 +1,13 @@
 //! User preferences kept between runs in `ddl0-sim.prefs.toml` next to the exe:
 //! window and panel sizes, the toolbar toggles, section open/closed state and
-//! the model choice.
+//! the model and room-light choices.
 
 use std::path::Path;
 
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
+
+use crate::scene::RoomLight;
 
 /// Everything remembered between runs. Missing keys fall back to the defaults
 /// so a file written by an older build still loads.
@@ -21,6 +23,7 @@ pub struct Prefs {
     pub log_height: f32,
     /// `None` follows `[model] kind` in sim.toml; `Some` is the user's choice.
     pub model_gltf: Option<bool>,
+    pub room_light: RoomLight,
     pub strict: bool,
     pub board_speed: bool,
     pub servo_speed: bool,
@@ -48,6 +51,7 @@ impl Default for Prefs {
             panel_width: 300.0,
             log_height: 170.0,
             model_gltf: None,
+            room_light: RoomLight::default(),
             strict: true,
             board_speed: true,
             servo_speed: true,

@@ -11,6 +11,7 @@ time.monotonic() has CircuitPython's reduced float precision.
 import ast
 import asyncio
 import builtins
+import collections.abc
 import errno
 import fnmatch
 import gc as _real_gc
@@ -254,6 +255,7 @@ def _virtual_time_module(strict):
 
     def sleep(seconds):
         # Blocking, like CircuitPython's time.sleep: nothing else runs meanwhile.
+        _blocked_s[0] += max(0.0, seconds)
         end = simhw.now() + seconds
         while True:
             if simhw.stopping():
@@ -307,10 +309,74 @@ class _SimLoop(asyncio.SelectorEventLoop):
         return simhw.now()
 
 
+# Virtual seconds code.py has spent in blocking time.sleep() calls so far.
+_blocked_s = [0.0]
+# Steps shorter than this aren't reported, which keeps the cost per step tiny.
+_HOLD_MIN_S = 0.001
+
+
+class _TimedCoro(collections.abc.Coroutine):
+    """A task's coroutine, timed one step at a time. A step is the code between
+    two awaits; on the board nothing else runs until it ends, so a long one
+    (a blocking time.sleep, a loop without await) stalls every behaviour."""
+
+    __slots__ = ("_coro",)
+
+    def __init__(self, coro):
+        self._coro = coro
+
+    def send(self, value):
+        return self._timed(self._coro.send, value)
+
+    def throw(self, *args):
+        return self._timed(self._coro.throw, *args)
+
+    def close(self):
+        return self._coro.close()
+
+    def __await__(self):
+        return self._coro.__await__()
+
+    def __getattr__(self, name):
+        # cr_code, cr_frame, cr_await: the State panel walks the real coroutine.
+        return getattr(self._coro, name)
+
+    def _timed(self, step, *args):
+        t0 = simhw.now()
+        r0 = _real_time.perf_counter()
+        b0 = simhw.board_time()
+        s0 = _blocked_s[0]
+        try:
+            return step(*args)
+        finally:
+            _report_hold(self._coro, t0, r0, b0, s0)
+
+
+def _report_hold(coro, t0, r0, b0, s0):
+    """Tells the simulator how long a step held the loop, in board time. That
+    is the blocking sleeps and board-speed charges in full, plus desktop CPU
+    at 1x: the speed slider would otherwise multiply it into false alarms."""
+    sim_dt = simhw.now() - t0
+    if sim_dt < _HOLD_MIN_S:
+        return
+    waited = (simhw.board_time() - b0) + (_blocked_s[0] - s0)
+    cpu = max(0.0, _real_time.perf_counter() - r0 - waited / simhw.speed())
+    hold = min(sim_dt, cpu + waited)
+    if hold >= _HOLD_MIN_S:
+        chain = _State._chain(coro)
+        name = chain[0][0] if chain else getattr(coro, "__qualname__", "task")
+        simhw.task_hold(name, hold)
+
+
+def _timed_task(loop, coro, **kwargs):
+    return asyncio.Task(_TimedCoro(coro), loop=loop, **kwargs)
+
+
 class _SimPolicy(asyncio.DefaultEventLoopPolicy):
     def new_event_loop(self):
         selector = _ScaledSelector()
         loop = _SimLoop(selector)
+        loop.set_task_factory(_timed_task)
         selector.loop = loop
         return loop
 

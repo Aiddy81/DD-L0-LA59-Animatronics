@@ -7,6 +7,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
+use serde::{Deserialize, Serialize};
 
 use crate::config::SimConfig;
 use crate::hw::hw;
@@ -177,6 +178,42 @@ struct MouseInput<'w> {
     scroll: Res<'w, AccumulatedMouseScroll>,
 }
 
+/// How lit the room around the droid is. Dim and Dark show how the eyes and
+/// white LED look (and light the droid) in a darker room.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoomLight {
+    #[default]
+    Bright,
+    Dim,
+    Dark,
+}
+
+impl RoomLight {
+    pub const ALL: [RoomLight; 3] = [RoomLight::Bright, RoomLight::Dim, RoomLight::Dark];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RoomLight::Bright => "Bright",
+            RoomLight::Dim => "Dim",
+            RoomLight::Dark => "Dark",
+        }
+    }
+
+    /// (ambient brightness, overhead lamp lux, background colour)
+    fn levels(self) -> (f32, f32, Color) {
+        match self {
+            RoomLight::Bright => (250.0, 4_000.0, Color::srgb(0.07, 0.08, 0.1)),
+            RoomLight::Dim => (25.0, 300.0, Color::srgb(0.025, 0.028, 0.035)),
+            RoomLight::Dark => (0.0, 0.0, Color::srgb(0.004, 0.004, 0.006)),
+        }
+    }
+}
+
+/// The room's overhead lamp, dimmed by `RoomLight`.
+#[derive(Component)]
+struct RoomLamp;
+
 /// Which droid model is shown. Switching it swaps the model live.
 #[derive(Resource)]
 pub struct ModelChoice {
@@ -195,6 +232,7 @@ impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DragDistance>()
             .init_resource::<ServoSlew>()
+            .init_resource::<RoomLight>()
             .insert_resource(AmbientLight {
                 color: Color::WHITE,
                 brightness: 250.0,
@@ -209,6 +247,7 @@ impl Plugin for ScenePlugin {
                     adopt_glow_materials,
                     (slew_servos, drive_wings).chain(),
                     drive_glow,
+                    apply_room_light.run_if(resource_changed::<RoomLight>),
                     orbit_camera,
                 ),
             );
@@ -225,6 +264,9 @@ fn setup(
 ) {
     let gltf_available = paths.assets.join(MODEL_FILE).exists();
     // A saved choice beats sim.toml, which only sets the default.
+    if let Some(p) = &prefs {
+        commands.insert_resource(p.room_light);
+    }
     let wanted = prefs
         .and_then(|p| p.model_gltf)
         .unwrap_or(cfg.model.kind != "primitive");
@@ -251,6 +293,7 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(3.0, 6.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+        RoomLamp,
     ));
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(20.0, 20.0))),
@@ -515,6 +558,22 @@ fn drive_glow(
         if peak > 0.0 {
             point.color = Color::linear_rgb(rgb.x / peak, rgb.y / peak, rgb.z / peak);
         }
+    }
+}
+
+fn apply_room_light(
+    room: Res<RoomLight>,
+    mut ambient: ResMut<AmbientLight>,
+    mut lamps: Query<&mut DirectionalLight, With<RoomLamp>>,
+    mut cameras: Query<&mut Camera, With<Camera3d>>,
+) {
+    let (brightness, lux, background) = room.levels();
+    ambient.brightness = brightness;
+    for mut lamp in &mut lamps {
+        lamp.illuminance = lux;
+    }
+    for mut camera in &mut cameras {
+        camera.clear_color = ClearColorConfig::Custom(background);
     }
 }
 

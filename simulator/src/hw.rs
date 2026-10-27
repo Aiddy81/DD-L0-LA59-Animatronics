@@ -1,7 +1,7 @@
 //! Simulated hardware state shared between the Python thread (which writes it
 //! through the `simhw` module) and the Bevy app (which renders it).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -13,6 +13,9 @@ const LOG_CAP: usize = 4000;
 /// Clock speed while skipping to the next behaviour: the longest idle wait
 /// (120 min) passes in about 7 s.
 const SKIP_SPEED: f64 = 1000.0;
+/// Virtual seconds between two loop-hold warnings for the same task, so a
+/// task that blocks every pass doesn't flood the log.
+const HOLD_WARN_EVERY_S: f64 = 5.0;
 
 pub enum AudioCmd {
     Play {
@@ -139,6 +142,12 @@ pub struct HwState {
     pub board: BoardCfg,
     /// Board time owed but not yet slept, in virtual seconds.
     debt_s: f64,
+    /// All board time charged this run, in virtual seconds.
+    pub board_time_s: f64,
+    /// The longest a task step held the event loop this run: (task, ms).
+    pub longest_hold: Option<(String, f64)>,
+    /// Virtual time of each task's last loop-hold warning.
+    hold_warned: HashMap<String, f64>,
     /// Estimated CircuitPython heap used by code.py, in bytes.
     pub heap_bytes: f64,
     pub heap_peak: f64,
@@ -178,6 +187,9 @@ impl HwState {
             servo_speed: true,
             board: BoardCfg::default(),
             debt_s: 0.0,
+            board_time_s: 0.0,
+            longest_hold: None,
+            hold_warned: HashMap::new(),
             heap_bytes: 0.0,
             heap_peak: 0.0,
             heap_warned: 0,
@@ -256,12 +268,38 @@ impl HwState {
             _ => return None,
         };
         self.debt_s += ms / 1000.0;
+        self.board_time_s += ms / 1000.0;
         let real = self.debt_s / self.clock.speed;
         if real < 0.001 {
             return None;
         }
         self.debt_s = 0.0;
         Some(real)
+    }
+
+    /// Records how long one task step (the code between two awaits) held the
+    /// event loop. Over the board's limit it logs a warning, at most once per
+    /// task every `HOLD_WARN_EVERY_S`.
+    pub fn task_hold(&mut self, name: &str, secs: f64) {
+        let ms = secs * 1000.0;
+        if self.longest_hold.as_ref().is_none_or(|(_, m)| ms > *m) {
+            self.longest_hold = Some((name.to_owned(), ms));
+        }
+        let limit = self.board.loop_hold_warn_ms;
+        if limit <= 0.0 || ms <= limit {
+            return;
+        }
+        let now = self.clock.now();
+        let due = self
+            .hold_warned
+            .get(name)
+            .is_none_or(|&t| now - t >= HOLD_WARN_EVERY_S);
+        if due {
+            self.hold_warned.insert(name.to_owned(), now);
+            self.push_line(format!(
+                "[sim] {name} held the loop for {ms:.0} ms without an await (limit {limit:.0} ms): every other behaviour stalled meanwhile"
+            ));
+        }
     }
 
     pub fn heap_budget(&self) -> f64 {

@@ -146,6 +146,18 @@ mod simhw {
         }
     }
 
+    /// Board time charged so far (virtual seconds), so a task step can tell
+    /// its board-speed sleeps apart from desktop CPU time.
+    #[pyfunction]
+    fn board_time() -> f64 {
+        hw().board_time_s
+    }
+
+    #[pyfunction]
+    fn task_hold(name: &str, secs: f64) {
+        hw().task_hold(name, secs);
+    }
+
     #[pyfunction]
     fn set_heap(desktop_bytes: f64) {
         hw().set_heap(desktop_bytes);
