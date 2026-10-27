@@ -24,6 +24,15 @@ pub enum AudioCmd {
     Volume(f32),
 }
 
+/// What a plot marker shows: an input or event that can explain what follows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarkerKind {
+    Motion,
+    Sound,
+    Idle,
+    Restart,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LogKind {
     Firmware,
@@ -110,6 +119,8 @@ pub struct HwState {
     pub skipping: bool,
     pub stop_requested: bool,
     pub idle_trigger: bool,
+    /// Plot markers not yet picked up by the plot, which timestamps them.
+    pub markers: Vec<(MarkerKind, String)>,
     /// Behaviours code.py can be asked to run once, found by sim_runtime.py.
     pub behaviours: Vec<String>,
     /// A behaviour button click, waiting for code.py's event loop.
@@ -123,6 +134,8 @@ pub struct HwState {
     pub strict: bool,
     /// Make hardware calls take as long as on the robot.
     pub board_speed: bool,
+    /// Turn the 3D wings no faster than the real servo (`[servo]` in sim.toml).
+    pub servo_speed: bool,
     pub board: BoardCfg,
     /// Board time owed but not yet slept, in virtual seconds.
     debt_s: f64,
@@ -154,6 +167,7 @@ impl HwState {
             skipping: false,
             stop_requested: false,
             idle_trigger: false,
+            markers: Vec::new(),
             behaviours: Vec::new(),
             behaviour_request: None,
             behaviour_running: None,
@@ -161,6 +175,7 @@ impl HwState {
             fw_state: FwState::default(),
             strict: true,
             board_speed: true,
+            servo_speed: true,
             board: BoardCfg::default(),
             debt_s: 0.0,
             heap_bytes: 0.0,
@@ -179,6 +194,7 @@ impl HwState {
         let speed = if self.skipping { 1.0 } else { self.clock.speed };
         let strict = self.strict;
         let board_speed = self.board_speed;
+        let servo_speed = self.servo_speed;
         let board = self.board.clone();
         let log = std::mem::take(&mut self.log);
         *self = Self::new();
@@ -187,6 +203,7 @@ impl HwState {
         self.clock.speed = speed;
         self.strict = strict;
         self.board_speed = board_speed;
+        self.servo_speed = servo_speed;
         self.board = board;
         self.log = log;
     }
@@ -207,6 +224,16 @@ impl HwState {
         self.skipping = false;
         self.clock.set_speed(1.0);
         self.push_line(format!("[sim] skip stopped: {reason}"));
+    }
+
+    pub fn mark(&mut self, kind: MarkerKind, label: impl Into<String>) {
+        self.markers.push((kind, label.into()));
+    }
+
+    /// Ends idle_attention's wait (from the toolbar, the I key or a scenario).
+    pub fn trigger_idle(&mut self) {
+        self.idle_trigger = true;
+        self.mark(MarkerKind::Idle, "idle");
     }
 
     /// Sets the clock speed, ending any skip.

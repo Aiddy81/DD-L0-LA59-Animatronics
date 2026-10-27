@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 
-use crate::hw::{hw, AngryWindow, AudioCmd, FwState, IdleWait, ScenarioStatus, TaskState};
+use crate::hw::{
+    hw, AngryWindow, AudioCmd, FwState, IdleWait, MarkerKind, ScenarioStatus, TaskState,
+};
 
 /// Hardware stand-ins, compiled into the exe so it runs on its own. Shims in
 /// `dist\shims\` override these or add new ones; sim_runtime.py reads that
@@ -98,6 +100,7 @@ mod simhw {
             .file_name()
             .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
         s.end_skip(&format!("{name} started"));
+        s.mark(MarkerKind::Sound, name);
         s.audio.push(AudioCmd::Play {
             path,
             level,
@@ -251,7 +254,7 @@ mod simhw {
 
     #[pyfunction]
     fn trigger_idle() {
-        hw().idle_trigger = true;
+        hw().trigger_idle();
     }
 
     #[pyfunction]
@@ -321,6 +324,10 @@ impl PyHost {
         {
             let mut s = hw();
             s.reset_for_run();
+            let label = scenario
+                .as_ref()
+                .map_or_else(|| "restart".to_owned(), |r| format!("scenario {}", r.name));
+            s.mark(MarkerKind::Restart, label);
             s.audio.push(AudioCmd::Stop);
             s.push_line(String::new());
         }

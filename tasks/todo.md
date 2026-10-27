@@ -1,3 +1,24 @@
+# Simulator: event markers (#49) + servo speed limit (#51)
+
+Branch: `feature/sim-event-markers-servo-speed` (off `Documentation`).
+
+- [x] `hw.rs`: `MarkerKind`, pending `markers`, `mark()`, `trigger_idle()`, `servo_speed`
+- [x] `pyhost.rs`: mark WAV starts and restarts/scenarios; `trigger_idle()`
+- [x] `ui.rs`: mark nudges/shakes/boops; stamp markers in `record_history`; draw VLines + labels; Events checkbox (saved via `plot_hidden`)
+- [x] `config.rs` / `sim.toml`: `[servo] sec_per_60deg = 0.12` (FS90 at 4.8 V)
+- [x] `scene.rs`: `slew()` + tests, `ServoSlew`, `slew_servos` (virtual time), `drive_wings` uses slewed angle; sustained-lag warning
+- [x] `ui.rs` / `prefs.rs` / `main.rs`: "Servo speed limit" toolbar checkbox, remembered
+- [x] README: FS90 in hardware list, plot markers, servo speed limit
+- [x] Docker build (locked); `cargo fmt --check`, `clippy --all-targets -D warnings` clean; slew tests pass natively (5); headless checks pass (7 scenarios)
+- [ ] Interactive: nudge/idle markers, Events toggle, wings ease, pause mid-move, warning at slow `sec_per_60deg` — user
+
+## Review
+- Whatever causes a marker queues it in `HwState` (boop/nudge/shake, `play_wav`, `trigger_idle`, `start_with`). `record_history` then timestamps it on the plot's own clock, so markers line up with the samples. While the clock is paused they wait, which is also when the firmware gets to act on them.
+- The servo slew runs in virtual time and is always tracked. The toolbar toggle only picks what the 3D wings show, so the lag warning works either way. The plot and the PCA9685 panel still show the commanded angle.
+- `LAG_SUSTAIN_S` is 0.4 s, not the planned 0.3 s. A full 180° snap takes 0.36 s at 0.12 s/60°, and a single snap must not warn.
+- The slew logic is in plain functions (`slew`, `ServoTrack::follow`), so its tests run natively. The Windows-target tests only compile in the image, since it has no Wine.
+- Computer use still can't find the sim window. A PrintWindow capture confirmed both checkboxes and a clean boot with no lag warnings. The nudge/idle markers and the warning at a slow `sec_per_60deg` are left for the user.
+
 # Simulator: hot-reload sim.toml (#47) + more capable plot (#48)
 
 Branch: `feature/sim-toml-reload-plot` (off `Documentation`).
