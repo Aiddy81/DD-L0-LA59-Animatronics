@@ -109,7 +109,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 
 ### Using it
 
-- **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. A nudge is too gentle to interrupt the attention animation or trench run; use *Hard shake*. *Tipped over* holds z at -1 g, which counts as one nudge.
+- **Motion**: *Nudge* (or click the head) gives one accelerometer reading 0.3 g past the held value, in the direction picked in *Direction* (+X, −X, +Y, −Y, +Z, −Z; default +Z). From rest that is 1.3 g on z, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one reading 2 g past the held value, which from rest is 3 g and goes straight to angry. A nudge is too gentle to interrupt the attention animation or trench run; use *Hard shake*. The three *held* sliders set the x, y and z reading the sensor returns between nudges; *Rest* puts them back to [0, 0, 1] g. *Tipped over* holds [0, 0, -1] g, which counts as one nudge. The firmware reads only z, so ±X and ±Y nudges are ignored, as on the robot. A −Z shake from rest reads -1 g, so it only counts as a nudge.
 - **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation or the trench run plays (50/50).
 - **Behaviours** (toolbar): one button per behaviour, to run it straight away without reproducing its trigger. A button runs the firmware's own function once, with breathing paused (`pause_breathing`) until it finishes. The other buttons are greyed out until then. The row is built from the firmware each run, so a new behaviour gets a button with no simulator change. To get one, it must be an `async def` in a `behaviours/` module that can be called with no arguments. Functions `code.py` already runs with `asyncio.create_task(...)` (breathing, motion sensing, idle attention, the LED scheduler) and names starting with `_` are left out. A trench run started this way doesn't hold off the white-LED scheduler the way one started from idle does.
 - **Scenarios** (toolbar): pick one of `simulator/scenarios/*.toml` and click *Run scenario*. It restarts `code.py`, plays the scenario's inputs at set times and checks what the droid does. The badge shows *running*, then *PASS* or *FAIL* with a count; hover it for each check. Each result is also logged as a `[sim] scenario ...` line. See [Scenarios](#scenarios).
@@ -150,7 +150,7 @@ If the Feather is plugged into USB and nothing is saved, the bench measures and 
 
 ### Scenarios
 
-A scenario is a timeline of inputs plus what the droid should do, so the test checklist (boot, breathing, nudge → boop, 3 nudges / hard shake → angry, idle → attention) runs without clicking. The shipped ones cover that checklist: `boot`, `breathing`, `boop`, `angry-nudges`, `angry-shake` and `idle`. Run them from the toolbar or with `headless.py` (see [Tests and CI](#tests-and-ci)). To add one, drop a `.toml` file into `simulator/scenarios/`; the toolbar picks it up within a second.
+A scenario is a timeline of inputs plus what the droid should do, so the test checklist (boot, breathing, nudge → boop, 3 nudges / hard shake → angry, idle → attention) runs without clicking. The shipped ones cover that checklist: `boot`, `breathing`, `boop`, `angry-nudges`, `angry-shake`, `idle` and `sideways-nudge`. Run them from the toolbar or with `headless.py` (see [Tests and CI](#tests-and-ci)). To add one, drop a `.toml` file into `simulator/scenarios/`; the toolbar picks it up within a second.
 
 ```toml
 description = "Three nudges in one window end in angry.wav"
@@ -159,6 +159,7 @@ start = "Boot sequence complete!"   # optional: times count from this log line
 [[step]]
 t = 5.0             # virtual seconds (from start, or from code.py starting)
 action = "nudge"    # nudge | shake | tilt | idle | wait
+# axis = "+x"       # nudge/shake direction: +x -x +y -y +z -z (default "+z")
 
 [[expect]]
 sound = "angry.wav" # must play between after and by
@@ -166,7 +167,7 @@ after = 15.0        # optional, default 0
 by = 20.0
 ```
 
-- **Steps**: `nudge` (one 1.3 g reading) and `shake` (one 3 g reading) match the Motion buttons. `idle` is *Trigger idle now*. `tilt` holds the accelerometer at `g = [x, y, z]` (default `[0, 0, -1]`, tipped over). `wait` does nothing, but the scenario runs until it.
+- **Steps**: `nudge` (one reading 0.3 g past the held value) and `shake` (2 g past it) match the Motion buttons. `axis = "+x"` (also `-x`, `+y`, `-y`, `+z`, `-z`; default `"+z"`) picks their direction, like *Direction*. `idle` is *Trigger idle now*. `tilt` holds the accelerometer at `g = [x, y, z]` (default `[0, 0, -1]`, tipped over). `wait` does nothing, but the scenario runs until it.
 - **Expectations**, one kind each:
   - `sound`: a WAV file name, glob (`"angry*.wav"`) or list of them.
   - `wing = "right"` or `"left"` with `above` and/or `below`: the servo angle in degrees (from the pulse width, via `sim.toml` `[servo]`).

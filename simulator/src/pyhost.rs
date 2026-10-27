@@ -180,15 +180,16 @@ mod simhw {
         hw().behaviour_running = (!name.is_empty()).then(|| name.to_owned());
     }
 
-    /// Scenario steps: the same inputs as the Motion panel and toolbar.
+    /// Scenario steps: the same inputs as the Motion panel and toolbar. The
+    /// vector is the direction the reading is pushed in, from the held value.
     #[pyfunction]
-    fn nudge() {
-        crate::ui::nudge();
+    fn nudge(x: f32, y: f32, z: f32) {
+        crate::ui::nudge([x, y, z]);
     }
 
     #[pyfunction]
-    fn shake() {
-        crate::ui::shake();
+    fn shake(x: f32, y: f32, z: f32) {
+        crate::ui::shake([x, y, z]);
     }
 
     #[pyfunction]

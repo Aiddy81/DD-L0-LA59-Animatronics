@@ -222,7 +222,8 @@ fn spawn_model(
 /// any part bubble up to the model's root, which has this observer.
 fn boop(_: Trigger<Pointer<Click>>, drag: Res<DragDistance>) {
     if drag.0 < 4.0 {
-        crate::ui::nudge();
+        let dir = crate::hw::hw().nudge_dir;
+        crate::ui::nudge(dir);
     }
 }
 

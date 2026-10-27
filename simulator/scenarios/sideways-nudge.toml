@@ -1,0 +1,50 @@
+# Guards the z-only design: the firmware reads only z, so sideways (x/y)
+# nudges are ignored, as on the robot. The tilt itself moves z from 1.0 to
+# 0.35 g, which the firmware counts as one nudge (it boops once, then
+# re-measures rest). The +z nudge at 25 s is the second nudge, under the
+# three that make it angry.
+description = "Sideways nudges are ignored; a z nudge still boops, without getting angry"
+start = "Boot sequence complete!"
+
+[[step]]
+t = 5.0
+action = "tilt"
+g = [0.94, 0.0, 0.35]
+
+[[step]]
+t = 15.0
+action = "nudge"
+axis = "+x"
+
+[[step]]
+t = 17.0
+action = "nudge"
+axis = "+y"
+
+[[step]]
+t = 25.0
+action = "nudge"
+
+[[expect]]
+sound = "noseBoops.wav"
+after = 5.0
+by = 9.0
+name = "the tilt itself boops once"
+
+[[expect]]
+sound = "noseBoops.wav"
+after = 15.0
+by = 22.0
+never = true
+name = "sideways nudges are ignored (z-only firmware)"
+
+[[expect]]
+sound = "noseBoops.wav"
+after = 25.0
+by = 28.0
+name = "a z nudge still boops"
+
+[[expect]]
+sound = "angry.wav"
+by = 30.0
+never = true

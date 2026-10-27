@@ -401,6 +401,8 @@ _behaviours = _Behaviours()
 _EYE_PEAK_DUTY = 6550.0 / 20000.0
 _PWM_PERIOD_US = 20000.0
 _ACTIONS = {"nudge", "shake", "tilt", "idle", "wait"}
+_AXES = {"+x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0), "+y": (0.0, 1.0, 0.0),
+         "-y": (0.0, -1.0, 0.0), "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0)}
 _EXPECT_KINDS = ("sound", "wing", "led", "log")
 _EXPECT_KEYS = {"by", "after", "never", "name", "above", "below"} | set(_EXPECT_KINDS)
 
@@ -549,14 +551,19 @@ class _Scenario:
             if action not in _ACTIONS or "t" not in step:
                 raise ValueError("[[step]] #{}: needs t and action ({})".format(
                     i, ", ".join(sorted(_ACTIONS))))
-            unknown = set(step) - {"t", "action", "g"}
+            unknown = set(step) - {"t", "action", "g", "axis"}
             if unknown:
                 raise ValueError("[[step]] #{}: unknown key(s) {}".format(
                     i, ", ".join(sorted(unknown))))
             g = step.get("g", [0.0, 0.0, -1.0])
             if action == "tilt" and len(g) != 3:
                 raise ValueError("[[step]] #{}: g needs [x, y, z]".format(i))
-            steps.append({"t": float(step["t"]), "action": action, "g": [float(v) for v in g]})
+            axis = str(step.get("axis", "+z")).lower()
+            if axis not in _AXES:
+                raise ValueError("[[step]] #{}: axis must be one of {}".format(
+                    i, ", ".join(sorted(_AXES))))
+            steps.append({"t": float(step["t"]), "action": action, "g": [float(v) for v in g],
+                          "axis": axis, "dir": _AXES[axis]})
         return steps
 
     def _results(self):
@@ -599,14 +606,16 @@ class _Scenario:
             step = self.steps.pop(0)
             action = step["action"]
             if action == "nudge":
-                simhw.nudge()
+                simhw.nudge(*step["dir"])
             elif action == "shake":
-                simhw.shake()
+                simhw.shake(*step["dir"])
             elif action == "tilt":
                 simhw.set_accel(*step["g"])
             elif action == "idle":
                 simhw.trigger_idle()
-            _say("[sim] scenario {}: {} at {:.1f} s".format(self.name, action, t))
+            axis = step["axis"] if action in ("nudge", "shake") and step["axis"] != "+z" else ""
+            _say("[sim] scenario {}: {} at {:.1f} s".format(
+                self.name, (action + " " + axis).strip(), t))
             self._dirty = True
         for e in self.expects:
             if e.expire(t):
