@@ -1,0 +1,18 @@
+# A hard shake (above HARD_MOTION_MG) goes straight to angry, no boop first.
+description = "One hard shake goes straight to angry.wav"
+start = "Boot sequence complete!"
+
+[[step]]
+t = 5.0
+action = "shake"
+
+[[expect]]
+sound = "angry.wav"
+after = 5.0
+by = 8.0
+
+[[expect]]
+sound = "noseBoops.wav"
+after = 5.0
+by = 8.0
+never = true

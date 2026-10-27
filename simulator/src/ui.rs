@@ -13,7 +13,7 @@ use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::hw::{hw, LogKind, LogLine};
 use crate::prefs::Prefs;
-use crate::pyhost::PyHost;
+use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice};
 
 /// A gentle bump: one accelerometer read above code.py's 1.1 g threshold.
@@ -108,6 +108,9 @@ pub struct UiState {
     open_plot: bool,
     panel_width: f32,
     log_height: f32,
+    /// Names (file stems) of simulator/scenarios/*.toml, re-listed with hot_reload.
+    scenarios: Vec<String>,
+    scenario_choice: String,
 }
 
 type Series = fn(&Sample) -> f32;
@@ -144,6 +147,8 @@ impl UiState {
             open_plot: prefs.open_plot,
             panel_width: prefs.panel_width,
             log_height: prefs.log_height,
+            scenarios: Vec::new(),
+            scenario_choice: String::new(),
         }
     }
 }
@@ -308,11 +313,63 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
     }
 }
 
-fn hot_reload(mut ui: ResMut<UiState>, mut host: ResMut<Host>) {
+/// Sorted file stems of the `.toml` files in `dir`; empty if it doesn't exist.
+fn list_scenarios(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .filter_map(|p| Some(p.file_stem()?.to_string_lossy().into_owned()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Restarts code.py with `simulator/scenarios/<name>.toml` played against it.
+fn run_scenario(host: &mut PyHost, cfg: &SimConfig, paths: &crate::Paths, name: &str) {
+    let path = paths
+        .simulator
+        .join("scenarios")
+        .join(format!("{name}.toml"));
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => {
+            hw().push_line(format!("[sim] could not read {}: {e}", path.display()));
+            return;
+        }
+    };
+    let [r, g, b] = cfg.eyes.main;
+    let [sr, sg, sb] = cfg.eyes.small;
+    let channels = [
+        ("right_wing", cfg.wing_right.channel),
+        ("left_wing", cfg.wing_left.channel),
+        ("main_r", r),
+        ("main_g", g),
+        ("main_b", b),
+        ("small_r", sr),
+        ("small_g", sg),
+        ("small_b", sb),
+    ];
+    host.start_scenario(ScenarioRun {
+        name: name.to_owned(),
+        text,
+        servo: (
+            cfg.servo.min_pulse_us,
+            cfg.servo.max_pulse_us,
+            cfg.servo.range_deg,
+        ),
+        channels: channels.map(|(n, c)| (n.to_owned(), c)).to_vec(),
+    });
+}
+
+fn hot_reload(mut ui: ResMut<UiState>, mut host: ResMut<Host>, paths: Res<crate::Paths>) {
     if ui.last_check.elapsed().as_millis() < 500 {
         return;
     }
     ui.last_check = Instant::now();
+    ui.scenarios = list_scenarios(&paths.simulator.join("scenarios"));
     let mtime = firmware_mtime(host.0.code_path());
     let shims = shims_mtime(host.0.shim_dir());
     let changed = if mtime != ui.code_mtime {
@@ -534,6 +591,9 @@ fn panels(
                 }
             });
         }
+        if !ui.scenarios.is_empty() {
+            bar.horizontal(|row| scenario_row(row, &mut ui, &mut host.0, &cfg, &captures.paths));
+        }
     });
 
     let side_panel = egui::SidePanel::right("hardware")
@@ -730,6 +790,66 @@ fn panels(
                 });
         });
     ui.log_height = log_panel.response.rect.height();
+}
+
+/// Scenario picker, Run scenario button and the current scenario's verdict.
+fn scenario_row(
+    row: &mut egui::Ui,
+    ui: &mut UiState,
+    host: &mut PyHost,
+    cfg: &SimConfig,
+    paths: &crate::Paths,
+) {
+    row.label("Scenarios")
+        .on_hover_text("Scripted inputs and expected behaviour, from simulator/scenarios/*.toml");
+    if !ui.scenarios.contains(&ui.scenario_choice) {
+        ui.scenario_choice = ui.scenarios[0].clone();
+    }
+    egui::ComboBox::from_id_salt("scenario")
+        .selected_text(&ui.scenario_choice)
+        .show_ui(row, |list| {
+            for name in &ui.scenarios {
+                list.selectable_value(&mut ui.scenario_choice, name.clone(), name);
+            }
+        });
+    if row
+        .button("Run scenario")
+        .on_hover_text("Restart code.py and play the scenario against it")
+        .clicked()
+    {
+        run_scenario(host, cfg, paths, &ui.scenario_choice);
+    }
+    let Some(status) = hw().scenario.clone() else {
+        return;
+    };
+    let passed = status.results.iter().filter(|(_, s)| s == "pass").count();
+    let total = status.results.len();
+    let (text, colour) = match status.state.as_str() {
+        "pass" => (
+            format!("{} PASS {passed}/{total}", status.name),
+            Color32::from_rgb(70, 170, 90),
+        ),
+        "running" => (
+            format!("{} running {passed}/{total}", status.name),
+            Color32::from_rgb(230, 170, 40),
+        ),
+        "error" => (
+            format!("{} ERROR", status.name),
+            Color32::from_rgb(220, 60, 60),
+        ),
+        _ => (
+            format!("{} FAIL {passed}/{total}", status.name),
+            Color32::from_rgb(220, 60, 60),
+        ),
+    };
+    let details = status
+        .results
+        .iter()
+        .map(|(label, state)| format!("{:7} {label}", state.to_uppercase()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    row.label(egui::RichText::new(text).color(colour).strong())
+        .on_hover_text(egui::RichText::new(details).monospace());
 }
 
 /// Whether a log line passes the Firmware / [sim] toggles and the search box

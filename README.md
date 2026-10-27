@@ -112,6 +112,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 - **Motion**: *Nudge* (or click the head) gives one accelerometer reading of 1.3 g, which is a boop. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one 3 g reading, which goes straight to angry. A nudge is too gentle to interrupt the attention animation or trench run; use *Hard shake*. *Tipped over* holds z at -1 g, which counts as one nudge.
 - **Speed**: fast-forward up to 200x. *Trigger idle now* ends the 15-120 min idle wait so the attention animation or the trench run plays (50/50).
 - **Behaviours** (toolbar): one button per behaviour, to run it straight away without reproducing its trigger. A button runs the firmware's own function once, with breathing paused (`pause_breathing`) until it finishes. The other buttons are greyed out until then. The row is built from the firmware each run, so a new behaviour gets a button with no simulator change. To get one, it must be an `async def` in a `behaviours/` module that can be called with no arguments. Functions `code.py` already runs with `asyncio.create_task(...)` (breathing, motion sensing, idle attention, the LED scheduler) and names starting with `_` are left out. A trench run started this way doesn't hold off the white-LED scheduler the way one started from idle does.
+- **Scenarios** (toolbar): pick one of `simulator/scenarios/*.toml` and click *Run scenario*. It restarts `code.py`, plays the scenario's inputs at set times and checks what the droid does. The badge shows *running*, then *PASS* or *FAIL* with a count; hover it for each check. Each result is also logged as a `[sim] scenario ...` line. See [Scenarios](#scenarios).
 - **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log.
 - **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.
 - **CircuitPython strict** (on by default) holds `code.py` and its modules to what the board has. Imports outside CircuitPython 9 and `lib/` fail, as do APIs CircuitPython lacks (`random.choices`, `os.path`, `asyncio.TaskGroup`...). `time.monotonic()` gets the board's reduced float precision, so long-uptime timer drift shows when you fast-forward. Untick it to run with full desktop Python; the change applies on the next restart.
@@ -147,6 +148,36 @@ The bench runs inside the robot with no PC attached. It saves its results in the
 
 If the Feather is plugged into USB and nothing is saved, the bench measures and prints straight away. That only works if the FeatherWing is attached.
 
+### Scenarios
+
+A scenario is a timeline of inputs plus what the droid should do, so the test checklist (boot, breathing, nudge → boop, 3 nudges / hard shake → angry, idle → attention) runs without clicking. The shipped ones cover that checklist: `boot`, `breathing`, `boop`, `angry-nudges`, `angry-shake` and `idle`. Run them from the toolbar or with `headless.py` (see [Tests and CI](#tests-and-ci)). To add one, drop a `.toml` file into `simulator/scenarios/`; the toolbar picks it up within a second.
+
+```toml
+description = "Three nudges in one window end in angry.wav"
+start = "Boot sequence complete!"   # optional: times count from this log line
+
+[[step]]
+t = 5.0             # virtual seconds (from start, or from code.py starting)
+action = "nudge"    # nudge | shake | tilt | idle | wait
+
+[[expect]]
+sound = "angry.wav" # must play between after and by
+after = 15.0        # optional, default 0
+by = 20.0
+```
+
+- **Steps**: `nudge` (one 1.3 g reading) and `shake` (one 3 g reading) match the Motion buttons. `idle` is *Trigger idle now*. `tilt` holds the accelerometer at `g = [x, y, z]` (default `[0, 0, -1]`, tipped over). `wait` does nothing, but the scenario runs until it.
+- **Expectations**, one kind each:
+  - `sound`: a WAV file name, glob (`"angry*.wav"`) or list of them.
+  - `wing = "right"` or `"left"` with `above` and/or `below`: the servo angle in degrees (from the pulse width, via `sim.toml` `[servo]`).
+  - `led = "main_r"`, `"main_g"`, `"main_b"`, `"small_r"` .. `"small_b"` or `"white"` with `above` and/or `below`: brightness from 0 to 1 (eyes at their 6550 µs peak count as 1).
+  - `log`: text that appears in a line `code.py` prints.
+  - `never = true` turns any of them around: it fails if it does happen in the window.
+  - `name` replaces the description shown for it.
+- A traceback always fails the scenario. It finishes once every step has run and every expectation has a result; `code.py` stopping before then is a fail. A mistake in the file (an unknown key, a missing `by`) shows as *ERROR* with the reason in the log.
+- Prefer `start = "Boot sequence complete!"` for anything after boot: Python's imports take a few virtual seconds at high speed, so times counted from the very start vary between machines.
+- A gentle nudge is ignored while the wings are animating, so space nudges past the boop before them (see `angry-nudges.toml`).
+
 ### Custom shims
 
 The hardware stand-ins ("shims") are compiled into the exe, so it runs on its own. To add one, or change a built-in one, without rebuilding, put a `.py` file in `simulator\dist\shims\` (create the folder). A file there replaces the built-in shim of the same name or adds a new one, and is read at the start of every run; the log names each shim taken from it. Rebuilding keeps the folder.
@@ -155,7 +186,7 @@ The hardware stand-ins ("shims") are compiled into the exe, so it runs on its ow
 
 ### Tests and CI
 
-`python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a hard shake, a nudge, an idle trigger, repeated nudges and a *boot_sequence* behaviour button. It fails on any traceback, if the boop, attention or angry behaviour doesn't happen, if the behaviour buttons are wrong or don't run, or if the wings and motion sensing stall during a white-LED flicker. It needs Python 3.11+ (CI uses 3.13).
+`python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a hard shake, a nudge, an idle trigger, repeated nudges and a *boot_sequence* behaviour button. It fails on any traceback, if the boop, attention or angry behaviour doesn't happen, if the behaviour buttons are wrong or don't run, or if the wings and motion sensing stall during a white-LED flicker. Then it plays every scenario in `simulator/scenarios/` against a fresh run each and fails if any of them doesn't pass. `--scenario NAME` (repeatable) runs only those scenarios. It needs Python 3.11+ (CI uses 3.13); without Python on the host, run it in the dev image: `docker run --rm -v "${PWD}:/workspace" -w /workspace ddl0-sim-dev python3 simulator/tests/headless.py`.
 
 GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download.
 

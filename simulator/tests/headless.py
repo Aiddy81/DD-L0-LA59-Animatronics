@@ -2,9 +2,11 @@
 
 Uses the simulator's real shims and runtime (CircuitPython strict mode, board
 speed on) with a pure-Python simhw, scripts a few interactions, and fails on
-any traceback or missing behaviour. Used by CI; also handy locally:
+any traceback or missing behaviour. Then plays every simulator/scenarios/*.toml
+against a fresh run each. Used by CI; also handy locally:
 
     python simulator/tests/headless.py [--code PATH] [--seconds 150] [--speed 40]
+    python simulator/tests/headless.py --scenario angry-nudges   # just that one
 """
 import argparse
 import os
@@ -20,6 +22,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SIM = os.path.dirname(HERE)
 REPO = os.path.dirname(SIM)
 SHIMS = os.path.join(SIM, "shims")
+SCENARIOS = os.path.join(SIM, "scenarios")
+# Safety cap on a scenario run, in virtual seconds; a run normally stops as
+# soon as its scenario has a verdict.
+SCENARIO_CAP_S = 600.0
 
 # Sounds the README lists; real files are git-ignored, so CI gets silent ones.
 DEFAULT_SOUNDS = ["angry.wav", "noseBoops.wav", "youWho.wav", "trenchRun.wav",
@@ -92,11 +98,63 @@ def any_during(times, spans):
     return any(a < t < b for t in times for a, b in spans)
 
 
+def scenario_hw(sim_cfg):
+    """The servo and channel map _Scenario.start takes, from sim.toml (with
+    config.rs's defaults), so wing angles match what the app shows."""
+    servo = sim_cfg.get("servo", {})
+    eyes = sim_cfg.get("eyes", {})
+    main_eye = eyes.get("main", [2, 3, 4])
+    small_eye = eyes.get("small", [5, 6, 7])
+    channels = {"right_wing": sim_cfg.get("wing_right", {}).get("channel", 0),
+                "left_wing": sim_cfg.get("wing_left", {}).get("channel", 1),
+                "white": "white"}
+    for prefix, chans in (("main", main_eye), ("small", small_eye)):
+        for colour, ch in zip("rgb", chans):
+            channels["{}_{}".format(prefix, colour)] = ch
+    return {"servo": (servo.get("min_pulse_us", 544.0), servo.get("max_pulse_us", 2400.0),
+                      servo.get("range_deg", 180.0)),
+            "channels": channels}
+
+
+def run_scenarios(code_path, names, sim_cfg, simhw, sim_runtime):
+    """Plays each simulator/scenarios/<name>.toml against a fresh run of
+    code.py. Returns the names that did not pass."""
+    failed = []
+    for name in names:
+        with open(os.path.join(SCENARIOS, name + ".toml"), encoding="utf-8") as f:
+            scenario = {"name": name, "text": f.read(), **scenario_hw(sim_cfg)}
+        print("\n== Scenario {}".format(name))
+        simhw.scenario[0] = None
+        simhw.accel_pulses.clear()
+        simhw.held_accel[0] = (0.0, 0.0, 1.0)
+        simhw.idle_now[0] = False
+        simhw.scheduled_accel.clear()
+        simhw.idle_trigger_at.clear()
+        simhw.behaviour_request_at.clear()
+        simhw.DURATION = SCENARIO_CAP_S
+        random.seed(1)
+        workdir = tempfile.mkdtemp(prefix="ddl0-scenario-")
+        try:
+            stage_firmware(code_path, workdir)
+            simhw.reset()
+            sim_runtime.run(os.path.join(workdir, "code.py"),
+                            sim_runtime.load_shim_dir(SHIMS), scenario=scenario)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        report = simhw.scenario[0]
+        if report is None or report[1] != "pass":
+            failed.append(name)
+    return failed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--code", default=os.path.join(REPO, "PropMaker_Feather", "code.py"))
     parser.add_argument("--seconds", type=float, default=150.0, help="virtual seconds to run")
     parser.add_argument("--speed", type=float, default=40.0, help="virtual seconds per real second")
+    parser.add_argument("--scenario", action="append", metavar="NAME",
+                        help="run only this simulator/scenarios/NAME.toml (repeatable), "
+                             "skipping the scripted checks")
     args = parser.parse_args()
 
     sys.path[:0] = [HERE, SHIMS]
@@ -104,7 +162,8 @@ def main():
     import sim_runtime
 
     with open(os.path.join(SIM, "sim.toml"), "rb") as f:
-        board = tomllib.load(f).get("board", {})
+        sim_cfg = tomllib.load(f)
+    board = sim_cfg.get("board", {})
     simhw.SPEED = args.speed
     simhw.DURATION = args.seconds
     simhw.BOARD = {
@@ -113,6 +172,12 @@ def main():
     }
     simhw.HEAP_SCALE = board.get("heap_scale", 0.45)
     simhw.HEAP_BUDGET = board.get("heap_budget_kb", 130) * 1024.0
+    code_path = os.path.abspath(args.code)
+    if args.scenario:
+        failed = run_scenarios(code_path, args.scenario, sim_cfg, simhw, sim_runtime)
+        print("\nScenarios failed: {}".format(", ".join(failed)) if failed
+              else "\nAll scenarios passed")
+        return 1 if failed else 0
 
     # Scenario: a hard shake after boot (the UI's 3 g "Hard shake"), which
     # should go straight to angry and restart the angry window; then a boop,
@@ -132,7 +197,7 @@ def main():
     random.seed(1)
     workdir = tempfile.mkdtemp(prefix="ddl0-headless-")
     try:
-        stage_firmware(os.path.abspath(args.code), workdir)
+        stage_firmware(code_path, workdir)
         simhw.reset()
         sim_runtime.run(os.path.join(workdir, "code.py"), sim_runtime.load_shim_dir(SHIMS))
     finally:
@@ -185,7 +250,13 @@ def main():
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print("{} {}".format("PASS" if ok else "FAIL", name))
-    return 1 if failed else 0
+
+    names = sorted(f[:-5] for f in os.listdir(SCENARIOS) if f.endswith(".toml"))
+    failed_scenarios = run_scenarios(code_path, names, sim_cfg, simhw, sim_runtime)
+    print()
+    for name in names:
+        print("{} scenario {}".format("FAIL" if name in failed_scenarios else "PASS", name))
+    return 1 if failed or failed_scenarios else 0
 
 
 if __name__ == "__main__":
