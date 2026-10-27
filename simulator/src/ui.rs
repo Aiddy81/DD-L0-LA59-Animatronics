@@ -1,6 +1,6 @@
 //! Control panels: run controls, motion input, channel readouts, plot, log.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -12,6 +12,7 @@ use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine
 
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
+use crate::editor;
 use crate::hw::{hw, LogKind, LogLine, MarkerKind};
 use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
@@ -183,7 +184,61 @@ pub struct UiState {
     /// Names (file stems) of simulator/scenarios/*.toml, re-listed with hot_reload.
     scenarios: Vec<String>,
     scenario_choice: String,
+    /// Log text -> traceback location; canonicalize hits the disk, so not per frame.
+    traceback_cache: HashMap<String, Option<(PathBuf, u32)>>,
+    log_tab: LogTab,
+    drive_file: DriveFile,
 }
+
+/// What the bottom panel shows: the console log, or a file on the simulated drive.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LogTab {
+    Console,
+    File(&'static str),
+}
+
+/// What PropMaker_Feather/log.py writes, and what it rolls over to.
+const LOG_FILES: [&str; 2] = ["log.txt", "log.old.txt"];
+/// log.py's MAX_BYTES: log.txt rolls over past this.
+const LOG_MAX_BYTES: u64 = 256 * 1024;
+
+/// A file on the simulated drive (dist/fs), re-read only when it changes.
+#[derive(Default)]
+struct DriveFile {
+    name: &'static str,
+    /// Modification time and size when last read; None if the file is absent.
+    stamp: Option<(SystemTime, u64)>,
+    lines: Vec<String>,
+    checked: Option<Instant>,
+}
+
+impl DriveFile {
+    fn refresh(&mut self, dir: &Path, name: &'static str) {
+        let switched = self.name != name;
+        if !switched && self.checked.is_some_and(|t| t.elapsed() < DRIVE_POLL) {
+            return;
+        }
+        self.checked = Some(Instant::now());
+        let path = dir.join(name);
+        let stamp = std::fs::metadata(&path)
+            .and_then(|m| Ok((m.modified()?, m.len())))
+            .ok();
+        if !switched && stamp == self.stamp {
+            return;
+        }
+        self.name = name;
+        self.stamp = stamp;
+        self.lines = match (stamp, std::fs::read(&path)) {
+            (Some(_), Ok(bytes)) => String::from_utf8_lossy(&bytes)
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        };
+    }
+}
+
+const DRIVE_POLL: Duration = Duration::from_millis(500);
 
 struct Sample {
     t: f32,
@@ -236,6 +291,9 @@ impl UiState {
             log_height: prefs.log_height,
             scenarios: Vec::new(),
             scenario_choice: String::new(),
+            traceback_cache: HashMap::new(),
+            log_tab: LogTab::Console,
+            drive_file: DriveFile::default(),
         }
     }
 }
@@ -703,6 +761,7 @@ fn panels(
             {
                 hw().servo_speed = servo_speed;
             }
+            log_mode_checkbox(row, &captures.paths.fs);
             row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved")
                 .on_hover_text("Also when a shim in dist\\shims\\ is added, saved or deleted.");
             if let Some(mut model) = model {
@@ -970,8 +1029,20 @@ fn panels(
         .resizable(true)
         .default_height(ui.log_height)
         .show(ctx, |bottom| {
+            let fs_dir = &captures.paths.fs;
             bottom.horizontal(|row| {
-                row.label("Log");
+                for (tab, label) in [
+                    (LogTab::Console, "Log"),
+                    (LogTab::File(LOG_FILES[0]), LOG_FILES[0]),
+                    (LogTab::File(LOG_FILES[1]), LOG_FILES[1]),
+                ] {
+                    row.selectable_value(&mut ui.log_tab, tab, label);
+                }
+                row.separator();
+                if let LogTab::File(name) = ui.log_tab {
+                    drive_file_header(row, &ui.drive_file, fs_dir, name);
+                    return;
+                }
                 row.add(
                     egui::TextEdit::singleline(&mut ui.log_filter)
                         .hint_text("search")
@@ -1017,19 +1088,54 @@ fn panels(
                     hw().push_line(note);
                 }
             });
+            if let LogTab::File(name) = ui.log_tab {
+                ui.drive_file.refresh(fs_dir, name);
+                drive_file_body(bottom, &ui.drive_file);
+                return;
+            }
             let filter = ui.log_filter.to_lowercase();
             let (show_firmware, show_sim) = (ui.show_firmware, ui.show_sim);
-            egui::ScrollArea::vertical()
+            let cache = &mut ui.traceback_cache;
+            if cache.len() > 512 {
+                cache.clear();
+            }
+            let log_scroll = egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
                 .auto_shrink([false, false])
                 .show(bottom, |area| {
+                    let mut clicked = None;
                     let s = hw();
                     for line in s
                         .log
                         .iter()
                         .filter(|l| line_visible(l, show_firmware, show_sim, &filter))
                     {
-                        if line.kind == LogKind::Error {
+                        let location = if line.text.contains("File \"") {
+                            if !cache.contains_key(&line.text) {
+                                let found = editor::traceback_location(&line.text, fw_dir);
+                                cache.insert(line.text.clone(), found);
+                            }
+                            cache.get(&line.text).cloned().flatten()
+                        } else {
+                            None
+                        };
+                        if let Some((path, number)) = location {
+                            let name = path.file_name().unwrap_or_default().to_string_lossy();
+                            let link = area
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&line.text)
+                                            .monospace()
+                                            .color(Color32::from_rgb(110, 170, 255)),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(format!("Open {name} at line {number}"));
+                            if link.clicked() {
+                                clicked = Some((path, number));
+                            }
+                        } else if line.kind == LogKind::Error {
                             area.label(
                                 egui::RichText::new(&line.text)
                                     .monospace()
@@ -1039,7 +1145,14 @@ fn panels(
                             area.monospace(&line.text);
                         }
                     }
+                    clicked
                 });
+            // After the log lock is dropped: push_line takes it too.
+            if let Some((path, number)) = log_scroll.inner {
+                if let Err(e) = editor::open_in_editor(&cfg.editor.command, &path, number) {
+                    hw().push_line(format!("[sim] {e}"));
+                }
+            }
         });
     ui.log_height = log_panel.response.rect.height();
 }
@@ -1115,6 +1228,97 @@ fn line_visible(line: &LogLine, show_firmware: bool, show_sim: bool, filter: &st
     };
     let shown = if from_sim { show_sim } else { show_firmware };
     shown && (filter.is_empty() || line.text.to_lowercase().contains(filter))
+}
+
+/// Toolbar toggle for the log_mode file on the simulated drive, which makes
+/// boot.py remount it writable and log.py write log.txt.
+fn log_mode_checkbox(row: &mut egui::Ui, fs_dir: &Path) {
+    let flag = fs_dir.join("log_mode");
+    let mut on = flag.is_file();
+    if !row
+        .checkbox(&mut on, "log_mode")
+        .on_hover_text("Puts log_mode on the simulated drive (dist\\fs\\), so log.py also writes log.txt. Applies on restart, like a reset on the board.")
+        .changed()
+    {
+        return;
+    }
+    let result = if on {
+        std::fs::create_dir_all(fs_dir).and_then(|()| std::fs::write(&flag, b""))
+    } else {
+        std::fs::remove_file(&flag)
+    };
+    let note = match result {
+        Ok(()) => format!(
+            "[sim] log_mode {}; restart to apply",
+            if on { "added" } else { "removed" }
+        ),
+        Err(e) => format!("[sim] could not change log_mode: {e}"),
+    };
+    hw().push_line(note);
+}
+
+/// Size, Copy and Delete for a log file tab.
+fn drive_file_header(row: &mut egui::Ui, file: &DriveFile, fs_dir: &Path, name: &str) {
+    match file.stamp {
+        Some((_, size)) => {
+            row.label(format!(
+                "{:.1} / {} KB",
+                size as f64 / 1024.0,
+                LOG_MAX_BYTES / 1024
+            ))
+            .on_hover_text("log.py rolls log.txt over to log.old.txt past this size");
+        }
+        None => {
+            row.label("not written yet");
+        }
+    }
+    if row
+        .button("Copy")
+        .on_hover_text(format!("Copy {name} to the clipboard"))
+        .clicked()
+    {
+        row.ctx().copy_text(file.lines.join("\n"));
+    }
+    if row
+        .button("Delete")
+        .on_hover_text("Delete log.txt and log.old.txt from the simulated drive")
+        .clicked()
+    {
+        let failed: Vec<String> = LOG_FILES
+            .iter()
+            .filter_map(|n| match std::fs::remove_file(fs_dir.join(n)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Some(format!("{n}: {e}")),
+                _ => None,
+            })
+            .collect();
+        hw().push_line(if failed.is_empty() {
+            "[sim] log files deleted".to_owned()
+        } else {
+            format!("[sim] could not delete {}", failed.join(", "))
+        });
+    }
+    row.weak(fs_dir.join(name).display().to_string());
+}
+
+/// The file's lines; only the visible rows are laid out, since log.txt can
+/// reach 256 KB.
+fn drive_file_body(bottom: &mut egui::Ui, file: &DriveFile) {
+    if file.stamp.is_none() {
+        bottom.label(format!(
+            "No {} yet. Tick log_mode in the toolbar and restart; log.py writes it once boot.py has made the drive writable.",
+            file.name
+        ));
+        return;
+    }
+    let row_height = bottom.text_style_height(&egui::TextStyle::Monospace);
+    egui::ScrollArea::vertical()
+        .stick_to_bottom(true)
+        .auto_shrink([false, false])
+        .show_rows(bottom, row_height, file.lines.len(), |area, rows| {
+            for line in &file.lines[rows] {
+                area.monospace(line);
+            }
+        });
 }
 
 /// Writes the log to `dir/sim-log-<unix seconds>.txt`, creating `dir` if needed.

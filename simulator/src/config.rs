@@ -14,6 +14,23 @@ pub struct SimConfig {
     pub eyes: EyesCfg,
     pub board: BoardCfg,
     pub model: ModelCfg,
+    pub editor: EditorCfg,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct EditorCfg {
+    /// Run when a traceback line in the log is clicked; `{file}` and `{line}`
+    /// are filled in. Empty = reveal the file in the file manager.
+    pub command: String,
+}
+
+impl Default for EditorCfg {
+    fn default() -> Self {
+        Self {
+            command: "code -g {file}:{line}".into(),
+        }
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -129,6 +146,7 @@ impl Default for SimConfig {
             eyes: EyesCfg::default(),
             board: BoardCfg::default(),
             model: ModelCfg::default(),
+            editor: EditorCfg::default(),
         }
     }
 }

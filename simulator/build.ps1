@@ -10,8 +10,8 @@
       simulator\dist\python3*.dll ...  official embeddable Python (from the image)
       simulator\dist\lib*.dll          MinGW runtime
 
-    Rebuilding keeps simulator\dist\shims\ (drop-in shims), captures\ and
-    ddl0-sim.prefs.toml.
+    Rebuilding keeps simulator\dist\shims\ (drop-in shims), fs\ (the
+    simulated CIRCUITPY drive), captures\ and ddl0-sim.prefs.toml.
 
     After staging, tests\headless.py runs code.py against every scenario in
     simulator\scenarios\. If any check fails the script fails and names it,
