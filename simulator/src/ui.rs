@@ -2,16 +2,18 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Pos2, Stroke};
 use bevy_egui::EguiContexts;
 
+use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::hw::{hw, LogKind, LogLine};
 use crate::pyhost::PyHost;
-use crate::scene::{glow_rgb, GlowSource, ModelChoice};
+use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice};
 
 /// A gentle bump: one accelerometer read above code.py's 1.1 g threshold.
 const NUDGE_G: f32 = 1.3;
@@ -197,13 +199,21 @@ fn stop_on_exit(mut exits: EventReader<AppExit>, mut host: ResMut<Host>) {
     }
 }
 
+/// Where saved files go, plus the camera/screenshot requests; bundled to keep
+/// `panels` within clippy's argument limit.
+#[derive(SystemParam)]
+struct Captures<'w> {
+    paths: Res<'w, crate::Paths>,
+    controls: ResMut<'w, ViewControls>,
+}
+
 fn panels(
     mut contexts: EguiContexts,
     mut ui: ResMut<UiState>,
     mut host: ResMut<Host>,
     model: Option<ResMut<ModelChoice>>,
     cfg: Res<SimConfig>,
-    paths: Res<crate::Paths>,
+    mut captures: Captures,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else {
         return;
@@ -277,6 +287,49 @@ fn panels(
                 }
             }
             row.label(format!("sim time {:.1} s", hw().clock.now()));
+        });
+        bar.horizontal(|row| {
+            let controls = &mut captures.controls;
+            row.label("View");
+            for (label, view) in [
+                ("Front", CameraView::Front),
+                ("Side", CameraView::Side),
+                ("Top", CameraView::Top),
+            ] {
+                if row.button(label).clicked() {
+                    controls.camera = Some(view);
+                }
+            }
+            if row
+                .button("Eyes")
+                .on_hover_text("Close-up of the eyes")
+                .clicked()
+            {
+                controls.camera = Some(CameraView::Eyes);
+            }
+            if row.button("Reset").clicked() {
+                controls.camera = Some(CameraView::Reset);
+            }
+            row.separator();
+            if row
+                .button("Screenshot")
+                .on_hover_text("Save a PNG of the window to the captures folder next to the exe")
+                .clicked()
+            {
+                controls.screenshot = true;
+            }
+            let record_label = if controls.is_recording() {
+                "Stop recording"
+            } else {
+                "Record"
+            };
+            if row
+                .button(record_label)
+                .on_hover_text("Save a PNG every 0.1 s, up to 30 s, for making a GIF")
+                .clicked()
+            {
+                controls.toggle_record = true;
+            }
         });
     });
 
@@ -424,7 +477,7 @@ fn panels(
                         .map(|l| l.text.as_str())
                         .collect::<Vec<_>>()
                         .join("\n");
-                    let note = match save_log(&paths.captures, &text) {
+                    let note = match save_log(&captures.paths.captures, &text) {
                         Ok(path) => format!("[sim] log saved to {}", path.display()),
                         Err(e) => format!("[sim] could not save the log: {e}"),
                     };
@@ -473,11 +526,7 @@ fn line_visible(line: &LogLine, show_firmware: bool, show_sim: bool, filter: &st
 /// Writes the log to `dir/sim-log-<unix seconds>.txt`, creating `dir` if needed.
 fn save_log(dir: &Path, text: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let path = dir.join(format!("sim-log-{secs}.txt"));
+    let path = dir.join(format!("sim-log-{}.txt", unix_secs()));
     std::fs::write(&path, text)?;
     Ok(path)
 }

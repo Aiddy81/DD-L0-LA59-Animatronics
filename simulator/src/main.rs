@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod capture;
 mod config;
 mod droid;
 mod hw;
@@ -123,6 +124,11 @@ fn main() {
         .insert_resource(paths)
         .insert_resource(ui::Host(host))
         .insert_resource(ui::UiState::new(code_mtime))
-        .add_plugins((scene::ScenePlugin, audio::AudioPlugin, ui::UiPlugin))
+        .add_plugins((
+            scene::ScenePlugin,
+            audio::AudioPlugin,
+            capture::CapturePlugin,
+            ui::UiPlugin,
+        ))
         .run();
 }
