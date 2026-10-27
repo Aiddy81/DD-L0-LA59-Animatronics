@@ -1,3 +1,24 @@
+# Simulator 3-axis accelerometer input (#43)
+
+Branch: `feature/simulator-3-axis-accel` (off `Documentation`).
+
+- [x] `hw.rs`: `nudge_dir`, kept across restarts with `accel_g`
+- [x] `ui.rs`: nudge/shake are held + direction x delta (0.3 / 2.0 g); Direction picker, x/y/z held sliders, Rest button
+- [x] `scene.rs` / `pyhost.rs`: head click and scenario steps pass a direction
+- [x] `sim_runtime.py`: `axis` key for nudge/shake steps; log line names a non-default axis
+- [x] `tests/simhw.py`: relative nudge/shake with a direction
+- [x] `scenarios/sideways-nudge.toml`: x/y nudges are ignored, z nudge boops, no angry
+- [x] README updated
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] `headless.py` passes: all 18 checks and 7 scenarios, including `sideways-nudge`
+- [ ] Interactive: Direction picker, held sliders and Rest in the app — user
+
+## Review
+- The issue assumed the firmware senses nudges from any direction; since PR #35 it reads only z. Firmware left alone: the simulator now shows ±X/±Y nudges being ignored, as on the robot.
+- Nudge and shake are relative to the held reading, so they work from a sideways or tipped pose. From rest on +Z they give 1.3 g and 3 g as before, so existing scenarios and tests are unchanged.
+- A −Z shake from rest reads −1 g and only counts as a nudge, because hard motion is `abs(z) > 2.5`. Documented, not changed.
+- In `sideways-nudge` the tilt itself is a z change, so it boops once before the sideways nudges.
+
 # Simulator scripted scenarios (#40)
 
 Branch: `feature/simulator-scenarios` (off `Documentation`).

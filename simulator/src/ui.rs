@@ -16,10 +16,20 @@ use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice};
 
-/// A gentle bump: one accelerometer read above code.py's 1.1 g threshold.
-const NUDGE_G: f32 = 1.3;
-/// A hard knock. Note code.py sets RANGE_2_G, so the sensor clips this to ~2 g.
-const SHAKE_G: f32 = 3.0;
+/// A gentle bump, added to the held reading along the chosen direction. From
+/// rest it clears the firmware's NUDGE_Z_MG (250 mg) threshold.
+const NUDGE_DELTA_G: f32 = 0.3;
+/// A hard knock. From rest on +Z it reads 3 g, above HARD_MOTION_MG (2500 mg).
+const SHAKE_DELTA_G: f32 = 2.0;
+/// Choices for the Motion panel's direction picker.
+const DIRECTIONS: [(&str, [f32; 3]); 6] = [
+    ("+X", [1.0, 0.0, 0.0]),
+    ("\u{2212}X", [-1.0, 0.0, 0.0]),
+    ("+Y", [0.0, 1.0, 0.0]),
+    ("\u{2212}Y", [0.0, -1.0, 0.0]),
+    ("+Z", [0.0, 0.0, 1.0]),
+    ("\u{2212}Z", [0.0, 0.0, -1.0]),
+];
 const PLOT_SECONDS: f32 = 20.0;
 
 /// Folders next to code.py that hold no firmware source.
@@ -72,12 +82,20 @@ pub fn shims_mtime(dir: &Path) -> Option<SystemTime> {
     Some(latest)
 }
 
-pub fn nudge() {
-    hw().accel_pulses.push_back([0.0, 0.0, NUDGE_G]);
+/// Queues one reading `delta` g past the held value along `dir`.
+fn bump(dir: [f32; 3], delta: f32) {
+    let mut s = hw();
+    let held = s.accel_g;
+    s.accel_pulses
+        .push_back(std::array::from_fn(|i| held[i] + dir[i] * delta));
 }
 
-pub fn shake() {
-    hw().accel_pulses.push_back([0.0, 0.0, SHAKE_G]);
+pub fn nudge(dir: [f32; 3]) {
+    bump(dir, NUDGE_DELTA_G);
+}
+
+pub fn shake(dir: [f32; 3]) {
+    bump(dir, SHAKE_DELTA_G);
 }
 
 fn toggle_pause() {
@@ -432,10 +450,12 @@ fn panels(
             toggle_pause();
         }
         if n {
-            nudge();
+            let dir = hw().nudge_dir;
+            nudge(dir);
         }
         if s {
-            shake();
+            let dir = hw().nudge_dir;
+            shake(dir);
         }
         if r {
             host.0.start();
@@ -603,30 +623,59 @@ fn panels(
                 .default_open(ui.open_motion)
                 .show(side, |side| {
                     side.horizontal_wrapped(|row| {
+                        let dir = hw().nudge_dir;
                         if row
                             .button("Nudge")
-                            .on_hover_text("One reading at 1.3 g (or click the head) (N)")
+                            .on_hover_text("One reading 0.3 g past the held value, in the chosen direction (or click the head) (N)")
                             .clicked()
                         {
-                            nudge();
+                            nudge(dir);
                         }
                         if row
                             .button("Hard shake")
-                            .on_hover_text("One reading at 3 g. RANGE_2_G clips it to ~2 g! (S)")
+                            .on_hover_text("One reading 2 g past the held value, in the chosen direction (S)")
                             .clicked()
                         {
-                            shake();
+                            shake(dir);
                         }
                         if row.checkbox(&mut ui.tipped, "Tipped over").changed() {
-                            hw().accel_g[2] = if ui.tipped { -1.0 } else { 1.0 };
+                            hw().accel_g = [0.0, 0.0, if ui.tipped { -1.0 } else { 1.0 }];
+                        }
+                        if row.button("Rest").clicked() {
+                            hw().accel_g = [0.0, 0.0, 1.0];
+                            ui.tipped = false;
                         }
                     });
-                    let mut z = hw().accel_g[2];
-                    if side
-                        .add(egui::Slider::new(&mut z, -3.0..=3.0).text("held z (g)"))
-                        .changed()
+                    let current = hw().nudge_dir;
+                    let selected = DIRECTIONS
+                        .iter()
+                        .find(|(_, d)| *d == current)
+                        .map_or("", |(name, _)| *name);
+                    egui::ComboBox::from_label("Direction")
+                        .selected_text(selected)
+                        .show_ui(side, |menu| {
+                            for (name, d) in DIRECTIONS {
+                                if menu.selectable_label(current == d, name).clicked() {
+                                    hw().nudge_dir = d;
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "The firmware reads only z, so \u{b1}X/\u{b1}Y nudges are ignored, as on the robot",
+                        );
+                    let mut held = hw().accel_g;
+                    let mut changed = false;
+                    for (value, label) in held
+                        .iter_mut()
+                        .zip(["held x (g)", "held y (g)", "held z (g)"])
                     {
-                        hw().accel_g[2] = z;
+                        changed |= side
+                            .add(egui::Slider::new(value, -3.0..=3.0).text(label))
+                            .changed();
+                    }
+                    if changed {
+                        hw().accel_g = held;
                     }
                 });
             ui.open_motion = motion.openness > 0.5;

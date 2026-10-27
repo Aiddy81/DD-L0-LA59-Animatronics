@@ -52,6 +52,9 @@ pub struct HwState {
     pub external_power: bool,
     /// Held acceleration in g (x, y, z). 1 g on z = sitting still.
     pub accel_g: [f32; 3],
+    /// Unit direction that Nudge, Hard shake and a head click push in, added to
+    /// `accel_g`.
+    pub nudge_dir: [f32; 3],
     /// One-shot readings returned before falling back to `accel_g`.
     pub accel_pulses: VecDeque<[f32; 3]>,
     pub log: VecDeque<LogLine>,
@@ -95,6 +98,7 @@ impl HwState {
             onboard_led: false,
             external_power: false,
             accel_g: [0.0, 0.0, 1.0],
+            nudge_dir: [0.0, 0.0, 1.0],
             accel_pulses: VecDeque::new(),
             log: VecDeque::new(),
             partial_line: String::new(),
@@ -119,9 +123,10 @@ impl HwState {
     }
 
     /// Clears everything a fresh run of `code.py` should not inherit. The held
-    /// accelerometer value and clock speed are user settings, so they survive.
+    /// accelerometer value, its nudge direction and clock speed are user settings, so they survive.
     pub fn reset_for_run(&mut self) {
         let accel = self.accel_g;
+        let nudge_dir = self.nudge_dir;
         let speed = self.clock.speed;
         let strict = self.strict;
         let board_speed = self.board_speed;
@@ -129,6 +134,7 @@ impl HwState {
         let log = std::mem::take(&mut self.log);
         *self = Self::new();
         self.accel_g = accel;
+        self.nudge_dir = nudge_dir;
         self.clock.speed = speed;
         self.strict = strict;
         self.board_speed = board_speed;

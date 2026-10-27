@@ -31,8 +31,8 @@ behaviours = []
 behaviour_request_at = []
 # Scenario inputs: one-shot readings, the held reading, a pending idle
 # trigger; and the last set_scenario() report (name, state, results).
-NUDGE_G = 1.3
-SHAKE_G = 3.0
+NUDGE_DELTA_G = 0.3
+SHAKE_DELTA_G = 2.0
 accel_pulses = []
 held_accel = [(0.0, 0.0, 1.0)]
 idle_now = [False]
@@ -127,12 +127,17 @@ def accel():
     return held_accel[0]
 
 
-def nudge():
-    accel_pulses.append((0.0, 0.0, NUDGE_G))
+def _bump(x, y, z, delta):
+    held = held_accel[0]
+    accel_pulses.append((held[0] + x * delta, held[1] + y * delta, held[2] + z * delta))
 
 
-def shake():
-    accel_pulses.append((0.0, 0.0, SHAKE_G))
+def nudge(x=0.0, y=0.0, z=1.0):
+    _bump(x, y, z, NUDGE_DELTA_G)
+
+
+def shake(x=0.0, y=0.0, z=1.0):
+    _bump(x, y, z, SHAKE_DELTA_G)
 
 
 def set_accel(x, y, z):
