@@ -135,6 +135,7 @@ If any of these seem necessary to complete a task, **stop and flag it** before p
 - For large tasks, confirm the plan before writing any code.
 - Keep status updates concise: what was done, what's next, any blockers. No padding.
 - If a constraint in this file conflicts with a user instruction, flag the conflict and defer to the user.
+- **Commands for the user to run** — whenever the user needs to run a command, also give it in its own fenced code block tagged with its shell (`powershell` on this Windows host, `bash` only for Git Bash). Put one command in each block, with no prompt (`PS>`, `$`) and no output inside, so it can be copied or run with one click. This applies even when the command is also mentioned in the prose.
 
 ---
 
