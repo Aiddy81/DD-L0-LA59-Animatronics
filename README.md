@@ -114,8 +114,13 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
 - **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log.
 - **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.
 - **CircuitPython strict** (on by default) holds `code.py` and its modules to what the board has. Imports outside CircuitPython 9 and `lib/` fail, as do APIs CircuitPython lacks (`random.choices`, `os.path`, `asyncio.TaskGroup`...). `time.monotonic()` gets the board's reduced float precision, so long-uptime timer drift shows when you fast-forward. Untick it to run with full desktop Python; the change applies on the next restart.
-- **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom.
-- The side panel shows every PCA9685 channel's duty and pulse width, plus a 20 s plot of wing angles and LED levels.
+- **Pause** (toolbar) freezes `code.py`'s clock; *Resume* carries on from the same moment. Restarting also unpauses. Sounds already playing finish.
+- **Keyboard shortcuts**: Space pause/resume, N nudge, S hard shake, R restart, I trigger idle. They're ignored while you type in the log's search box, and each button's tooltip shows its key.
+- **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom. The *View* row jumps to Front, Side, Top, Eyes (a close-up of the eyes) or Reset (the start-up view).
+- **Screenshot** saves a PNG of the window. **Record** saves a PNG every 0.1 s, for up to 30 s, to make into a GIF with any GIF tool. Both go into `simulator\dist\captures\`, next to the exe.
+- The side panel shows every PCA9685 channel's duty and pulse width. The *view* column adds the servo angle the firmware asked for on the wing channels, and a swatch of each eye's colour, with the eye's peak duty (6550 µs) shown as full brightness. A 20 s plot shows wing angles and LED levels. Click a section heading (Motion, PCA9685, Board, plot) to fold it away.
+- **Log**: search box (case-insensitive), *Firmware* and *[sim]* toggles to show either source, tracebacks in red, and *Clear*, *Copy* (the lines shown) and *Save* (the whole log, to `simulator\dist\captures\`).
+- **Remembered between runs**: window size, panel sizes, the Model choice, the toolbar checkboxes, which sections are folded and the log toggles. They're saved in `simulator\dist\ddl0-sim.prefs.toml`; delete it to go back to the defaults. Rebuilding keeps it and the `captures` folder. Once you've run the app, its saved Model choice takes priority over `[model] kind` in `sim.toml`. Speed always starts at 1x.
 
 The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and the LIS3DH clipping at its configured range. So it shows what the robot will really do, including:
 - The eye channels peak at 32.8% duty, because `set_pulse_width_range(0, 6550)` is about a third of the 20 ms period.

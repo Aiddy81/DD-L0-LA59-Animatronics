@@ -20,7 +20,9 @@ fi
 
 cargo build "${flags[@]}"
 
-rm -rf dist && mkdir -p dist
+# Restage from scratch, but keep what the user saved from the app.
+mkdir -p dist
+find dist -mindepth 1 -maxdepth 1 ! -name ddl0-sim.prefs.toml ! -name captures -exec rm -rf {} +
 cp "$TARGET_DIR/$TARGET/$PROFILE/ddl0-sim.exe" dist/
 cp -r /opt/python-embed/. dist/
 for f in /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll \
