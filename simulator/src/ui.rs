@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -12,6 +12,7 @@ use bevy_egui::EguiContexts;
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::hw::{hw, LogKind, LogLine};
+use crate::prefs::Prefs;
 use crate::pyhost::PyHost;
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice};
 
@@ -54,6 +55,16 @@ pub fn nudge() {
     hw().accel_pulses.push_back([0.0, 0.0, NUDGE_G]);
 }
 
+pub fn shake() {
+    hw().accel_pulses.push_back([0.0, 0.0, SHAKE_G]);
+}
+
+fn toggle_pause() {
+    let mut s = hw();
+    let paused = s.clock.is_paused();
+    s.clock.set_paused(!paused);
+}
+
 #[derive(Resource)]
 pub struct Host(pub PyHost);
 
@@ -69,6 +80,12 @@ pub struct UiState {
     log_filter: String,
     show_firmware: bool,
     show_sim: bool,
+    open_motion: bool,
+    open_pca: bool,
+    open_board: bool,
+    open_plot: bool,
+    panel_width: f32,
+    log_height: f32,
 }
 
 type Series = fn(&Sample) -> f32;
@@ -82,18 +99,24 @@ struct Sample {
 }
 
 impl UiState {
-    pub fn new(code_mtime: Option<SystemTime>) -> Self {
+    pub fn new(code_mtime: Option<SystemTime>, prefs: &Prefs) -> Self {
         Self {
             speed: 1.0,
             tipped: false,
-            auto_reload: true,
+            auto_reload: prefs.auto_reload,
             code_mtime,
             last_check: Instant::now(),
             history: VecDeque::new(),
             started: Instant::now(),
             log_filter: String::new(),
-            show_firmware: true,
-            show_sim: true,
+            show_firmware: prefs.show_firmware,
+            show_sim: prefs.show_sim,
+            open_motion: prefs.open_motion,
+            open_pca: prefs.open_pca,
+            open_board: prefs.open_board,
+            open_plot: prefs.open_plot,
+            panel_width: prefs.panel_width,
+            log_height: prefs.log_height,
         }
     }
 }
@@ -103,7 +126,82 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, (record_history, hot_reload, panels).chain())
-            .add_systems(Last, stop_on_exit);
+            .add_systems(Last, (stop_on_exit, save_prefs));
+    }
+}
+
+/// Smallest window size worth remembering; a minimised window reports ~0.
+const MIN_SAVED_WINDOW: f32 = 200.0;
+const SAVE_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct SaveState {
+    last_write: Option<Instant>,
+    /// Whether the last write failed, so the error is logged once, not every second.
+    failed: bool,
+}
+
+/// Writes the preferences when they change (at most once a second, so a drag
+/// on a panel edge isn't a write per frame) and once more on exit. Runs in
+/// `Last` so the AppExit event is still readable.
+fn save_prefs(
+    ui: Res<UiState>,
+    model: Option<Res<ModelChoice>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut saved: ResMut<Prefs>,
+    paths: Res<crate::Paths>,
+    mut state: Local<SaveState>,
+    mut exits: EventReader<AppExit>,
+) {
+    let exiting = exits.read().count() > 0;
+    // The window may already be gone on exit, or minimised to nothing.
+    let (width, height) = windows
+        .single()
+        .map(|w| (w.resolution.width(), w.resolution.height()))
+        .ok()
+        .filter(|&(w, h)| w >= MIN_SAVED_WINDOW && h >= MIN_SAVED_WINDOW)
+        .unwrap_or((saved.window_width, saved.window_height));
+    let (strict, board_speed) = {
+        let s = hw();
+        (s.strict, s.board_speed)
+    };
+    let current = Prefs {
+        window_width: width,
+        window_height: height,
+        panel_width: ui.panel_width,
+        log_height: ui.log_height,
+        model_gltf: model.map(|m| m.use_gltf).or(saved.model_gltf),
+        strict,
+        board_speed,
+        auto_reload: ui.auto_reload,
+        open_motion: ui.open_motion,
+        open_pca: ui.open_pca,
+        open_board: ui.open_board,
+        open_plot: ui.open_plot,
+        show_firmware: ui.show_firmware,
+        show_sim: ui.show_sim,
+    };
+    if current == *saved {
+        return;
+    }
+    let recent = state
+        .last_write
+        .is_some_and(|t| t.elapsed() < SAVE_INTERVAL);
+    if recent && !exiting {
+        return;
+    }
+    state.last_write = Some(Instant::now());
+    match current.save(&paths.prefs) {
+        Ok(()) => {
+            state.failed = false;
+            *saved = current;
+        }
+        Err(e) => {
+            if !state.failed {
+                hw().push_line(format!("[sim] could not save preferences: {e}"));
+            }
+            state.failed = true;
+        }
     }
 }
 
@@ -161,6 +259,11 @@ fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3) -> egui::Response {
 }
 
 fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
+    // A frozen clock means flat lines; recording would just scroll the real
+    // history out of the plot.
+    if hw().clock.is_paused() {
+        return;
+    }
     let t = ui.started.elapsed().as_secs_f32();
     let sample = Sample {
         t,
@@ -219,11 +322,42 @@ fn panels(
         return;
     };
 
+    // Consumed (not just read) so a button that kept focus after a click
+    // doesn't also activate on Space. Skipped while a text field has focus.
+    if !ctx.wants_keyboard_input() {
+        let (space, n, s, r, i) = ctx.input_mut(|inp| {
+            let mut key = |k| inp.consume_key(egui::Modifiers::NONE, k);
+            (
+                key(egui::Key::Space),
+                key(egui::Key::N),
+                key(egui::Key::S),
+                key(egui::Key::R),
+                key(egui::Key::I),
+            )
+        });
+        if space {
+            toggle_pause();
+        }
+        if n {
+            nudge();
+        }
+        if s {
+            shake();
+        }
+        if r {
+            host.0.start();
+        }
+        if i {
+            hw().idle_trigger = true;
+        }
+    }
+
     egui::TopBottomPanel::top("toolbar").show(ctx, |bar| {
         bar.horizontal(|row| {
             let running = host.0.is_running();
             if row
                 .button(if running { "Restart" } else { "Run" })
+                .on_hover_text("Run code.py from the start (R)")
                 .clicked()
             {
                 host.0.start();
@@ -233,6 +367,14 @@ fn panels(
                 .clicked()
             {
                 host.0.stop();
+            }
+            let paused = hw().clock.is_paused();
+            if row
+                .button(if paused { "Resume" } else { "Pause" })
+                .on_hover_text("Freeze code.py's clock (Space)")
+                .clicked()
+            {
+                toggle_pause();
             }
             row.label(if running { "running" } else { "stopped" });
             row.separator();
@@ -249,7 +391,7 @@ fn panels(
             }
             if row
                 .button("Trigger idle now")
-                .on_hover_text("Ends the idle wait so attention_animation or trench_run runs")
+                .on_hover_text("Ends the idle wait so attention_animation or trench_run runs (I)")
                 .clicked()
             {
                 hw().idle_trigger = true;
@@ -333,109 +475,122 @@ fn panels(
         });
     });
 
-    egui::SidePanel::right("hardware")
-        .default_width(300.0)
+    let side_panel = egui::SidePanel::right("hardware")
+        .default_width(ui.panel_width)
         .show(ctx, |side| {
-            side.heading("Motion (LIS3DH)");
-            side.horizontal_wrapped(|row| {
-                if row
-                    .button("Nudge")
-                    .on_hover_text("One reading at 1.3 g (or click the head)")
-                    .clicked()
-                {
-                    nudge();
-                }
-                if row
-                    .button("Hard shake")
-                    .on_hover_text("One reading at 3 g. RANGE_2_G clips it to ~2 g!")
-                    .clicked()
-                {
-                    hw().accel_pulses.push_back([0.0, 0.0, SHAKE_G]);
-                }
-                if row.checkbox(&mut ui.tipped, "Tipped over").changed() {
-                    hw().accel_g[2] = if ui.tipped { -1.0 } else { 1.0 };
-                }
-            });
-            let mut z = hw().accel_g[2];
-            if side
-                .add(egui::Slider::new(&mut z, -3.0..=3.0).text("held z (g)"))
-                .changed()
-            {
-                hw().accel_g[2] = z;
-            }
-
-            side.separator();
-            side.heading("PCA9685");
-            egui::Grid::new("channels")
-                .striped(true)
-                .show(side, |grid| {
-                    grid.label("ch");
-                    grid.label("part");
-                    grid.label("duty");
-                    grid.label("pulse");
-                    grid.label("view");
-                    grid.end_row();
-                    let names = [
-                        "R wing", "L wing", "main R", "main G", "main B", "small R", "small G",
-                        "small B",
-                    ];
-                    for (ch, name) in names.iter().enumerate() {
-                        // Before hw() is locked below: these helpers lock it too.
-                        let view = channel_view(&cfg, ch);
-                        let s = hw();
-                        grid.label(ch.to_string());
-                        grid.label(*name);
-                        match (s.duty_fraction(ch), s.pulse_us(ch)) {
-                            (Some(d), Some(p)) => {
-                                grid.label(format!("{:5.1}%", d * 100.0));
-                                grid.label(format!("{p:6.0} us"));
-                            }
-                            _ => {
-                                grid.label("-");
-                                grid.label("-");
-                            }
+            let motion = egui::CollapsingHeader::new("Motion (LIS3DH)")
+                .default_open(ui.open_motion)
+                .show(side, |side| {
+                    side.horizontal_wrapped(|row| {
+                        if row
+                            .button("Nudge")
+                            .on_hover_text("One reading at 1.3 g (or click the head) (N)")
+                            .clicked()
+                        {
+                            nudge();
                         }
-                        match view {
-                            ChannelView::Angle(Some(a)) => grid.label(format!("{a:5.1}°")),
-                            ChannelView::Angle(None) => grid.label("-"),
-                            ChannelView::Eye(rgb) => eye_swatch(grid, rgb),
-                            ChannelView::Blank => grid.label(""),
-                        };
-                        grid.end_row();
+                        if row
+                            .button("Hard shake")
+                            .on_hover_text("One reading at 3 g. RANGE_2_G clips it to ~2 g! (S)")
+                            .clicked()
+                        {
+                            shake();
+                        }
+                        if row.checkbox(&mut ui.tipped, "Tipped over").changed() {
+                            hw().accel_g[2] = if ui.tipped { -1.0 } else { 1.0 };
+                        }
+                    });
+                    let mut z = hw().accel_g[2];
+                    if side
+                        .add(egui::Slider::new(&mut z, -3.0..=3.0).text("held z (g)"))
+                        .changed()
+                    {
+                        hw().accel_g[2] = z;
                     }
                 });
-            {
-                let s = hw();
-                side.label(format!(
-                    "White LED duty {:.1}%",
-                    s.white_duty as f32 / 655.35
-                ));
-                side.label(format!(
-                    "Onboard LED {}   External power {}",
-                    if s.onboard_led { "on" } else { "off" },
-                    if s.external_power { "on" } else { "off" }
-                ));
-            }
-            side.label(
-                egui::RichText::new(
-                    "Eye channels peak at 32.8% duty: set_pulse_width_range(0, 6550) at 50 Hz.",
-                )
-                .small()
-                .weak(),
-            );
+            ui.open_motion = motion.openness > 0.5;
 
             side.separator();
-            side.heading("Board");
-            board_panel(side);
+            let pca = egui::CollapsingHeader::new("PCA9685")
+                .default_open(ui.open_pca)
+                .show(side, |side| {
+                    egui::Grid::new("channels")
+                        .striped(true)
+                        .show(side, |grid| {
+                            grid.label("ch");
+                            grid.label("part");
+                            grid.label("duty");
+                            grid.label("pulse");
+                            grid.label("view");
+                            grid.end_row();
+                            let names = [
+                                "R wing", "L wing", "main R", "main G", "main B", "small R",
+                                "small G", "small B",
+                            ];
+                            for (ch, name) in names.iter().enumerate() {
+                                // Before hw() is locked below: these helpers lock it too.
+                                let view = channel_view(&cfg, ch);
+                                let s = hw();
+                                grid.label(ch.to_string());
+                                grid.label(*name);
+                                match (s.duty_fraction(ch), s.pulse_us(ch)) {
+                                    (Some(d), Some(p)) => {
+                                        grid.label(format!("{:5.1}%", d * 100.0));
+                                        grid.label(format!("{p:6.0} us"));
+                                    }
+                                    _ => {
+                                        grid.label("-");
+                                        grid.label("-");
+                                    }
+                                }
+                                match view {
+                                    ChannelView::Angle(Some(a)) => grid.label(format!("{a:5.1}°")),
+                                    ChannelView::Angle(None) => grid.label("-"),
+                                    ChannelView::Eye(rgb) => eye_swatch(grid, rgb),
+                                    ChannelView::Blank => grid.label(""),
+                                };
+                                grid.end_row();
+                            }
+                        });
+                    {
+                        let s = hw();
+                        side.label(format!(
+                            "White LED duty {:.1}%",
+                            s.white_duty as f32 / 655.35
+                        ));
+                        side.label(format!(
+                            "Onboard LED {}   External power {}",
+                            if s.onboard_led { "on" } else { "off" },
+                            if s.external_power { "on" } else { "off" }
+                        ));
+                    }
+                    side.label(
+                        egui::RichText::new(
+                            "Eye channels peak at 32.8% duty: set_pulse_width_range(0, 6550) at 50 Hz.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                });
+            ui.open_pca = pca.openness > 0.5;
 
             side.separator();
-            side.heading(format!("Last {PLOT_SECONDS:.0} s"));
-            plot(side, &ui.history);
+            let board = egui::CollapsingHeader::new("Board")
+                .default_open(ui.open_board)
+                .show(side, board_panel);
+            ui.open_board = board.openness > 0.5;
+
+            side.separator();
+            let plot_section = egui::CollapsingHeader::new(format!("Last {PLOT_SECONDS:.0} s"))
+                .default_open(ui.open_plot)
+                .show(side, |side| plot(side, &ui.history));
+            ui.open_plot = plot_section.openness > 0.5;
         });
+    ui.panel_width = side_panel.response.rect.width();
 
-    egui::TopBottomPanel::bottom("log")
+    let log_panel = egui::TopBottomPanel::bottom("log")
         .resizable(true)
-        .default_height(170.0)
+        .default_height(ui.log_height)
         .show(ctx, |bottom| {
             bottom.horizontal(|row| {
                 row.label("Log");
@@ -508,6 +663,7 @@ fn panels(
                     }
                 });
         });
+    ui.log_height = log_panel.response.rect.height();
 }
 
 /// Whether a log line passes the Firmware / [sim] toggles and the search box

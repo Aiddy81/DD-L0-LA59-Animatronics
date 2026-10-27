@@ -150,10 +150,15 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     paths: Res<Paths>,
     cfg: Res<SimConfig>,
+    prefs: Option<Res<crate::prefs::Prefs>>,
 ) {
     let gltf_available = paths.assets.join(MODEL_FILE).exists();
+    // A saved choice beats sim.toml, which only sets the default.
+    let wanted = prefs
+        .and_then(|p| p.model_gltf)
+        .unwrap_or(cfg.model.kind != "primitive");
     commands.insert_resource(ModelChoice {
-        use_gltf: gltf_available && cfg.model.kind != "primitive",
+        use_gltf: gltf_available && wanted,
         gltf_available,
     });
     commands.spawn((

@@ -224,6 +224,9 @@ pub struct SimClock {
     anchor_real: Instant,
     anchor_virtual: f64,
     pub speed: f64,
+    /// While set, `now()` stands still. `reset_for_run` builds a fresh clock
+    /// (keeping only the speed), so restarting code.py also unpauses.
+    paused: bool,
 }
 
 impl SimClock {
@@ -232,11 +235,27 @@ impl SimClock {
             anchor_real: Instant::now(),
             anchor_virtual: 0.0,
             speed: 1.0,
+            paused: false,
         }
     }
 
     pub fn now(&self) -> f64 {
+        if self.paused {
+            return self.anchor_virtual;
+        }
         self.anchor_virtual + self.anchor_real.elapsed().as_secs_f64() * self.speed
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        // Re-anchor before flipping so virtual time neither jumps nor counts
+        // the paused interval.
+        self.anchor_virtual = self.now();
+        self.anchor_real = Instant::now();
+        self.paused = paused;
     }
 
     pub fn set_speed(&mut self, speed: f64) {
