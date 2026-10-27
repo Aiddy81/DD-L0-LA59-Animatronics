@@ -6,6 +6,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::Instant;
 
 use crate::config::BoardCfg;
+use crate::wav::MixerFormat;
 
 /// PCA9685 runs the servo FeatherWing at 50 Hz, so one period is 20 ms.
 pub const PWM_PERIOD_US: f32 = 20_000.0;
@@ -117,6 +118,9 @@ pub struct HwState {
     in_traceback: bool,
     /// Audio commands from `code.py`, drained by the audio system.
     pub audio: Vec<AudioCmd>,
+    /// What code.py created its `audiomixer.Mixer` with; None until it does.
+    /// A restart clears it, as the new run builds its own mixer.
+    pub mixer: Option<MixerFormat>,
     pub clock: SimClock,
     /// Running at `SKIP_SPEED` until a behaviour starts.
     pub skipping: bool,
@@ -172,6 +176,7 @@ impl HwState {
             partial_line: String::new(),
             in_traceback: false,
             audio: Vec::new(),
+            mixer: None,
             clock: SimClock::new(),
             skipping: false,
             stop_requested: false,

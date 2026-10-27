@@ -10,6 +10,7 @@ class MixerVoice:
         self._ends_at = 0.0
 
     def play(self, sample, *, loop=False):
+        self._mixer._must_match(sample)
         self._ends_at = float("inf") if loop else time.monotonic() + sample.duration
         # Silent unless the mixer itself is being played by an output, as on hardware.
         if self._mixer._output is not None and sample.path:
@@ -38,8 +39,23 @@ class Mixer:
                  bits_per_sample=16, samples_signed=True, sample_rate=8000):
         self.sample_rate = sample_rate
         self.channel_count = channel_count
+        self.bits_per_sample = bits_per_sample
+        self._signed = samples_signed
+        simhw.mixer_format(sample_rate, channel_count, bits_per_sample, samples_signed)
         self.voice = tuple(MixerVoice(self) for _ in range(voice_count))
         self._output = None
+
+    def _must_match(self, sample):
+        # Same checks, order and wording as audiosample_must_match in
+        # CircuitPython 9.2 (shared-module/audiocore/__init__.c).
+        if sample.sample_rate != self.sample_rate:
+            raise ValueError("The sample's sample_rate does not match")
+        if sample.channel_count != self.channel_count:
+            raise ValueError("The sample's channel_count does not match")
+        if sample.bits_per_sample != self.bits_per_sample:
+            raise ValueError("The sample's bits_per_sample does not match")
+        if getattr(sample, "_signed", self._signed) != self._signed:
+            raise ValueError("The sample's signedness does not match")
 
     @property
     def playing(self):

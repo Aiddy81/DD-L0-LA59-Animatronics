@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
 use bevy::ecs::system::SystemParam;
@@ -10,10 +11,12 @@ use bevy_egui::egui::{self, Color32, Stroke};
 use bevy_egui::EguiContexts;
 use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine};
 
+use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
+use crate::deploy;
 use crate::editor;
-use crate::hw::{hw, LogKind, LogLine, MarkerKind};
+use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind};
 use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice, RoomLight};
@@ -39,7 +42,7 @@ const HISTORY_SECONDS: f32 = 300.0;
 const PLOT_WINDOWS: [f32; 7] = [5.0, 10.0, 20.0, 30.0, 60.0, 120.0, HISTORY_SECONDS];
 
 /// Folders next to code.py that hold no firmware source.
-const NOT_FIRMWARE: [&str; 4] = ["lib", "sounds", "sd", "__pycache__"];
+pub(crate) const NOT_FIRMWARE: [&str; 4] = ["lib", "sounds", "sd", "__pycache__"];
 
 /// Newest modification time of the firmware: code.py, the modules beside it
 /// and settings.toml. A change to any of them should restart the run.
@@ -154,6 +157,145 @@ fn toggle_skip() {
     }
 }
 
+/// What a key press does; the shortcut table maps keys to these.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cmd {
+    Pause,
+    Step,
+    Skip,
+    Restart,
+    Idle,
+    Nudge,
+    Shake,
+    ToggleHelp,
+    CloseHelp,
+}
+
+/// One line of the Shortcuts window. Mouse-only controls have no binds or
+/// cmd; the window and the key handling both read `SHORTCUTS`, so they can't
+/// drift apart.
+struct Shortcut {
+    group: &'static str,
+    keys: &'static str,
+    action: &'static str,
+    binds: &'static [(egui::Modifiers, egui::Key)],
+    cmd: Option<Cmd>,
+}
+
+const fn mouse(group: &'static str, keys: &'static str, action: &'static str) -> Shortcut {
+    Shortcut {
+        group,
+        keys,
+        action,
+        binds: &[],
+        cmd: None,
+    }
+}
+
+const fn bound(
+    group: &'static str,
+    keys: &'static str,
+    action: &'static str,
+    binds: &'static [(egui::Modifiers, egui::Key)],
+    cmd: Cmd,
+) -> Shortcut {
+    Shortcut {
+        group,
+        keys,
+        action,
+        binds,
+        cmd: Some(cmd),
+    }
+}
+
+const NO_MODS: egui::Modifiers = egui::Modifiers::NONE;
+
+const SHORTCUTS: &[Shortcut] = &[
+    bound(
+        "Run",
+        "Space",
+        "Pause / resume",
+        &[(NO_MODS, egui::Key::Space)],
+        Cmd::Pause,
+    ),
+    bound(
+        "Run",
+        ".",
+        "Step the paused clock 100 ms",
+        &[(NO_MODS, egui::Key::Period)],
+        Cmd::Step,
+    ),
+    bound(
+        "Run",
+        "F",
+        "Skip to next event",
+        &[(NO_MODS, egui::Key::F)],
+        Cmd::Skip,
+    ),
+    bound(
+        "Run",
+        "R",
+        "Restart code.py",
+        &[(NO_MODS, egui::Key::R)],
+        Cmd::Restart,
+    ),
+    bound(
+        "Run",
+        "I",
+        "Trigger idle",
+        &[(NO_MODS, egui::Key::I)],
+        Cmd::Idle,
+    ),
+    bound(
+        "Motion",
+        "N",
+        "Nudge",
+        &[(NO_MODS, egui::Key::N)],
+        Cmd::Nudge,
+    ),
+    bound(
+        "Motion",
+        "S",
+        "Hard shake",
+        &[(NO_MODS, egui::Key::S)],
+        Cmd::Shake,
+    ),
+    mouse(
+        "Motion",
+        "Click the droid",
+        "Boop (longer press = harder, 0.3-2 g)",
+    ),
+    mouse("Camera", "Left or right drag", "Orbit"),
+    mouse("Camera", "Middle drag", "Pan"),
+    mouse("Camera", "Scroll", "Zoom"),
+    mouse("Plot", "Drag", "Pan"),
+    mouse("Plot", "Ctrl+scroll", "Zoom"),
+    mouse("Plot", "Right-drag", "Zoom to the box drawn"),
+    mouse("Plot", "Double-click", "Back to following"),
+    bound(
+        "Window",
+        "? or F1",
+        "Show or hide this window",
+        // bevy_egui maps keys by physical position, so `?` arrives as Slash
+        // with Shift held, never as Questionmark. A SHIFT pattern keeps a
+        // plain `/` from matching; Questionmark covers any source that
+        // reports it logically.
+        &[
+            (egui::Modifiers::SHIFT, egui::Key::Slash),
+            (NO_MODS, egui::Key::Questionmark),
+            (NO_MODS, egui::Key::F1),
+        ],
+        Cmd::ToggleHelp,
+    ),
+    bound(
+        "Window",
+        "Esc",
+        "Close it",
+        &[(NO_MODS, egui::Key::Escape)],
+        Cmd::CloseHelp,
+    ),
+];
+
 #[derive(Resource)]
 pub struct Host(pub PyHost);
 
@@ -175,6 +317,7 @@ pub struct UiState {
     open_motion: bool,
     open_pca: bool,
     open_board: bool,
+    open_audio: bool,
     open_plot: bool,
     open_settings: bool,
     open_state: bool,
@@ -188,6 +331,9 @@ pub struct UiState {
     traceback_cache: HashMap<String, Option<(PathBuf, u32)>>,
     log_tab: LogTab,
     drive_file: DriveFile,
+    /// The Shortcuts window; not saved to prefs.
+    show_shortcuts: bool,
+    deploy: DeployDlg,
 }
 
 /// What the bottom panel shows: the console log, or a file on the simulated drive.
@@ -285,6 +431,7 @@ impl UiState {
             open_motion: prefs.open_motion,
             open_pca: prefs.open_pca,
             open_board: prefs.open_board,
+            open_audio: prefs.open_audio,
             open_plot: prefs.open_plot,
             open_settings: prefs.open_settings,
             open_state: prefs.open_state,
@@ -296,6 +443,8 @@ impl UiState {
             traceback_cache: HashMap::new(),
             log_tab: LogTab::Console,
             drive_file: DriveFile::default(),
+            show_shortcuts: false,
+            deploy: DeployDlg::Closed,
         }
     }
 }
@@ -325,7 +474,7 @@ struct SaveState {
 /// `Last` so the AppExit event is still readable.
 fn save_prefs(
     ui: Res<UiState>,
-    (model, room): (Option<Res<ModelChoice>>, Res<RoomLight>),
+    (model, room, mix): (Option<Res<ModelChoice>>, Res<RoomLight>, Res<AudioMix>),
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut saved: ResMut<Prefs>,
     paths: Res<crate::Paths>,
@@ -358,9 +507,12 @@ fn save_prefs(
         open_motion: ui.open_motion,
         open_pca: ui.open_pca,
         open_board: ui.open_board,
+        open_audio: ui.open_audio,
         open_plot: ui.open_plot,
         open_settings: ui.open_settings,
         open_state: ui.open_state,
+        volume: mix.volume,
+        muted: mix.muted,
         show_firmware: ui.show_firmware,
         show_sim: ui.show_sim,
         plot_window_s: ui.plot.window_s,
@@ -623,7 +775,7 @@ fn panels(
     mut host: ResMut<Host>,
     model: Option<ResMut<ModelChoice>>,
     mut room: ResMut<RoomLight>,
-    cfg: Res<SimConfig>,
+    (cfg, mut audio): (Res<SimConfig>, AudioUi),
     mut captures: Captures,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else {
@@ -633,40 +785,44 @@ fn panels(
     // Consumed (not just read) so a button that kept focus after a click
     // doesn't also activate on Space. Skipped while a text field has focus.
     if !ctx.wants_keyboard_input() {
-        let (space, n, s, r, i, period, f) = ctx.input_mut(|inp| {
-            let mut key = |k| inp.consume_key(egui::Modifiers::NONE, k);
-            (
-                key(egui::Key::Space),
-                key(egui::Key::N),
-                key(egui::Key::S),
-                key(egui::Key::R),
-                key(egui::Key::I),
-                key(egui::Key::Period),
-                key(egui::Key::F),
-            )
+        let window_open = ui.show_shortcuts;
+        let cmds: Vec<Cmd> = ctx.input_mut(|inp| {
+            let mut cmds = Vec::new();
+            for row in SHORTCUTS {
+                let Some(cmd) = row.cmd else { continue };
+                // Esc is only ours while the window is open, else it is left alone.
+                if cmd == Cmd::CloseHelp && !window_open {
+                    continue;
+                }
+                // Every bind is consumed (no short-circuit) so none is left behind.
+                let hit = row
+                    .binds
+                    .iter()
+                    .fold(false, |hit, &(mods, key)| inp.consume_key(mods, key) | hit);
+                if hit {
+                    cmds.push(cmd);
+                }
+            }
+            cmds
         });
-        if space {
-            toggle_pause();
-        }
-        if period {
-            step_clock(STEP_LONG_S);
-        }
-        if f {
-            toggle_skip();
-        }
-        if n {
-            let dir = hw().nudge_dir;
-            nudge(dir);
-        }
-        if s {
-            let dir = hw().nudge_dir;
-            shake(dir);
-        }
-        if r {
-            host.0.start();
-        }
-        if i {
-            hw().trigger_idle();
+        for cmd in cmds {
+            match cmd {
+                Cmd::Pause => toggle_pause(),
+                Cmd::Step => step_clock(STEP_LONG_S),
+                Cmd::Skip => toggle_skip(),
+                Cmd::Restart => host.0.start(),
+                Cmd::Idle => hw().trigger_idle(),
+                Cmd::Nudge => {
+                    let dir = hw().nudge_dir;
+                    nudge(dir);
+                }
+                Cmd::Shake => {
+                    let dir = hw().nudge_dir;
+                    shake(dir);
+                }
+                Cmd::ToggleHelp => ui.show_shortcuts = !ui.show_shortcuts,
+                Cmd::CloseHelp => ui.show_shortcuts = false,
+            }
         }
     }
 
@@ -788,6 +944,22 @@ fn panels(
                 if use_gltf != model.use_gltf {
                     model.use_gltf = use_gltf;
                 }
+            }
+            let deploying = matches!(ui.deploy, DeployDlg::Running(_));
+            if row
+                .add_enabled(!deploying, egui::Button::new("Deploy to CIRCUITPY"))
+                .on_hover_text("Copy the changed firmware files to the board (never lib/ or boot_out.txt)")
+                .clicked()
+            {
+                let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
+                ui.deploy = open_deploy(fw_dir);
+            }
+            if row
+                .button("Shortcuts")
+                .on_hover_text("List every key and mouse control (? or F1)")
+                .clicked()
+            {
+                ui.show_shortcuts = !ui.show_shortcuts;
             }
             row.label(format!("sim time {:.1} s", hw().clock.now()));
         });
@@ -1021,6 +1193,14 @@ fn panels(
             ui.open_board = board.openness > 0.5;
 
             side.separator();
+            let audio_section = egui::CollapsingHeader::new("Audio")
+                .default_open(ui.open_audio)
+                .show(side, |side| audio_panel(side, &mut audio, fw_dir));
+            ui.open_audio = audio_section.openness > 0.5;
+            // The panel's sound list is only re-scanned while it is showing.
+            audio.sounds.wanted = ui.open_audio;
+
+            side.separator();
             let plot_section = egui::CollapsingHeader::new("Plot")
                 .default_open(ui.open_plot)
                 .show(side, |side| {
@@ -1179,6 +1359,48 @@ fn panels(
             }
         });
     ui.log_height = log_panel.response.rect.height();
+
+    let mut open = ui.show_shortcuts;
+    egui::Window::new("Shortcuts")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, shortcuts_window);
+    ui.show_shortcuts = open;
+
+    let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
+    deploy_window(ctx, &mut ui.deploy, fw_dir);
+}
+
+/// The window body, read from the same table the key handling uses.
+fn shortcuts_window(win: &mut egui::Ui) {
+    let mut groups: Vec<&str> = Vec::new();
+    for row in SHORTCUTS {
+        if !groups.contains(&row.group) {
+            groups.push(row.group);
+        }
+    }
+    for group in groups {
+        win.heading(group);
+        egui::Grid::new(("shortcuts", group))
+            .num_columns(2)
+            .spacing([16.0, 4.0])
+            .show(win, |grid| {
+                for row in SHORTCUTS.iter().filter(|r| r.group == group) {
+                    grid.label(egui::RichText::new(row.keys).monospace().strong());
+                    grid.label(row.action);
+                    grid.end_row();
+                }
+            });
+        win.add_space(4.0);
+    }
+    win.label(
+        egui::RichText::new(
+            "Keys are ignored while a text field (log search, Settings) has focus.",
+        )
+        .small()
+        .weak(),
+    );
 }
 
 /// Scenario picker, Run scenario button and the current scenario's verdict.
@@ -2132,5 +2354,276 @@ fn board_panel(ui: &mut egui::Ui) {
                 .color(Color32::from_rgb(230, 170, 40)),
         )
         .on_hover_text("These libraries are stand-ins that accept every call and do nothing.");
+    }
+}
+
+/// The audio resources the Audio panel reads and changes, bundled to keep
+/// `panels` within clippy's argument limit.
+#[derive(SystemParam)]
+struct AudioUi<'w> {
+    now: Res<'w, NowPlaying>,
+    mix: ResMut<'w, AudioMix>,
+    sounds: ResMut<'w, Sounds>,
+}
+
+fn audio_panel(ui: &mut egui::Ui, audio: &mut AudioUi, fw_dir: &Path) {
+    let mixer = hw().mixer;
+    ui.label(match mixer {
+        Some(m) => format!(
+            "Mixer: {} Hz \u{b7} {} ch \u{b7} {}-bit {}",
+            m.rate,
+            m.channels,
+            m.bits,
+            if m.signed { "signed" } else { "unsigned" }
+        ),
+        None => "Mixer: not created yet".to_owned(),
+    });
+
+    let playing = audio.now.0.as_ref().map(|p| (p.name.clone(), p.looped));
+    ui.horizontal(|row| {
+        row.label(match &playing {
+            Some((name, true)) => format!("Now playing: {name} (loop)"),
+            Some((name, false)) => format!("Now playing: {name}"),
+            None => "Nothing playing".to_owned(),
+        });
+        if row
+            .add_enabled(playing.is_some(), egui::Button::new("Stop"))
+            .on_hover_text("Stops the sound in the simulator; the firmware isn't told")
+            .clicked()
+        {
+            hw().audio.push(AudioCmd::Stop);
+        }
+    });
+    if playing.is_some() {
+        // The meter follows the droid's output, so the simulator's own volume
+        // and mute don't move it.
+        let level = (audio.now.level() * audio.mix.level).clamp(0.0, 1.0);
+        ui.add(
+            egui::ProgressBar::new(level)
+                .desired_height(10.0)
+                .fill(HEAP_OK),
+        );
+        ui.ctx().request_repaint();
+    }
+
+    let mut muted = audio.mix.muted;
+    let mut percent = audio.mix.volume * 100.0;
+    let (mute_changed, volume_changed) = ui
+        .horizontal(|row| {
+            let mute = row.checkbox(&mut muted, "Mute");
+            let volume = row.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %"));
+            (mute.changed(), volume.changed())
+        })
+        .inner;
+    ui.label(
+        egui::RichText::new(
+            "Simulator output only: the firmware's own mixer level still applies on top.",
+        )
+        .small()
+        .weak(),
+    );
+    // Written only on a change so the resource isn't marked changed every frame.
+    if mute_changed {
+        audio.mix.muted = muted;
+    }
+    if volume_changed {
+        audio.mix.volume = percent / 100.0;
+    }
+
+    ui.separator();
+    let error = ui.visuals().error_fg_color;
+    let sounds_dir = fw_dir.join("sounds");
+    for sound in &audio.sounds.scan.sounds {
+        ui.horizontal_wrapped(|row| {
+            if row
+                .small_button("Play")
+                .on_hover_text("Plays it in the simulator only; code.py doesn't see it")
+                .clicked()
+            {
+                hw().audio.push(AudioCmd::Play {
+                    path: sounds_dir.join(&sound.name).to_string_lossy().into_owned(),
+                    level: 1.0,
+                    looped: false,
+                });
+            }
+            row.label(&sound.name);
+            if let Some((rate, channels, bits)) = sound.format {
+                row.label(
+                    egui::RichText::new(format!(
+                        "{rate} Hz \u{b7} {channels} ch \u{b7} {bits}-bit"
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+            if let Some(problem) = &sound.problem {
+                row.colored_label(error, problem);
+            }
+        });
+    }
+    if audio.sounds.scan.sounds.is_empty() {
+        ui.label(egui::RichText::new("No .wav files in sounds/").weak());
+    }
+    for (file, place) in &audio.sounds.scan.missing {
+        ui.colored_label(error, format!("{file} \u{2014} missing ({place})"));
+    }
+}
+
+/// State of the Deploy to CIRCUITPY window.
+enum DeployDlg {
+    Closed,
+    /// A result or problem, with a Close button.
+    Note(String),
+    Confirm {
+        drive: PathBuf,
+        plan: Vec<deploy::Copy>,
+    },
+    Running(Arc<Mutex<DeployRun>>),
+}
+
+/// Progress shared with the copy thread, so USB writes never block the UI.
+struct DeployRun {
+    done: usize,
+    total: usize,
+    /// Set last by the thread: the message to show, or the error.
+    outcome: Option<Result<String, String>>,
+}
+
+fn lock_run(run: &Mutex<DeployRun>) -> MutexGuard<'_, DeployRun> {
+    run.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// "E:" from "E:\\", the way Explorer names the drive.
+fn drive_name(drive: &Path) -> String {
+    drive.to_string_lossy().trim_end_matches('\\').to_string()
+}
+
+/// Finds the board and works out what would change; cheap enough to do on click.
+fn open_deploy(fw_dir: &Path) -> DeployDlg {
+    let Some(drive) = deploy::find_circuitpy() else {
+        return DeployDlg::Note("No CIRCUITPY drive found. Plug the board in over USB.".into());
+    };
+    match deploy::plan(fw_dir, &drive) {
+        Err(e) => DeployDlg::Note(format!(
+            "Cannot compare with CIRCUITPY ({}): {e}",
+            drive_name(&drive)
+        )),
+        Ok(plan) if plan.is_empty() => {
+            DeployDlg::Note(format!("CIRCUITPY ({}) is up to date.", drive_name(&drive)))
+        }
+        Ok(plan) => DeployDlg::Confirm { drive, plan },
+    }
+}
+
+fn start_deploy(fw_dir: &Path, drive: PathBuf, plan: Vec<deploy::Copy>) -> DeployDlg {
+    let run = Arc::new(Mutex::new(DeployRun {
+        done: 0,
+        total: plan.len(),
+        outcome: None,
+    }));
+    let (shared, fw_dir) = (Arc::clone(&run), fw_dir.to_path_buf());
+    let spawned = std::thread::Builder::new()
+        .name("deploy".into())
+        .spawn(move || {
+            let mut failed = None;
+            deploy::copy_all(&fw_dir, &drive, &plan, |r| match r {
+                Ok(rel) => {
+                    hw().push_line(format!("[sim] deployed {rel}"));
+                    lock_run(&shared).done += 1;
+                }
+                Err(e) => failed = Some(e),
+            });
+            let outcome = match failed {
+                None => {
+                    let msg = format!("deployed {} files to {}", plan.len(), drive.display());
+                    hw().push_line(format!("[sim] {msg}"));
+                    Ok(format!(
+                        "Deployed {} files to CIRCUITPY ({}).",
+                        plan.len(),
+                        drive_name(&drive)
+                    ))
+                }
+                Some(e) => {
+                    hw().push_line(format!("[sim] deploy error: {e}"));
+                    Err(e)
+                }
+            };
+            lock_run(&shared).outcome = Some(outcome);
+        });
+    match spawned {
+        Ok(_) => DeployDlg::Running(run),
+        Err(e) => DeployDlg::Note(format!("Cannot start the copy: {e}")),
+    }
+}
+
+fn deploy_window(ctx: &egui::Context, dlg: &mut DeployDlg, fw_dir: &Path) {
+    if matches!(dlg, DeployDlg::Closed) {
+        return;
+    }
+    let mut next = None;
+    let mut open = true;
+    let mut window = egui::Window::new("Deploy to CIRCUITPY")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
+    // The copy can't be cancelled, so the X only exists while nothing is running.
+    if !matches!(dlg, DeployDlg::Running(_)) {
+        window = window.open(&mut open);
+    }
+    window.show(ctx, |win| match &*dlg {
+        DeployDlg::Closed => {}
+        DeployDlg::Note(text) => {
+            win.label(text.as_str());
+            if win.button("Close").clicked() {
+                next = Some(DeployDlg::Closed);
+            }
+        }
+        DeployDlg::Confirm { drive, plan } => {
+            win.label(format!(
+                "Copy {} files to CIRCUITPY ({})?",
+                plan.len(),
+                drive_name(drive)
+            ));
+            egui::ScrollArea::vertical()
+                .max_height(240.0)
+                .show(win, |list| {
+                    for item in plan {
+                        list.horizontal(|row| {
+                            row.label(item.rel.as_str());
+                            row.weak(if item.new { "new" } else { "changed" });
+                        });
+                    }
+                });
+            win.weak(
+                "lib/ and boot_out.txt are never touched; files only on the board are left alone. \
+                 The board restarts when code.py is written.",
+            );
+            win.horizontal(|row| {
+                if row.button("Copy").clicked() {
+                    next = Some(start_deploy(fw_dir, drive.clone(), plan.clone()));
+                }
+                if row.button("Cancel").clicked() {
+                    next = Some(DeployDlg::Closed);
+                }
+            });
+        }
+        DeployDlg::Running(run) => {
+            let run = lock_run(run);
+            match &run.outcome {
+                None => {
+                    win.horizontal(|row| {
+                        row.spinner();
+                        row.label(format!("Copying… {} of {}", run.done, run.total));
+                    });
+                    ctx.request_repaint();
+                }
+                Some(Ok(msg)) | Some(Err(msg)) => next = Some(DeployDlg::Note(msg.clone())),
+            }
+        }
+    });
+    if let Some(next) = next {
+        *dlg = next;
+    } else if !open {
+        *dlg = DeployDlg::Closed;
     }
 }

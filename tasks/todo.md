@@ -1,3 +1,28 @@
+# Simulator: shortcuts window (#77), audio panel (#58), deploy to CIRCUITPY (#61)
+
+Branch: `feature/sim-audio-deploy-shortcuts` (off `Documentation`). #14 left alone (user's choice).
+
+- [x] #77 `ui.rs`: one `SHORTCUTS` table drives the key handling and a Shortcuts window (button, `?`/F1, Esc); ignored while a text field has focus
+- [x] #58 `wav.rs` (new, std-only) + `audio.rs`: `NowPlaying` + level envelope, `AudioMix` volume/mute (saved in prefs), `wav_info`, `scan_sounds` (missing `play_wav` files, unplayable formats)
+- [x] #58 `shims/audiomixer.py` + `audiocore.py` + `pyhost.rs` + `tests/simhw.py`: report mixer format; `ValueError` on a mismatched sample, like CircuitPython 9.2
+- [x] #58 `ui.rs`: Audio panel (now playing, meter, Stop, mute, volume, sound list with Play, problems)
+- [x] #61 `deploy.rs`: find `CIRCUITPY` by volume label (`windows-sys` 0.61.2, already in the tree via winit), plan only changed files, never `lib/`/`boot_out.txt`, `code.py` last, background copy
+- [x] #61 `ui.rs`: Deploy button + confirmation window; results in the sim log
+- [x] README: shortcuts bullet, audio panel, deploy button, setup step, unit-test note
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` clean; unit tests (wav 10, deploy 5, settings 10) + headless checks + 7 scenarios pass
+- [x] Interactive (posted keys + window capture): F1 opens Shortcuts, Esc closes, N still boops; boot normal; Deploy and Shortcuts buttons present
+- [ ] Interactive: `?` with a real keyboard, `?` typed in log search doesn't open it, Audio panel (meter, mute, volume, Play, a renamed WAV flagged) — user
+- [ ] Deploy to the real board, confirm the copy, second deploy says up to date — user
+
+## Review
+- `?` arrives from bevy_egui as Shift+Slash (keys are mapped by physical position), never as `Key::Questionmark`, so the table binds Shift+Slash, plus Questionmark and F1.
+- The mixer's `ValueError` text was checked against CircuitPython 9.2's `audiosample_must_match` (the board runs 9.2.8): `The sample's sample_rate does not match`, etc. The first draft used older wording.
+- The headless stand-in WAVs were mono, which the mixer now rejects as the board would; they're stereo now.
+- Deploy only blames log mode for a write-protected drive (Windows error 19). A plain "access denied" keeps the OS wording, since it can mean other things.
+- Deploy never deletes files that are only on the board, and `boot.py`/`log_off.py` are deployed too (the issue's list left them out; log mode needs `boot.py`).
+- One commit for all three issues: they share `ui.rs`, `prefs.rs` and the README, so splitting by hunk wasn't worth the risk.
+- Computer use still can't find the sim window; checks were done by posting keys to it and capturing it with PrintWindow.
+
 # Simulator: event markers (#49) + servo speed limit (#51)
 
 Branch: `feature/sim-event-markers-servo-speed` (off `Documentation`).

@@ -5,6 +5,7 @@
 mod audio;
 mod capture;
 mod config;
+mod deploy;
 mod droid;
 mod editor;
 mod hw;
@@ -13,6 +14,7 @@ mod pyhost;
 mod scene;
 mod settings;
 mod ui;
+mod wav;
 
 use std::path::{Path, PathBuf};
 
@@ -157,6 +159,7 @@ fn main() {
             sim_toml_mtime,
             &prefs,
         ))
+        .insert_resource(audio::AudioMix::new(prefs.volume, prefs.muted))
         .insert_resource(prefs)
         .add_plugins((
             scene::ScenePlugin,

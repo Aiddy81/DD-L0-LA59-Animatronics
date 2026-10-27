@@ -38,6 +38,10 @@ pyo3 ={ version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
+# Volume-label lookup for the one-click deploy. 0.61.2 is already in the tree via winit.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug"] }
+
 [profile.release]
 opt-level = 3
 lto = "thin"
