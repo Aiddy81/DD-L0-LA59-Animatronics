@@ -528,12 +528,7 @@ fn spawn_lamp(
     normal: Vec3,
     radius: f32,
 ) {
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.04, 0.04, 0.05),
-        perceptual_roughness: 0.05,
-        reflectance: 0.8,
-        ..default()
-    });
+    let material = lamp_material(materials);
     commands
         .spawn((
             ChildOf(root),
@@ -546,16 +541,31 @@ fn spawn_lamp(
         ))
         .with_children(|lamp| {
             lamp.spawn((
-                PointLight {
-                    intensity: 0.0,
-                    range: 3.0,
-                    radius,
-                    shadows_enabled: false,
-                    ..default()
-                },
+                lamp_light(radius),
                 // Parent is squashed on Y; this sits just outside the dome.
                 Transform::from_xyz(0.0, 3.0 * radius, 0.0),
                 GlowLight(source),
             ));
         });
+}
+
+/// A lamp's glass while off: dark and glossy; it glows through `emissive`.
+pub(crate) fn lamp_material(materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
+    materials.add(StandardMaterial {
+        base_color: Color::srgb(0.04, 0.04, 0.05),
+        perceptual_roughness: 0.05,
+        reflectance: 0.8,
+        ..default()
+    })
+}
+
+/// A lamp's light, off until driven.
+pub(crate) fn lamp_light(radius: f32) -> PointLight {
+    PointLight {
+        intensity: 0.0,
+        range: 3.0,
+        radius,
+        shadows_enabled: false,
+        ..default()
+    }
 }
