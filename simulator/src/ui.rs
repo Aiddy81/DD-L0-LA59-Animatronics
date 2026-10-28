@@ -1260,10 +1260,16 @@ fn options_group(
             }
         });
     }
+}
+
+/// The toolbar's Deploy button, kept on the right next to View rather than in
+/// the Options menu, so it's one click. `short` drops the text when crowded.
+fn deploy_button(row: &mut egui::Ui, state: &mut UiState, paths: &crate::Paths, short: bool) {
     let deploying = matches!(state.deploy, DeployDlg::Running(_));
+    let label = if short { "\u{2b06}" } else { "\u{2b06} Deploy" };
     if tip(
-        row.add_enabled(!deploying, egui::Button::new("Deploy to CIRCUITPY")),
-        "Copy the changed firmware files to the board (never lib/ or boot_out.txt)",
+        row.add_enabled(!deploying, egui::Button::new(label)),
+        "Deploy to CIRCUITPY: copy the changed firmware files to the board (never lib/ or boot_out.txt)",
         None,
     )
     .clicked()
@@ -1424,6 +1430,8 @@ fn panels(
                             theme.set_scale(s);
                         }
                     }
+                    // Right to left, so this lands just left of View.
+                    deploy_button(r, &mut ui, &captures.paths, crowded);
                 })
                 .response
                 .rect
@@ -1608,8 +1616,8 @@ fn panels(
             });
         });
         egui::CentralPanel::default().show(&wctx, |body| {
-            // The log and plot scroll and zoom themselves.
-            if matches!(pane, Pane::Log | Pane::Plot) {
+            // The log, plot and settings scroll (and the plot zooms) themselves.
+            if matches!(pane, Pane::Log | Pane::Plot | Pane::Settings) {
                 draw_pane(body, pane, &mut cx);
             } else {
                 egui::ScrollArea::both()
@@ -1827,12 +1835,12 @@ fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, palette: &Palette) {
             if s.external_power { "on" } else { "off" }
         ));
     }
+    side.add_space(4.0);
     side.label(
         egui::RichText::new(
             "Eye channels peak at 32.8% duty: set_pulse_width_range(0, 6550) at 50 Hz.",
         )
-        .small()
-        .weak(),
+        .color(palette.muted),
     );
 }
 
@@ -2792,6 +2800,17 @@ const GROUPS: [&str; 6] = [
 /// groups to a row (the widest group is a label and three checkboxes).
 const PLOT_TOGGLES_3_COLUMNS: f32 = 560.0;
 
+/// The groups in the tickbox grid: the three LED groups first, so they share a
+/// row when three fit, then wings, accelerometer and heap.
+const TOGGLE_ORDER: [&str; 6] = [
+    "White LED",
+    "Main eye",
+    "Small eye",
+    "Wings",
+    "Accel",
+    "Heap",
+];
+
 /// What the plot shows; kept in `UiState` so it lasts between frames.
 struct PlotState {
     window_s: f32,
@@ -2971,7 +2990,7 @@ fn plot_panel(
         .num_columns(per_row * 2)
         .spacing([8.0, 2.0])
         .show(ui, |grid| {
-            for (n, group) in GROUPS.iter().enumerate() {
+            for (n, group) in TOGGLE_ORDER.iter().enumerate() {
                 grid.label(egui::RichText::new(*group).small());
                 grid.horizontal(|row| {
                     for (i, s) in SERIES.iter().enumerate().filter(|(_, s)| s.group == *group) {
@@ -3067,10 +3086,10 @@ fn plot_panel(
                     p.line(line);
                 }
                 if band == Band::Accel {
-                    accel_limits(p, limits, last.rest_z, x1, palette);
+                    accel_limits(p, limits, last.rest_z, (x0, x1), palette);
                 }
                 if band == Band::Heap {
-                    heap_limits(p, heap_budget_kb, x1, palette);
+                    heap_limits(p, heap_budget_kb, (x0, x1), palette);
                 }
                 draw_markers(p, in_view, n == 0, palette);
                 p.response()
@@ -3104,36 +3123,56 @@ fn plot_panel(
 
 /// The firmware's thresholds: it compares abs(z - rest) for the nudges and
 /// abs(z) for hard motion. Plus the sensor's clip level, one LSB below full
-/// scale. Each pair is labelled once, on its upper line.
+/// scale. Each pair is labelled once, on its upper line; the labels sit at the
+/// right, middle and left of the view, as the lines are close together.
 fn accel_limits(
     p: &mut egui_plot::PlotUi,
     limits: &AccelLimits,
     rest_z: f32,
-    right_x: f64,
+    (left_x, right_x): (f64, f64),
     palette: &Palette,
 ) {
+    let mid_x = (left_x + right_x) / 2.0;
     let lines = [
-        (rest_z, limits.nudge, "nudge", palette.line_nudge),
+        (
+            rest_z,
+            limits.nudge,
+            "nudge",
+            palette.line_nudge,
+            right_x,
+            egui::Align2::RIGHT_BOTTOM,
+        ),
         (
             rest_z,
             limits.animation,
             "animation",
             palette.line_animation,
+            mid_x,
+            egui::Align2::CENTER_BOTTOM,
         ),
-        (0.0, limits.hard, "hard", palette.line_hard),
+        (
+            0.0,
+            limits.hard,
+            "hard",
+            palette.line_hard,
+            left_x,
+            egui::Align2::LEFT_BOTTOM,
+        ),
     ];
-    for (centre, offset, name, color) in lines {
+    for (centre, offset, name, color, label_x, anchor) in lines {
         for y in [centre + offset, centre - offset] {
             p.hline(HLine::new(name, y).color(color).width(1.0));
         }
         p.text(
             Text::new(
                 name,
-                PlotPoint::new(right_x, centre + offset),
-                egui::RichText::new(name).small(),
+                PlotPoint::new(label_x, centre + offset),
+                egui::RichText::new(name)
+                    .text_style(egui::TextStyle::Body)
+                    .color(color),
             )
             .color(color)
-            .anchor(egui::Align2::RIGHT_BOTTOM),
+            .anchor(anchor),
         );
     }
     let clip = limits.clip * (1.0 - 1.0 / 32768.0);
@@ -3148,20 +3187,41 @@ fn accel_limits(
 }
 
 /// The heap bar's thresholds: amber from 80% of the budget, red at the budget.
-fn heap_limits(p: &mut egui_plot::PlotUi, budget_kb: f32, right_x: f64, palette: &Palette) {
-    for (y, name, color) in [
-        (budget_kb * 0.8, "80%", palette.heap_high),
-        (budget_kb, "budget", palette.heap_over),
+/// Labelled at opposite ends of the view, as the two lines are close. The
+/// budget's label hangs below its line, which is at the top of the band.
+fn heap_limits(
+    p: &mut egui_plot::PlotUi,
+    budget_kb: f32,
+    (left_x, right_x): (f64, f64),
+    palette: &Palette,
+) {
+    for (y, name, color, label_x, anchor) in [
+        (
+            budget_kb * 0.8,
+            "80%",
+            palette.heap_high,
+            right_x,
+            egui::Align2::RIGHT_BOTTOM,
+        ),
+        (
+            budget_kb,
+            "budget",
+            palette.heap_over,
+            left_x,
+            egui::Align2::LEFT_TOP,
+        ),
     ] {
         p.hline(HLine::new(name, y).color(color).width(1.0));
         p.text(
             Text::new(
                 name,
-                PlotPoint::new(right_x, f64::from(y)),
-                egui::RichText::new(name).small(),
+                PlotPoint::new(label_x, f64::from(y)),
+                egui::RichText::new(name)
+                    .text_style(egui::TextStyle::Body)
+                    .color(color),
             )
             .color(color)
-            .anchor(egui::Align2::RIGHT_BOTTOM),
+            .anchor(anchor),
         );
     }
 }
@@ -3225,14 +3285,40 @@ fn settings_panel(
 ) {
     let pending = palette.warn;
     let red = palette.error;
+    // Above the list, so they stay in reach while the list scrolls.
+    ui.horizontal(|row| {
+        let dirty = !state.edits.is_empty();
+        let save = row
+            .add_enabled(dirty, egui::Button::new("Save"))
+            .on_hover_text("Write the changes into settings.toml, keeping its comments");
+        if save.clicked() {
+            let note = match state.save(dir) {
+                Ok(n) if auto_reload => format!("[sim] settings.toml saved ({n} changed)"),
+                Ok(n) => format!("[sim] settings.toml saved ({n} changed); restart (R) to apply"),
+                Err(e) => format!("[sim] could not save settings.toml: {e}"),
+            };
+            hw().push_line(note);
+        }
+        if row
+            .add_enabled(dirty, egui::Button::new("Revert"))
+            .on_hover_text("Forget the unsaved changes")
+            .clicked()
+        {
+            state.revert(dir);
+        }
+        if dirty {
+            row.colored_label(pending, format!("{} unsaved", state.edits.len()));
+        }
+    });
     if let Some(error) = &state.error {
         ui.colored_label(red, error);
     }
     // Cloned so `state` can be changed while the rows are drawn.
     let tunables = state.tunables.clone();
+    // Fills the pane, so its scroll bar is on the pane's edge.
     egui::ScrollArea::vertical()
         .id_salt("settings")
-        .max_height(320.0)
+        .auto_shrink([false, false])
         .show(ui, |area| {
             egui::Grid::new("settings_grid")
                 .striped(true)
@@ -3297,30 +3383,6 @@ fn settings_panel(
                     }
                 });
         });
-    ui.horizontal(|row| {
-        let dirty = !state.edits.is_empty();
-        let save = row
-            .add_enabled(dirty, egui::Button::new("Save"))
-            .on_hover_text("Write the changes into settings.toml, keeping its comments");
-        if save.clicked() {
-            let note = match state.save(dir) {
-                Ok(n) if auto_reload => format!("[sim] settings.toml saved ({n} changed)"),
-                Ok(n) => format!("[sim] settings.toml saved ({n} changed); restart (R) to apply"),
-                Err(e) => format!("[sim] could not save settings.toml: {e}"),
-            };
-            hw().push_line(note);
-        }
-        if row
-            .add_enabled(dirty, egui::Button::new("Revert"))
-            .on_hover_text("Forget the unsaved changes")
-            .clicked()
-        {
-            state.revert(dir);
-        }
-        if dirty {
-            row.colored_label(pending, format!("{} unsaved", state.edits.len()));
-        }
-    });
 }
 
 /// Remaining seconds to `deadline` as a bar that empties towards it.
@@ -3386,17 +3448,45 @@ fn state_panel(ui: &mut egui::Ui, palette: &Palette) {
         }
     }
 
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let format = |color| egui::TextFormat {
+        font_id: mono.clone(),
+        color,
+        ..Default::default()
+    };
     for (i, task) in state.tasks.iter().enumerate() {
-        ui.label(egui::RichText::new(&task.chain).monospace().small());
+        ui.add_space(4.0);
+        // The arrow sim_runtime.py joins the links with isn't in egui's
+        // bundled fonts (it drew as a box), so the links are laid out here.
+        ui.horizontal_wrapped(|row| {
+            row.spacing_mut().item_spacing.x = 4.0;
+            let mut links = task.chain.split(CHAIN_SEP);
+            if let Some(first) = links.next() {
+                row.label(egui::RichText::new(first).monospace().strong());
+            }
+            for link in links {
+                row.label(
+                    egui::RichText::new("\u{bb}")
+                        .monospace()
+                        .color(palette.muted),
+                );
+                row.label(egui::RichText::new(link).monospace());
+            }
+        });
         if !task.numbers.is_empty() {
-            let numbers: Vec<String> = task
-                .numbers
-                .iter()
-                .map(|(name, value)| format!("{name}={value}"))
-                .collect();
             ui.indent(("task_numbers", i), |vars| {
-                vars.label(egui::RichText::new(numbers.join("  ")).small().weak())
-                    .on_hover_text("Every number variable in this task's firmware functions");
+                // One pair per label, so a line only ever breaks between pairs.
+                vars.horizontal_wrapped(|row| {
+                    row.spacing_mut().item_spacing = egui::vec2(14.0, 2.0);
+                    for (name, value) in &task.numbers {
+                        let mut job = egui::text::LayoutJob::default();
+                        job.append(name, 0.0, format(palette.muted));
+                        job.append(" ", 0.0, format(palette.muted));
+                        job.append(&value.to_string(), 0.0, format(palette.text));
+                        row.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend))
+                            .on_hover_text("A number variable in this task's firmware functions");
+                    }
+                });
             });
         }
     }

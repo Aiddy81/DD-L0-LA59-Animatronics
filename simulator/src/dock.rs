@@ -592,10 +592,10 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
         *tab != Pane::Viewport
     }
 
-    // The log and plot scroll and zoom themselves.
+    // The log, plot and settings scroll (and the plot zooms) themselves.
     fn scroll_bars(&self, tab: &Pane) -> [bool; 2] {
         match tab {
-            Pane::Viewport | Pane::Log | Pane::Plot => [false, false],
+            Pane::Viewport | Pane::Log | Pane::Plot | Pane::Settings => [false, false],
             _ => [true, true],
         }
     }
