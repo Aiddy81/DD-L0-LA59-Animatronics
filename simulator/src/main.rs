@@ -11,6 +11,7 @@ mod droid;
 mod editor;
 mod hw;
 mod layout;
+mod palette;
 mod prefs;
 mod pyhost;
 mod scene;

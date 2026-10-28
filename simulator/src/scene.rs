@@ -161,7 +161,7 @@ impl OrbitCam {
 }
 
 /// Toolbar camera presets.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CameraView {
     Front,
     Side,
