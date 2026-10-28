@@ -98,7 +98,7 @@ pub struct IdleWait {
 
 /// What a generic part (`parts.rs`) is showing or, for a button, reading.
 #[derive(Clone, Debug, PartialEq)]
-// Only buttons write a value so far; the others come from simhw calls (#65).
+// RGB and pixel lists come from simhw calls (#65, stage 3).
 #[allow(dead_code)]
 pub enum PartValue {
     /// Brightness 0-1 of the part's colour.
@@ -111,6 +111,15 @@ pub enum PartValue {
     Pressed(bool),
 }
 
+/// What the firmware last wrote to a board pin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PinValue {
+    /// A `digitalio` output.
+    Digital(bool),
+    /// A `pwmio.PWMOut`: 16-bit duty at `freq` Hz.
+    Pwm { duty: u16, freq: u32 },
+}
+
 pub struct HwState {
     /// 16-bit duty cycle per PCA9685 channel, `None` until first written.
     pub pca_duty: [Option<u16>; 16],
@@ -120,6 +129,12 @@ pub struct HwState {
     pub external_power: bool,
     /// Generic parts' values by part name; a part with no entry is off/at rest.
     pub parts: HashMap<String, PartValue>,
+    /// Every board pin the firmware has written, by name (`D5`, `LED`, ...).
+    pub pins: HashMap<String, PinValue>,
+    /// Input pins wired to a button part: pressed or not.
+    pub button_pins: HashMap<String, bool>,
+    /// Runs started since launch; parts.rs reloads the parts file when it changes.
+    pub runs: u64,
     /// Held acceleration in g (x, y, z). 1 g on z = sitting still.
     pub accel_g: [f32; 3],
     /// Unit direction that Nudge, Hard shake and a head click push in, added to
@@ -186,13 +201,16 @@ pub struct HwState {
 }
 
 impl HwState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             pca_duty: [None; 16],
             white_duty: 0,
             onboard_led: false,
             external_power: false,
             parts: HashMap::new(),
+            pins: HashMap::new(),
+            button_pins: HashMap::new(),
+            runs: 0,
             accel_g: [0.0, 0.0, 1.0],
             nudge_dir: [0.0, 0.0, 1.0],
             accel_pulses: VecDeque::new(),
@@ -245,7 +263,9 @@ impl HwState {
         let log = std::mem::take(&mut self.log);
         // Kept with the log: seqs must stay unique across runs.
         let (next_seq, last_traceback) = (self.next_seq, self.last_traceback.take());
+        let runs = self.runs + 1;
         *self = Self::new();
+        self.runs = runs;
         self.accel_g = accel;
         self.nudge_dir = nudge_dir;
         self.clock.speed = speed;
@@ -523,8 +543,12 @@ mod tests {
         s.parts.insert("flap".into(), PartValue::Angle(30.0));
         s.parts.insert("go".into(), PartValue::Pressed(true));
         assert_eq!(s.parts.get("flap"), Some(&PartValue::Angle(30.0)));
+        s.pins.insert("D5".into(), PinValue::Digital(true));
+        s.button_pins.insert("D6".into(), true);
         s.reset_for_run();
         assert!(s.parts.is_empty());
+        assert!(s.pins.is_empty() && s.button_pins.is_empty());
+        assert_eq!(s.runs, 1);
     }
 
     /// Waits (briefly, in real time) until the clock reads as paused.

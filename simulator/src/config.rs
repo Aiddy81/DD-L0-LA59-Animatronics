@@ -212,7 +212,7 @@ impl WingCfg {
 
 /// A joint turned by a servo through a linkage, like the wings.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HingeCfg {
     /// Servo angle at which the joint is at 0 degrees.
     pub neutral_deg: f32,
@@ -278,14 +278,27 @@ pub enum PartShape {
 }
 
 /// One generic part on the droid. Fields that don't apply to its kind are
-/// ignored, so a TOML entry only lists what it needs.
+/// ignored, so a TOML entry only lists what it needs. Unknown fields are an
+/// error, so a typo isn't silently dropped.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PartCfg {
     pub name: String,
     pub kind: PartKind,
-    /// Position relative to the droid's root. The part's local +Y points out
-    /// of the surface it sits on.
+    /// Follows this PCA9685 channel: brightness for an LED or pixels, servo
+    /// angle for a servo part.
+    pub pca: Option<usize>,
+    /// Follows this board pin (`pwmio` or `digitalio`); a button drives it
+    /// as an input instead.
+    pub pin: Option<String>,
+    /// Node the part sits on: `body` (the droid's root) or a node name such
+    /// as `wing_right`.
+    pub anchor: String,
+    /// Duty fraction that counts as full brightness when following a channel
+    /// or PWM pin; 0.3275 for an LED driven like the eyes (0-6550 us).
+    pub full_duty: f32,
+    /// Position relative to the anchor. The part's local +Y points out of the
+    /// surface it sits on.
     pub pos: [f32; 3],
     /// Rotation as X, Y, Z Euler angles in degrees.
     pub rot_deg: [f32; 3],
@@ -308,6 +321,10 @@ impl Default for PartCfg {
         Self {
             name: String::new(),
             kind: PartKind::Led,
+            pca: None,
+            pin: None,
+            anchor: PartCfg::BODY.into(),
+            full_duty: 1.0,
             pos: [0.0; 3],
             rot_deg: [0.0; 3],
             size: 0.05,
@@ -318,6 +335,103 @@ impl Default for PartCfg {
             shape: PartShape::Box,
             hinge: HingeCfg::default(),
         }
+    }
+}
+
+/// Where a part's value comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartSource<'a> {
+    Pca(usize),
+    Pin(&'a str),
+    /// Set only by a shim through `simhw` (or, for a button, the mouse).
+    Shim,
+}
+
+impl PartCfg {
+    /// The droid's root, the default anchor.
+    pub const BODY: &'static str = "body";
+    pub const MAX_NAME: usize = 32;
+    pub const MAX_PIXELS: usize = 1024;
+
+    pub fn source(&self) -> PartSource<'_> {
+        match (self.pca, &self.pin) {
+            (Some(ch), _) => PartSource::Pca(ch),
+            (None, Some(pin)) => PartSource::Pin(pin),
+            (None, None) => PartSource::Shim,
+        }
+    }
+
+    /// Why this entry can't be used, if it can't.
+    pub fn check(&self) -> Result<(), String> {
+        let name_ok = !self.name.is_empty()
+            && self.name.len() <= Self::MAX_NAME
+            && self
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !name_ok {
+            return Err(format!(
+                "name must be 1-{} letters, digits, '_' or '-'",
+                Self::MAX_NAME
+            ));
+        }
+        let finite = |v: &[f32]| v.iter().all(|x| x.is_finite());
+        if !finite(&self.pos) || !finite(&self.rot_deg) || !finite(&self.colour) {
+            return Err("pos, rot_deg and colour must be numbers".into());
+        }
+        if !(self.size.is_finite() && self.size > 0.0) {
+            return Err("size must be more than 0".into());
+        }
+        if self.kind == PartKind::Pixels {
+            if !(1..=Self::MAX_PIXELS).contains(&self.count) {
+                return Err(format!("count must be 1-{}", Self::MAX_PIXELS));
+            }
+            if !(self.spacing.is_finite() && self.spacing > 0.0) {
+                return Err("spacing must be more than 0".into());
+            }
+        }
+        if self.kind == PartKind::ServoPart {
+            let h = &self.hinge;
+            if !finite(&[h.neutral_deg, h.direction, h.gain, h.min_deg, h.max_deg])
+                || !finite(&h.hinge_axis)
+            {
+                return Err("hinge values must be numbers".into());
+            }
+            if h.min_deg > h.max_deg {
+                return Err("hinge min_deg is above max_deg".into());
+            }
+            if Vec3::from(h.hinge_axis).length_squared() < 1e-12 {
+                return Err("hinge_axis can't be zero".into());
+            }
+        }
+        if !(self.full_duty.is_finite() && self.full_duty > 0.0 && self.full_duty <= 1.0) {
+            return Err("full_duty must be more than 0 and at most 1".into());
+        }
+        if self.pca.is_some() && self.pin.is_some() {
+            return Err("give pca or pin, not both".into());
+        }
+        if let Some(ch) = self.pca {
+            if ch > 15 {
+                return Err("pca must be a channel 0-15".into());
+            }
+            if self.kind == PartKind::Button {
+                return Err("a button is an input: give it a pin, or no source".into());
+            }
+        }
+        if let Some(pin) = &self.pin {
+            let pin_ok = !pin.is_empty()
+                && pin.len() <= Self::MAX_NAME
+                && pin
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+            if !pin_ok {
+                return Err("pin must be a board pin name such as \"D5\"".into());
+            }
+        }
+        if self.anchor.is_empty() {
+            return Err("anchor can't be empty (\"body\" is the droid itself)".into());
+        }
+        Ok(())
     }
 }
 

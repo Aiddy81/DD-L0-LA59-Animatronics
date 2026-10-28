@@ -26,6 +26,12 @@ class DigitalInOut:
 
     @property
     def value(self):
+        if self.direction == Direction.INPUT:
+            pressed = simhw.pin_input(self._pin.name)
+            if pressed is not None:
+                # A button wired to the rail opposite the pull: with a
+                # pull-up it reads False while pressed, otherwise True.
+                return pressed != (self.pull == Pull.UP)
         return self._value
 
     @value.setter

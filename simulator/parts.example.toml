@@ -1,0 +1,71 @@
+# Extra hardware on the 3D droid, without writing Rust (#65).
+# To use it, copy this file to simulator/parts.toml and edit it. Changes apply
+# when code.py restarts: R, or on save with Auto-reload on.
+# The README's "Parts file" section lists every field.
+#
+# Each part follows one source:
+#   pca = N      a PCA9685 channel (0-15), as the wings and eyes do
+#   pin = "D5"   a board pin written through pwmio or digitalio
+#   (neither)    set only by a shim through simhw
+#
+# Positions are in model units (the head is about 2.5 across, its top about
+# 2.1 up), relative to `anchor` (default "body", the droid itself). A part's
+# local +Y points out of the surface it sits on; rot_deg turns it there.
+
+# A flap on the right side that copies the right wing's servo (channel 0).
+[[part]]
+name = "side_flap"
+kind = "servo_part"
+pca = 0
+pos = [1.2, 1.45, -0.35]
+rot_deg = [0, 0, -90]
+size = 0.12
+colour = [0.85, 0.85, 0.8]
+hinge = { neutral_deg = 90, direction = -1.0, gain = 0.45, min_deg = 0, max_deg = 75 }
+
+# A red lamp on the back that follows the white LED's PWM pin.
+[[part]]
+name = "tail_light"
+kind = "led"
+pin = "EXTERNAL_NEOPIXELS"
+pos = [0, 1.45, -1.15]
+rot_deg = [-90, 0, 0]
+size = 0.06
+colour = [1.0, 0.1, 0.05]
+
+# A lamp riding on the right wing, lit by the main eye's red channel. The eyes
+# drive their channels like 360 degree servos (0-6550 us), which tops out at
+# 32.75% duty, so that counts as full brightness.
+[[part]]
+name = "wing_lamp"
+kind = "led"
+anchor = "wing_right"
+pca = 2
+full_duty = 0.3275
+pos = [0, 0.06, 0]
+size = 0.05
+colour = [1.0, 0.2, 0.2]
+
+# A ring of 24 dots around the gear band, lit by the main eye's green channel.
+[[part]]
+name = "band_ring"
+kind = "pixels"
+layout = "ring"
+count = 24
+spacing = 0.3
+pca = 3
+full_duty = 0.3275
+pos = [0, 1.42, 0]
+size = 0.03
+colour = [0.2, 1.0, 0.4]
+
+# A button on the front that drives pin D5 as an input. code.py would read it
+# with digitalio: with Pull.UP it reads False while pressed.
+[[part]]
+name = "front_button"
+kind = "button"
+pin = "D5"
+pos = [0, 1.38, 1.18]
+rot_deg = [90, 0, 0]
+size = 0.07
+colour = [0.9, 0.75, 0.1]

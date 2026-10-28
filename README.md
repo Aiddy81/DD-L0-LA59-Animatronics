@@ -233,6 +233,55 @@ The hardware stand-ins ("shims") are compiled into the exe, so it runs on its ow
 
 [`simulator/docs/custom-shims.md`](simulator/docs/custom-shims.md) is a step-by-step guide: when you need a shim, mirroring the real library's API, the `simhw` calls a shim uses to reach the simulator, worked examples, testing, and when Rust changes are needed.
 
+### Parts file
+
+To show extra hardware on the 3D droid without writing Rust, list it in `simulator/parts.toml`. Copy [`simulator/parts.example.toml`](simulator/parts.example.toml) to start. With no file, the droid looks as it always has.
+
+The file is read when `code.py` starts and again on every restart: **Restart** (R), or saving the file while *Restart when firmware is saved* is on. The log shows `[sim] parts.toml: N parts loaded`. A bad entry (an unknown kind or field, a bad value, a duplicate name) logs a `[sim] parts.toml part N ("name") skipped: …` warning; the other parts still load and the app keeps running. If the whole file isn't valid TOML, the previous parts stay.
+
+Each part is one `[[part]]` entry. Only `name` is required; leave out the rest to use their defaults.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `name` | (required) | Up to 32 letters, digits, `_` or `-`; unique. |
+| `kind` | `"led"` | `"led"` (a glowing sphere), `"pixels"` (a row or ring of dots), `"servo_part"` (a shape turned about a hinge) or `"button"` (a cap you can press with the mouse). |
+| `pca` | none | Follow PCA9685 channel 0-15, like the wings and eyes. An `led` or `pixels` part shows the duty as brightness; a `servo_part` turns to the servo angle (from the pulse width, via `sim.toml` `[servo]`). Sharing a channel with a wing or eye is fine. |
+| `pin` | none | Follow a board pin, e.g. `"D5"`. A `pwmio` duty gives brightness, or for a `servo_part` a pulse at the PWMOut's frequency. A `digitalio` output is on/off. A `button` drives the pin as an input instead: `DigitalInOut.value` reads `False` while pressed with `Pull.UP`, `True` otherwise. |
+| | | With neither `pca` nor `pin`, the part is left to shims (and a button to the mouse). Giving both is an error, and so is `pca` on a button. |
+| `anchor` | `"body"` | The node the part sits on and moves with. `"body"` is the droid itself. `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white` work on both models; other Lola node names (`head`, `antenna_base`, …) only on Lola. On the primitive model, such a part is skipped with a warning. |
+| `pos` | `[0, 0, 0]` | Position relative to the anchor (x right, y up, z forward). The head is about 2.5 across, with its top about 2.1 up. |
+| `rot_deg` | `[0, 0, 0]` | Rotation in degrees about x, y, z. A part's +y points out of the surface it sits on: `[0, 0, -90]` faces right, `[90, 0, 0]` forward, `[-90, 0, 0]` back. |
+| `size` | `0.05` | Radius of an LED, dot or button; half-width of a servo part's shape. |
+| `colour` | `[1, 1, 1]` | RGB 0-1: the LED's colour at full brightness, or the body colour of a servo part or button. |
+| `full_duty` | `1.0` | The duty that counts as full brightness. Use `0.3275` for an LED driven like the eyes (a 360° "servo" with pulses of 0-6550 µs). |
+| `count`, `layout`, `spacing` | `8`, `"row"`, `0.15` | Pixels: how many dots (1-1024), `"row"` along x or `"ring"` around y, and the distance between neighbours. |
+| `shape` | `"box"` | Servo part: `"box"` or `"cylinder"`, reaching along +z from the hinge. |
+| `hinge` | (see meaning) | Servo part, as for the wings. The defaults are `{ neutral_deg = 90, direction = 1.0, gain = 1.0, hinge_axis = [1, 0, 0], min_deg = -90, max_deg = 90 }`. Angle = (servo angle − `neutral_deg`) × `direction` × `gain`, clamped to `min_deg`..`max_deg`. |
+
+For example, a flap on the right side that copies the right wing's servo, and a button on the front wired to `D5`:
+
+```toml
+[[part]]
+name = "side_flap"
+kind = "servo_part"
+pca = 0
+pos = [1.2, 1.45, -0.35]
+rot_deg = [0, 0, -90]
+size = 0.12
+hinge = { neutral_deg = 90, direction = -1.0, gain = 0.45, min_deg = 0, max_deg = 75 }
+
+[[part]]
+name = "front_button"
+kind = "button"
+pin = "D5"
+pos = [0, 1.38, 1.18]
+rot_deg = [90, 0, 0]
+size = 0.07
+colour = [0.9, 0.75, 0.1]
+```
+
+The **PCA9685** panel lists the parts with their source and live value. A spare channel that a part follows is shown under the part's name. Clicking a button part presses it without booping the droid.
+
 ### Tests and CI
 
 `python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a hard shake, a nudge, an idle trigger, repeated nudges and a *boot_sequence* behaviour button. It fails on any traceback, if the boop, attention or angry behaviour doesn't happen, if the State panel's events, tasks, nudge count or timers can't be read, if the behaviour buttons are wrong or don't run, if the wings and motion sensing stall during a white-LED flicker, or if any task step holds the loop longer than `loop_hold_warn_ms` (a small blocking test checks the timing itself). Then it plays every scenario in `simulator/scenarios/` against a fresh run each and fails if any of them doesn't pass. `--scenario NAME` (repeatable) runs only those scenarios. It needs Python 3.11+ (CI uses 3.13); without Python on the host, run it in the dev image: `docker run --rm -v "${PWD}:/workspace" -w /workspace ddl0-sim-dev python3 simulator/tests/headless.py`.

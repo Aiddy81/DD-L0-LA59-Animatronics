@@ -71,9 +71,10 @@ Shims reach the simulator only through the built-in `simhw` module (`import simh
 
 | Call | What it does |
 |---|---|
-| `simhw.set_pca(channel, duty)` | Sets PCA9685 channel `channel` (0-15) to `duty` (0-65535). Channels 0-1 are the wing servos and 2-7 the eye RGB LEDs (mapping in `simulator/sim.toml`); they move the 3D model. Channels 8-15 aren't drawn, but appear in the PCA9685 table once written. |
-| `simhw.set_pwm_pin(pin_name, duty)` | A `pwmio` pin's duty (0-65535). `"EXTERNAL_NEOPIXELS"` is the white LED and lights the model; other pin names are ignored. |
-| `simhw.set_pin(pin_name, value)` | A digital output. `"LED"` (onboard LED) and `"EXTERNAL_POWER"` show in the PCA9685 panel; other pin names are ignored. |
+| `simhw.set_pca(channel, duty)` | Sets PCA9685 channel `channel` (0-15) to `duty` (0-65535). Channels 0-1 are the wing servos and 2-7 the eye RGB LEDs (mapping in `simulator/sim.toml`); they move the 3D model. Channels 8-15 aren't drawn unless a part in `simulator/parts.toml` follows them, and appear in the PCA9685 table once written. |
+| `simhw.set_pwm_pin(pin_name, duty, frequency=500)` | A `pwmio` pin's duty (0-65535) at `frequency` Hz. `"EXTERNAL_NEOPIXELS"` is the white LED and lights the model; any pin can drive a part in `simulator/parts.toml` (see the README's [Parts file](../../README.md#parts-file)). |
+| `simhw.set_pin(pin_name, value)` | A digital output. `"LED"` (onboard LED) and `"EXTERNAL_POWER"` show in the PCA9685 panel; any pin can drive a part in `simulator/parts.toml`. |
+| `simhw.pin_input(pin_name)` | Whether the `button` part on that input pin is pressed, or `None` when no button is on it. The `digitalio` shim uses it so `DigitalInOut.value` reads the button, inverted with `Pull.UP`. |
 | `simhw.accel()` | The next accelerometer reading as `(x, y, z)` in **g** (not m/s²), from the Motion controls (*Nudge*, *Shake*, *Tipped over*, *held z*) or a click on the droid. |
 | `simhw.accel_range(g)` | Tells the simulator the accelerometer's full-scale range in g (2, 4, 8 or 16), so the plot can draw its clip level. Call it when the range is set. The shim still clips the readings itself. |
 | `simhw.play_wav(path, level, looped)` | Plays a WAV file on the PC's speakers at `level` (0.0-1.0), optionally looping. |

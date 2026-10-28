@@ -17,14 +17,15 @@ use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine
 
 use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
-use crate::config::SimConfig;
+use crate::config::{PartCfg, PartKind, PartSource, SimConfig};
 use crate::deploy;
 use crate::dock::{self, Detached, Dock, Pane, PaneAction, Viewer, ViewportRect};
 use crate::editor;
-use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
+use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, PartValue, TaskState};
 use crate::layout::{self, DetachedSave, Layout};
 use crate::overlay::{Overlay, Overlays};
 use crate::palette;
+use crate::parts::Parts;
 use crate::prefs::{Prefs, MAX_WINDOW, MIN_WINDOW};
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, to_color, CameraView, GlowSource, ModelChoice, RoomLight};
@@ -584,6 +585,7 @@ pub struct UiState {
     code_mtime: Option<SystemTime>,
     shims_mtime: Option<SystemTime>,
     sim_toml_mtime: Option<SystemTime>,
+    parts_mtime: Option<SystemTime>,
     last_check: Instant,
     history: VecDeque<Sample>,
     markers: VecDeque<Marker>,
@@ -703,6 +705,7 @@ impl UiState {
         code_mtime: Option<SystemTime>,
         shims_mtime: Option<SystemTime>,
         sim_toml_mtime: Option<SystemTime>,
+        parts_mtime: Option<SystemTime>,
         prefs: &Prefs,
     ) -> Self {
         Self {
@@ -711,6 +714,7 @@ impl UiState {
             code_mtime,
             shims_mtime,
             sim_toml_mtime,
+            parts_mtime,
             last_check: Instant::now(),
             history: VecDeque::new(),
             markers: VecDeque::new(),
@@ -1077,20 +1081,24 @@ fn hot_reload(
     }
     let mtime = firmware_mtime(host.0.code_path());
     let shims = shims_mtime(host.0.shim_dir());
+    // parts.rs reads the parts file again when the restart begins.
+    let parts = file_mtime(&paths.simulator.join(crate::parts::PARTS_FILE));
     let changed = if mtime != ui.code_mtime {
-        Some("firmware")
+        Some(("firmware", "Firmware"))
     } else if shims != ui.shims_mtime {
-        Some("shims")
+        Some(("shims", "Shims"))
+    } else if parts != ui.parts_mtime {
+        Some(("parts", "Parts"))
     } else {
         None
     };
     ui.code_mtime = mtime;
     ui.shims_mtime = shims;
-    if let Some(what) = changed {
+    ui.parts_mtime = parts;
+    if let Some((what, name)) = changed {
         if ui.auto_reload {
             hw().push_line(format!("[sim] {what} changed - restarting"));
             host.0.start();
-            let name = if what == "shims" { "Shims" } else { "Firmware" };
             toasts.push(ToastKind::Info, format!("{name} reloaded"), None);
         }
     }
@@ -1540,7 +1548,7 @@ fn options_group(
     let mut reload = auto_reload;
     if tip(
         row.checkbox(&mut reload, "Restart when firmware is saved"),
-        "Also when a shim in dist\\shims\\ is added, saved or deleted.",
+        "Also when a shim in dist\\shims\\ is added, saved or deleted, or simulator\\parts.toml is saved.",
         None,
     )
     .changed()
@@ -1595,8 +1603,9 @@ fn panels(
     mut host: ResMut<Host>,
     mut model: Option<ResMut<ModelChoice>>,
     mut room: ResMut<RoomLight>,
-    (cfg, mut audio, mut theme, mut overlays): (
+    (cfg, parts, mut audio, mut theme, mut overlays): (
         Res<SimConfig>,
+        Res<Parts>,
         AudioUi,
         ResMut<ActiveTheme>,
         ResMut<Overlays>,
@@ -1790,6 +1799,7 @@ fn panels(
         host: &mut host,
         audio: &mut audio,
         cfg: &cfg,
+        parts: &parts,
         paths: &captures.paths,
         palette,
     };
@@ -2387,6 +2397,7 @@ struct PaneCx<'a> {
     host: &'a mut Host,
     audio: &'a mut AudioUi<'a>,
     cfg: &'a SimConfig,
+    parts: &'a Parts,
     paths: &'a crate::Paths,
     palette: &'a Palette,
 }
@@ -2400,7 +2411,7 @@ fn draw_pane(ui: &mut egui::Ui, pane: Pane, cx: &mut PaneCx) {
         Pane::Viewport => {}
         Pane::Motion => motion_panel(ui, cx.ui),
         Pane::State => state_panel(ui, cx.palette),
-        Pane::Pca => pca_panel(ui, cx.cfg, cx.palette),
+        Pane::Pca => pca_panel(ui, cx.cfg, cx.parts, cx.palette),
         Pane::Board => board_panel(ui, cx.palette),
         Pane::Audio => {
             cx.audio.sounds.wanted = true;
@@ -2510,7 +2521,7 @@ fn motion_panel(side: &mut egui::Ui, state: &mut UiState) {
     }
 }
 
-fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, palette: &Palette) {
+fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, parts: &Parts, palette: &Palette) {
     egui::Grid::new("channels")
         .striped(true)
         .show(side, |grid| {
@@ -2524,8 +2535,15 @@ fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, palette: &Palette) {
                 "R wing", "L wing", "main R", "main G", "main B", "small R", "small G", "small B",
             ];
             for ch in 0..16 {
-                // Spare channels appear once a custom shim writes to them.
-                let name = names.get(ch).copied().unwrap_or("spare");
+                // Spare channels appear once a custom shim writes to them,
+                // named after the part that follows them, if any.
+                let name = names.get(ch).copied().unwrap_or_else(|| {
+                    parts
+                        .0
+                        .iter()
+                        .find(|p| p.pca == Some(ch))
+                        .map_or("spare", |p| p.name.as_str())
+                });
                 if ch >= names.len() && hw().pca_duty[ch].is_none() {
                     continue;
                 }
@@ -2569,6 +2587,68 @@ fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, palette: &Palette) {
         )
         .color(palette.muted),
     );
+    if parts.0.is_empty() {
+        return;
+    }
+    side.add_space(6.0);
+    tip(
+        side.label(egui::RichText::new("Parts").strong()),
+        "From simulator\\parts.toml, read again when code.py restarts",
+        None,
+    );
+    egui::Grid::new("parts").striped(true).show(side, |grid| {
+        for heading in ["name", "value", "kind", "source"] {
+            grid.label(heading);
+        }
+        grid.end_row();
+        let s = hw();
+        for part in &parts.0 {
+            grid.label(&part.name);
+            grid.label(part_value_text(part, s.parts.get(&part.name)));
+            grid.label(part_kind_text(part.kind));
+            grid.label(part_source_text(part));
+            grid.end_row();
+        }
+    });
+}
+
+fn part_kind_text(kind: PartKind) -> &'static str {
+    match kind {
+        PartKind::Led => "led",
+        PartKind::Pixels => "pixels",
+        PartKind::ServoPart => "servo_part",
+        PartKind::Button => "button",
+    }
+}
+
+fn part_source_text(part: &PartCfg) -> String {
+    match part.source() {
+        PartSource::Pca(ch) => format!("ch {ch}"),
+        PartSource::Pin(pin) => format!("pin {pin}"),
+        PartSource::Shim => "shim".to_owned(),
+    }
+}
+
+/// A part's live value as the PCA9685 panel shows it.
+fn part_value_text(part: &PartCfg, value: Option<&PartValue>) -> String {
+    let pct = |x: f32| format!("{:.0}%", x.clamp(0.0, 1.0) * 100.0);
+    match value {
+        Some(PartValue::Level(level)) => pct(*level),
+        Some(PartValue::Rgb([r, g, b])) => format!("R {} G {} B {}", pct(*r), pct(*g), pct(*b)),
+        Some(PartValue::Pixels(pixels)) => {
+            let lit = pixels
+                .iter()
+                .take(part.count)
+                .filter(|c| c.iter().any(|v| *v > 0.0))
+                .count();
+            format!("{lit}/{} lit", part.count)
+        }
+        Some(PartValue::Angle(deg)) => format!("{deg:5.1}°"),
+        Some(PartValue::Pressed(true)) => "pressed".to_owned(),
+        Some(PartValue::Pressed(false)) => "released".to_owned(),
+        None if part.kind == PartKind::Button => "released".to_owned(),
+        None => "-".to_owned(),
+    }
 }
 
 fn log_panel(
@@ -4824,5 +4904,41 @@ mod table_tests {
         for name in layout::BUILTINS {
             assert!(has(Cmd::Layout(name)), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod part_panel_tests {
+    use super::*;
+
+    #[test]
+    fn part_values_read_plainly() {
+        let ring = PartCfg {
+            kind: PartKind::Pixels,
+            count: 4,
+            ..PartCfg::default()
+        };
+        let lit = PartValue::Pixels(vec![[1.0, 0.0, 0.0], [0.0; 3], [0.0, 0.2, 0.0]]);
+        assert_eq!(part_value_text(&ring, Some(&lit)), "2/4 lit");
+        assert_eq!(
+            part_value_text(&ring, Some(&PartValue::Level(0.426))),
+            "43%"
+        );
+        assert_eq!(part_value_text(&ring, None), "-");
+        let button = PartCfg {
+            kind: PartKind::Button,
+            pin: Some("D5".into()),
+            ..PartCfg::default()
+        };
+        assert_eq!(part_value_text(&button, None), "released");
+        assert_eq!(
+            part_value_text(&button, Some(&PartValue::Pressed(true))),
+            "pressed"
+        );
+        assert_eq!(part_source_text(&button), "pin D5");
+        assert_eq!(
+            part_value_text(&ring, Some(&PartValue::Angle(42.0))),
+            " 42.0°"
+        );
     }
 }
