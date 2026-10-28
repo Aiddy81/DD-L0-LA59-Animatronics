@@ -36,6 +36,8 @@ pub struct Prefs {
     pub board_speed: bool,
     pub servo_speed: bool,
     pub auto_reload: bool,
+    /// The Parts panel writes parts.toml after each change.
+    pub parts_autosave: bool,
     /// Which readouts are drawn on the 3D model.
     pub overlay_wings: bool,
     pub overlay_eyes: bool,
@@ -80,6 +82,7 @@ impl Default for Prefs {
             board_speed: true,
             servo_speed: true,
             auto_reload: true,
+            parts_autosave: true,
             overlay_wings: false,
             overlay_eyes: false,
             overlay_led: false,

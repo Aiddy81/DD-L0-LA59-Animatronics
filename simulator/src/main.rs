@@ -13,6 +13,7 @@ mod hw;
 mod layout;
 mod overlay;
 mod palette;
+mod part_edit;
 mod parts;
 mod prefs;
 mod pyhost;
@@ -190,6 +191,7 @@ fn main() {
             theme::ThemePlugin,
             scene::ScenePlugin,
             parts::PartsPlugin,
+            part_edit::PartEditPlugin,
             audio::AudioPlugin,
             capture::CapturePlugin,
             toast::ToastPlugin,

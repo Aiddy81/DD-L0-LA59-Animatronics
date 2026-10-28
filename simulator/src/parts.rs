@@ -21,6 +21,7 @@ use crate::config::{
 use crate::dock::ViewportRect;
 use crate::droid::{lamp_light, lamp_material};
 use crate::hw::{hw, HwState, PartValue, PinValue, PWM_PERIOD_US};
+use crate::part_edit::{press_part, PartEdit};
 use crate::scene::{
     glow_emissive, servo_frame, shine, DroidRoot, Glow, GlowSource, ServoTrack, Side, Wing,
 };
@@ -28,7 +29,7 @@ use crate::scene::{
 /// The parts file, next to sim.toml.
 pub const PARTS_FILE: &str = "parts.toml";
 /// Keeps a runaway file from flooding the model.
-const MAX_PARTS: usize = 64;
+pub(crate) const MAX_PARTS: usize = 64;
 
 /// The parts on the droid. Empty by default, which leaves the model as it is.
 #[derive(Resource, Default, Clone, Debug, PartialEq)]
@@ -40,9 +41,14 @@ pub struct Parts(pub Vec<PartCfg>);
 struct ModelReady;
 
 /// The top entity of one part, a child of the droid's root, so switching
-/// model removes it along with the old root.
+/// model removes it along with the old root. Holds the part's name.
 #[derive(Component)]
-pub struct Part;
+pub struct Part(pub String);
+
+/// The parts file's text as last loaded, or saved by the Parts panel, so an
+/// unchanged file isn't read in again and its warnings show once.
+#[derive(Resource, Default)]
+pub struct PartsFileText(pub Option<String>);
 
 #[derive(Component)]
 struct PartLed {
@@ -91,6 +97,7 @@ pub struct PartsPlugin;
 impl Plugin for PartsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Parts>()
+            .init_resource::<PartsFileText>()
             .init_resource::<PartSlew>()
             .init_resource::<HeldButton>()
             .add_observer(mark_scene_ready)
@@ -117,14 +124,15 @@ impl Plugin for PartsPlugin {
 fn reload_parts(
     paths: Res<crate::Paths>,
     mut parts: ResMut<Parts>,
-    mut seen: Local<(Option<u64>, Option<String>)>,
+    mut text: ResMut<PartsFileText>,
+    mut seen_run: Local<Option<u64>>,
 ) {
     let runs = hw().runs;
-    if seen.0 == Some(runs) {
+    if *seen_run == Some(runs) {
         return;
     }
-    seen.0 = Some(runs);
-    load_parts_file(&paths.simulator.join(PARTS_FILE), &mut parts, &mut seen.1);
+    *seen_run = Some(runs);
+    load_parts_file(&paths.simulator.join(PARTS_FILE), &mut parts, &mut text.0);
     let mut s = hw();
     // A restart since `runs` was read gets its own pass next frame.
     if s.runs == runs {
@@ -299,7 +307,7 @@ fn follow_sources(parts: Res<Parts>, cfg: Res<SimConfig>) {
 
 /// What the simhw part calls need to know about each part: its kind, and
 /// whether it is left to shims (no `pca` or `pin` to follow).
-fn part_kinds(parts: &[PartCfg]) -> HashMap<String, (PartKind, bool)> {
+pub(crate) fn part_kinds(parts: &[PartCfg]) -> HashMap<String, (PartKind, bool)> {
     parts
         .iter()
         .map(|p| (p.name.clone(), (p.kind, p.source() == PartSource::Shim)))
@@ -520,9 +528,10 @@ fn spawn_part(
     cfg: &PartCfg,
 ) {
     let [rx, ry, rz] = cfg.rot_deg.map(f32::to_radians);
+    let pressed_name = cfg.name.clone();
     let part = commands
         .spawn((
-            Part,
+            Part(cfg.name.clone()),
             ChildOf(anchor),
             Transform::from_translation(Vec3::from(cfg.pos)).with_rotation(Quat::from_euler(
                 EulerRot::XYZ,
@@ -532,6 +541,18 @@ fn spawn_part(
             )),
             Visibility::default(),
         ))
+        // In edit mode a press selects the part (and may slide it) and stops
+        // here, so it never reaches the boop on the droid's root.
+        .observe(
+            move |mut press: Trigger<Pointer<Pressed>>,
+                  viewport: Res<ViewportRect>,
+                  mut edit: ResMut<PartEdit>| {
+                if edit.editing && press.button == PointerButton::Primary && viewport.hovered {
+                    press.propagate(false);
+                    press_part(&mut edit, &pressed_name);
+                }
+            },
+        )
         .id();
     let name = cfg.name.clone();
     let colour = Vec3::from(cfg.colour);
@@ -634,10 +655,15 @@ fn spawn_part(
                 // a boop (that observer is on the droid's root). The release is
                 // `release_held_button`'s: the sunken cap may no longer be
                 // under the pointer when the mouse button comes up.
+                // In edit mode the press goes on up to the part, which selects it.
                 .observe(
                     move |mut press: Trigger<Pointer<Pressed>>,
                           viewport: Res<ViewportRect>,
+                          edit: Res<PartEdit>,
                           mut held: ResMut<HeldButton>| {
+                        if edit.editing {
+                            return;
+                        }
                         press.propagate(false);
                         if press.button == PointerButton::Primary && viewport.hovered {
                             set_pressed(&press_name, true);

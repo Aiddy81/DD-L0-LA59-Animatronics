@@ -132,6 +132,7 @@ fn debug_dock() -> DockState<Pane> {
             Pane::Motion,
             Pane::Behaviours,
             Pane::Scenarios,
+            Pane::Parts,
             Pane::Audio,
             Pane::Settings,
         ],
@@ -594,7 +595,7 @@ mod tests {
             assert!(l.detached.is_empty());
         }
         assert_eq!(panes(&builtin("Demo").expect("demo")), [Pane::Viewport]);
-        assert_eq!(panes(&builtin("Debug").expect("debug")).len(), 11);
+        assert_eq!(panes(&builtin("Debug").expect("debug")).len(), 12);
         assert!(builtin("nope").is_none());
     }
 
@@ -671,5 +672,19 @@ mod tests {
         let mut back: Layout = toml::from_str(&text).expect("parses");
         validate(&mut back).expect("valid");
         assert_eq!(l, back);
+    }
+
+    /// Layouts saved before the Parts pane existed still load, without it.
+    #[test]
+    fn layouts_without_the_parts_pane_load() {
+        let mut state = dock::default_layout();
+        let at = state.find_tab(&Pane::Parts).expect("in the default");
+        state.remove_tab(at);
+        let text = toml::to_string(&layout(state)).expect("serialises");
+        assert!(!text.contains("parts"));
+        let mut back: Layout = toml::from_str(&text).expect("parses");
+        validate(&mut back).expect("valid");
+        assert!(!panes(&back).contains(&Pane::Parts));
+        assert!(panes(&builtin("Default").expect("default")).contains(&Pane::Parts));
     }
 }

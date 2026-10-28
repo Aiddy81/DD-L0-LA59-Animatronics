@@ -428,9 +428,15 @@ fn sensor_dir(normal: Option<Vec3>) -> Option<[f32; 3]> {
 /// normal where you clicked, harder the longer you hold. A drag to orbit the
 /// camera that happens to start on it doesn't count. Clicks on any part
 /// bubble up to the model's root, which has this observer.
-fn boop(click: Trigger<Pointer<Click>>, drag: Res<DragDistance>, viewport: Res<ViewportRect>) {
-    // A click on a panel or window drawn over the droid is not a boop.
-    if !viewport.hovered || drag.0 >= 4.0 {
+fn boop(
+    click: Trigger<Pointer<Click>>,
+    drag: Res<DragDistance>,
+    viewport: Res<ViewportRect>,
+    edit: Res<crate::part_edit::PartEdit>,
+) {
+    // A click on a panel or window drawn over the droid is not a boop, and
+    // while parts are being edited clicks are for them.
+    if !viewport.hovered || drag.0 >= 4.0 || edit.editing {
         return;
     }
     let dir = sensor_dir(click.hit.normal).unwrap_or_else(|| crate::hw::hw().nudge_dir);
@@ -683,6 +689,7 @@ pub(crate) struct CamEnv<'w> {
     viewport: Res<'w, ViewportRect>,
     time: Res<'w, Time<Real>>,
     theme: Res<'w, ActiveTheme>,
+    parts: Res<'w, crate::part_edit::PartEdit>,
 }
 
 pub(crate) fn orbit_camera(
@@ -705,7 +712,8 @@ pub(crate) fn orbit_camera(
         // A drag belongs to the 3D view only if it started there: dragging a
         // dock tab across it must not spin the camera, and an orbit may carry
         // on past the view's edge.
-        *grabbed = viewport.hovered;
+        // A press on a part in edit mode slides the part instead.
+        *grabbed = viewport.hovered && !env.parts.sliding();
     }
     if buttons.get_pressed().next().is_none() {
         *grabbed = false;
