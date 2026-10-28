@@ -1,3 +1,26 @@
+# Simulator: UI refresh part 5 — 3D viewport overlays, mini-toolbar, transitions (#80)
+
+Branch: `feature/sim-ui-viewport`, stacked on `feature/sim-ui-palette` (PR #85, not yet merged). PR 5 of 5. No new crates. Room light moves into the mini-toolbar too (user's choice).
+
+- [x] Step a — `overlay.rs` (new): wing angles, eye RGB, white LED duty, accel arrow; egui painter on the 3D view after `orbit_camera`; values from the same helpers as the PCA panel and Plot; palette tokens only; `Cmd::Overlay`, prefs `overlay_*`
+- [x] Step b — mini-toolbar in the Viewport tab (`dock.rs`): Front/Side/Top/Eyes/Reset, Light, Screenshot, Record, Overlays; through `tip`/`Cmd`; Camera and Capture groups leave the main toolbar (3 groups left)
+- [x] Step c — transitions: camera tween in `orbit_camera` (real clock, shortest yaw, a drag/scroll takes over), panel open/close fade (`dock::Fades`), `prefs.animations` (palette + View menu, ✔ in palette), `animation_time = 0` when off
+- [x] Unit tests: overlay rows, projection, tween, fades, prefs round-trip (73 pass, Windows test exe run against `dist\`)
+- [x] README: 3D view toolbar, overlays, camera glide, animation setting; toolbar groups and palette list updated
+- [x] Docker build (locked), `CHECK=1`, `--all-targets` clippy; 7 scenarios pass
+- [x] Captures (SendInput + PrintWindow): overlay values equal the PCA9685 panel on the same frame; Dark/Light/High contrast readable; bar by mouse, by F6 → Tab → Enter, and from the palette (✔ rows); toolbar clicks never boop; camera mid-glide at 120 ms with animations on, already there with them off; panel tick clears and fades; overlays and animations-off survive a restart; Screenshot toast; Light menu
+- [ ] Commit, push, PR (stacked on #85) with #80's Done-when checklist
+- [ ] With a real mouse: watch a panel fade in and out (too quick to catch reliably with window captures), Record start/stop from the bar — user
+
+## Review
+- **Pointers were 52 px low (user spotted it).** Bevy 0.16's `Camera::world_to_viewport` already adds the viewport's offset in the window, and the overlay added the dock tab's offset again. Checked in `bevy_render-0.16.1` and fixed `to_egui`. The check was the arrow's start: the camera looks at that point, so it must sit at the view's centre.
+- **Wing pointers aimed at the hinge**, which on Lola sits at the wing's edge, plus a guessed offset. Anchors are now the size-weighted middle of the part's mesh bounding boxes (`part_centre`), so they land on the shell and follow it as it moves.
+- **Accel arrow showed the held reading**, which a Nudge never changes. It now uses `last_accel`, the value the firmware read and the Plot shows.
+- **Labels overlapped in Top view** (both eyes line up); a label now moves down past any it would cover. The accel label had no plate and was unreadable on the white head.
+- **Mini-toolbar wrapped early:** an `egui::Area` starts from last frame's size, so `horizontal_wrapped` wrapped at its own old width. It now wraps at the view's width.
+- "▾" isn't in egui's bundled fonts (drawn as a box); the menus are plain *Light* / *Overlays*, like *Options*.
+- Clicking a dock tab's title doesn't give it keyboard focus; F6 does (PR 4's design), then Tab reaches the bar.
+
 # Simulator: UI refresh part 4 — command palette and keyboard navigation (#80)
 
 Branch: `feature/sim-ui-palette`, stacked on `feature/sim-ui-docking` (PR #84, not yet merged). PR 4 of 5; no overlays, mini-toolbar or transitions. No new crates.

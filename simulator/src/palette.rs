@@ -17,12 +17,16 @@ const WIDTH: f32 = 520.0;
 const MARGIN: f32 = 32.0;
 
 /// One entry. `group` and `label` are what the filter matches; `keys` is shown
-/// on the right. A disabled row is listed but can't be picked.
+/// on the right. A disabled row is listed but can't be picked. `checked` is
+/// `Some(true)` for an on/off command that is on now, `Some(false)` for one
+/// that is off (nothing drawn), `None` for a command that isn't a toggle; it
+/// is not part of what the filter matches.
 pub struct Row<T> {
     pub group: &'static str,
     pub label: String,
     pub keys: &'static str,
     pub enabled: bool,
+    pub checked: Option<bool>,
     pub item: T,
 }
 
@@ -120,8 +124,22 @@ fn row_ui<T>(ui: &mut egui::Ui, row: &Row<T>, selected: bool) -> egui::Response 
                     .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
             }
             let pad = ui.spacing().button_padding.x;
+            // A gutter for the tick on every row, so the labels stay aligned.
+            let gutter = ui.spacing().icon_width;
+            if row.checked == Some(true) {
+                let c = rect.left_center() + egui::vec2(pad + gutter * 0.5, 0.0);
+                let u = gutter * 0.25;
+                ui.painter().add(egui::Shape::line(
+                    vec![
+                        c + egui::vec2(-u, 0.0),
+                        c + egui::vec2(-u * 0.3, u * 0.8),
+                        c + egui::vec2(u, -u * 0.8),
+                    ],
+                    Stroke::new(1.6, visuals.fg_stroke.color),
+                ));
+            }
             ui.painter().text(
-                rect.left_center() + egui::vec2(pad, 0.0),
+                rect.left_center() + egui::vec2(pad + gutter + pad, 0.0),
                 Align2::LEFT_CENTER,
                 format!("{}: {}", row.group, row.label),
                 TextStyle::Body.resolve(ui.style()),

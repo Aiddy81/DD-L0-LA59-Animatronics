@@ -79,6 +79,105 @@ pub struct Dock {
     pub floats: Vec<FloatSave>,
     /// The tab being dragged, and whether the pointer is outside the window.
     pub tear: TearOff,
+    /// Panels fading in or out.
+    pub fades: Fades,
+}
+
+/// How long a panel's body takes to fade in or out.
+const FADE_SECS: f64 = 0.15;
+
+#[derive(Clone, Copy, Debug)]
+struct Fade {
+    pane: Pane,
+    /// `egui` input time when it began.
+    start: f64,
+    /// Fading out: the pane is still in the dock until the fade is done.
+    out: bool,
+}
+
+impl Fade {
+    fn progress(&self, now: f64) -> f64 {
+        ((now - self.start) / FADE_SECS).clamp(0.0, 1.0)
+    }
+
+    fn opacity(&self, now: f64) -> f32 {
+        let p = self.progress(now);
+        (if self.out { 1.0 - p } else { p }) as f32
+    }
+}
+
+/// The open and close fades running now. A pane not listed is fully opaque.
+#[derive(Clone, Default, Debug)]
+pub struct Fades(Vec<Fade>);
+
+impl Fades {
+    pub fn opacity(&self, pane: Pane, now: f64) -> f32 {
+        self.0
+            .iter()
+            .find(|f| f.pane == pane)
+            .map_or(1.0, |f| f.opacity(now))
+    }
+
+    /// Whether `pane` is on its way out (still docked, but counted as closed).
+    pub fn is_closing(&self, pane: Pane) -> bool {
+        self.0.iter().any(|f| f.pane == pane && f.out)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Forgets `pane`'s fade, e.g. when it changes instantly instead.
+    pub fn remove(&mut self, pane: Pane) {
+        self.0.retain(|f| f.pane != pane);
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// Fades `pane` in, or turns a close in progress round from where it is.
+    pub fn fade_in(&mut self, pane: Pane, now: f64) {
+        self.start(pane, now, false);
+    }
+
+    pub fn fade_out(&mut self, pane: Pane, now: f64) {
+        self.start(pane, now, true);
+    }
+
+    fn start(&mut self, pane: Pane, now: f64, out: bool) {
+        match self.0.iter_mut().find(|f| f.pane == pane) {
+            Some(f) if f.out == out => {}
+            // Reversed from the opacity it has now, so nothing jumps.
+            Some(f) => {
+                let from = f.opacity(now) as f64;
+                let done = if out { 1.0 - from } else { from };
+                *f = Fade {
+                    pane,
+                    start: now - done * FADE_SECS,
+                    out,
+                };
+            }
+            None => self.0.push(Fade {
+                pane,
+                start: now,
+                out,
+            }),
+        }
+    }
+
+    /// Drops the finished fades and returns the panes whose fade-out is
+    /// done, which the caller now removes from the dock.
+    pub fn settle(&mut self, now: f64) -> Vec<Pane> {
+        let closed = self
+            .0
+            .iter()
+            .filter(|f| f.out && f.progress(now) >= 1.0)
+            .map(|f| f.pane)
+            .collect();
+        self.0.retain(|f| f.progress(now) < 1.0);
+        closed
+    }
 }
 
 /// A tab drag that may end outside the main window. Floating panels can't
@@ -456,6 +555,8 @@ pub fn apply_layout(
     }
     dock.state = layout.dock;
     dock.focus = None;
+    // A layout switch is instant; a fade left over would hide a pane of the new one.
+    dock.fades.clear();
     for place in &layout.detached {
         spawn_detached(commands, place, clear);
     }
@@ -599,6 +700,9 @@ fn overlap(pos: IVec2, size: IVec2, monitor: &Monitor) -> IVec2 {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PaneAction {
     Detach,
+    /// The tab's close button was pressed while animations are on: the caller
+    /// fades the pane out and then removes it.
+    Close,
 }
 
 /// Draws the tabs: the 3D view itself is only measured (the camera renders
@@ -607,6 +711,13 @@ pub struct Viewer<'a, F: FnMut(&mut egui::Ui, Pane)> {
     pub draw: F,
     pub viewport: &'a mut ViewportRect,
     pub actions: &'a mut Vec<(Pane, PaneAction)>,
+    /// Draws the mini-toolbar floating over the 3D view.
+    pub bar: &'a mut dyn FnMut(&mut egui::Ui),
+    pub fades: &'a Fades,
+    /// `egui` input time this frame.
+    pub now: f64,
+    /// Whether closing a tab fades it out instead of removing it at once.
+    pub animate: bool,
 }
 
 impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
@@ -629,8 +740,41 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
                 rect.contains(pos) && ctx.layer_id_at(pos) == Some(ui.layer_id())
             });
             self.viewport.ppp = ui.ctx().pixels_per_point();
+            // Its own layer, so the hover test above (and the boop and orbit
+            // that depend on it) is false over the bar and its open menus.
+            let bar = &mut *self.bar;
+            egui::Area::new(egui::Id::new("viewport_bar"))
+                .order(egui::Order::Middle)
+                .pivot(egui::Align2::RIGHT_TOP)
+                .fixed_pos(rect.right_top() + egui::vec2(-8.0, 8.0))
+                .constrain_to(rect)
+                .show(ui.ctx(), |bar_ui| {
+                    // An Area starts from last frame's size, so without this
+                    // the row would wrap at its own old width, not the view's.
+                    bar_ui.set_max_width((rect.width() - 16.0).max(0.0));
+                    bar(bar_ui);
+                });
         } else {
-            (self.draw)(ui, *tab);
+            let opacity = self.fades.opacity(*tab, self.now);
+            if opacity < 1.0 {
+                ui.scope(|faded| {
+                    faded.multiply_opacity(opacity);
+                    (self.draw)(faded, *tab);
+                });
+            } else {
+                (self.draw)(ui, *tab);
+            }
+        }
+    }
+
+    // Asked to close by the user: with animations on the tab stays until its
+    // fade-out is done (`PaneAction::Close`).
+    fn on_close(&mut self, tab: &mut Pane) -> bool {
+        if self.animate && *tab != Pane::Viewport {
+            self.actions.push((*tab, PaneAction::Close));
+            false
+        } else {
+            true
         }
     }
 
@@ -723,6 +867,7 @@ impl Plugin for DockPlugin {
             focus: None,
             floats,
             tear: TearOff::default(),
+            fades: Fades::default(),
         })
         .insert_resource(ViewportRect::default())
         .add_systems(
@@ -755,6 +900,32 @@ mod tests {
         assert_eq!(step_tab(&mut state, 1), Some(forward[0]), "wraps round");
         assert_eq!(step_tab(&mut state, -1), forward.last().copied());
         assert_eq!(step_tab(&mut state, -1), Some(forward[total - 2]));
+    }
+
+    #[test]
+    fn fades_run_and_settle() {
+        let mut fades = Fades::default();
+        assert_eq!(fades.opacity(Pane::Log, 5.0), 1.0);
+        fades.fade_out(Pane::Log, 10.0);
+        assert!(fades.is_closing(Pane::Log));
+        assert_eq!(fades.opacity(Pane::Log, 10.0), 1.0);
+        assert!((fades.opacity(Pane::Log, 10.0 + FADE_SECS / 2.0) - 0.5).abs() < 1e-5);
+        assert!(fades.settle(10.05).is_empty());
+        assert_eq!(fades.settle(10.0 + FADE_SECS), [Pane::Log]);
+        assert!(fades.is_empty());
+    }
+
+    #[test]
+    fn a_reversed_fade_continues_from_where_it_was() {
+        let mut fades = Fades::default();
+        fades.fade_out(Pane::Plot, 0.0);
+        let mid = 0.06;
+        let before = fades.opacity(Pane::Plot, mid);
+        fades.fade_in(Pane::Plot, mid);
+        assert!(!fades.is_closing(Pane::Plot));
+        assert!((fades.opacity(Pane::Plot, mid) - before).abs() < 1e-5);
+        assert_eq!(fades.settle(mid + FADE_SECS), Vec::<Pane>::new());
+        assert!(fades.is_empty());
     }
 
     /// Whether the layout could be saved in the prefs file as TOML.

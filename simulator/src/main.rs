@@ -11,6 +11,7 @@ mod droid;
 mod editor;
 mod hw;
 mod layout;
+mod overlay;
 mod palette;
 mod prefs;
 mod pyhost;
@@ -177,7 +178,10 @@ fn main() {
             &prefs,
         ))
         .insert_resource(audio::AudioMix::new(prefs.volume, prefs.muted))
-        .insert_resource(theme::ActiveTheme::new(prefs.theme, prefs.ui_scale))
+        .insert_resource(
+            theme::ActiveTheme::new(prefs.theme, prefs.ui_scale).with_animations(prefs.animations),
+        )
+        .insert_resource(overlay::Overlays::from_prefs(&prefs))
         .insert_resource(prefs)
         .add_plugins((
             theme::ThemePlugin,
@@ -187,6 +191,7 @@ fn main() {
             toast::ToastPlugin,
             ui::UiPlugin,
             dock::DockPlugin,
+            overlay::OverlayPlugin,
         ))
         .run();
 }

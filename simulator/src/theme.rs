@@ -253,6 +253,8 @@ pub struct ActiveTheme {
     pub resolved: ResolvedTheme,
     pub palette: &'static Palette,
     pub scale: f32,
+    /// Smooth transitions on; off sets egui's animation time to zero.
+    animations: bool,
     /// What the OS currently prefers; used while `choice` is `System`.
     os_dark: bool,
 }
@@ -265,10 +267,25 @@ impl ActiveTheme {
             resolved: ResolvedTheme::Dark,
             palette: &DARK,
             scale: clamp_scale(scale),
+            animations: true,
             os_dark,
         };
         theme.resolve();
         theme
+    }
+
+    /// Starts with animations as saved in the prefs.
+    pub fn with_animations(mut self, on: bool) -> Self {
+        self.animations = on;
+        self
+    }
+
+    pub fn animations(&self) -> bool {
+        self.animations
+    }
+
+    pub fn set_animations(&mut self, on: bool) {
+        self.animations = on;
     }
 
     fn resolve(&mut self) {
@@ -371,7 +388,7 @@ fn apply_theme(
         Option<&Detached>,
     )>,
     theme: Res<ActiveTheme>,
-    mut applied: Local<HashMap<Entity, (ResolvedTheme, f32)>>,
+    mut applied: Local<HashMap<Entity, (ResolvedTheme, f32, bool)>>,
 ) {
     // Windows that are gone must not keep a stale entry, or a reused entity id
     // would be taken for already themed.
@@ -379,12 +396,12 @@ fn apply_theme(
     for (entity, mut context, mut settings, detached) in &mut contexts {
         // Every window has its own scale, so a detached one can be zoomed alone.
         let scale = detached.map_or(theme.scale, |d| d.scale);
-        let wanted = (theme.resolved, scale);
+        let wanted = (theme.resolved, scale, theme.animations);
         if applied.get(&entity) == Some(&wanted) {
             continue;
         }
         let ctx = context.get_mut();
-        apply(ctx, theme.palette, theme.resolved);
+        apply(ctx, theme.palette, theme.resolved, theme.animations);
         // bevy_egui resets pixels-per-point every frame from this setting, so
         // an egui zoom factor would be overwritten; the scale has to live here.
         if settings.scale_factor != scale {
@@ -397,17 +414,20 @@ fn apply_theme(
 }
 
 /// Builds the egui visuals and style for a palette and installs them.
-pub fn apply(ctx: &egui::Context, palette: &Palette, resolved: ResolvedTheme) {
+pub fn apply(ctx: &egui::Context, palette: &Palette, resolved: ResolvedTheme, animations: bool) {
     let egui_theme = resolved.egui_theme();
     ctx.set_theme(egui_theme);
-    ctx.set_style_of(egui_theme, style(palette, resolved));
+    ctx.set_style_of(egui_theme, style(palette, resolved, animations));
 }
 
-fn style(p: &Palette, resolved: ResolvedTheme) -> egui::Style {
+fn style(p: &Palette, resolved: ResolvedTheme, animations: bool) -> egui::Style {
     let mut style = egui::Style {
         visuals: visuals(p, resolved),
         ..egui::Style::default()
     };
+    if !animations {
+        style.animation_time = 0.0;
+    }
     style.spacing.item_spacing = p.item_spacing;
     style.spacing.button_padding = egui::vec2(8.0, 4.0);
     style.spacing.interact_size.y = 24.0;

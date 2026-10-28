@@ -138,25 +138,79 @@ pub struct GlowLight(pub GlowSource);
 #[derive(Resource, Default)]
 pub(crate) struct DragDistance(f32);
 
-#[derive(Component)]
-pub struct OrbitCam {
+/// Where the orbit camera sits.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Pose {
     yaw: f32,
     pitch: f32,
     distance: f32,
     focus: Vec3,
 }
 
+/// A running move between two poses, timed on the real clock.
+#[derive(Clone, Copy)]
+struct Tween {
+    from: Pose,
+    to: Pose,
+    /// Elapsed seconds when the move started.
+    t0: f64,
+    dur: f32,
+}
+
+/// How long a camera preset takes to glide into place.
+const TWEEN_SECS: f32 = 0.45;
+
+#[derive(Component)]
+pub struct OrbitCam {
+    pose: Pose,
+    tween: Option<Tween>,
+}
+
 /// Where the camera looks by default: roughly the droid's chest.
-const HOME_FOCUS: Vec3 = Vec3::new(0.0, 1.05, 0.0);
+pub(crate) const HOME_FOCUS: Vec3 = Vec3::new(0.0, 1.05, 0.0);
 
 impl OrbitCam {
     fn home() -> Self {
         Self {
-            yaw: 0.35,
-            pitch: 0.38,
-            distance: 5.2,
-            focus: HOME_FOCUS,
+            pose: Pose::HOME,
+            tween: None,
         }
+    }
+}
+
+impl Pose {
+    const HOME: Pose = Pose {
+        yaw: 0.35,
+        pitch: 0.38,
+        distance: 5.2,
+        focus: HOME_FOCUS,
+    };
+}
+
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Blends two poses; yaw takes the shorter way round the circle.
+fn lerp_pose(a: Pose, b: Pose, t: f32) -> Pose {
+    use std::f32::consts::{PI, TAU};
+    let t = t.clamp(0.0, 1.0);
+    if t == 0.0 {
+        return a;
+    }
+    if t == 1.0 {
+        return b;
+    }
+    let mut dyaw = (b.yaw - a.yaw).rem_euclid(TAU);
+    if dyaw > PI {
+        dyaw -= TAU;
+    }
+    Pose {
+        yaw: a.yaw + dyaw * t,
+        pitch: a.pitch + (b.pitch - a.pitch) * t,
+        distance: a.distance + (b.distance - a.distance) * t,
+        focus: a.focus.lerp(b.focus, t),
     }
 }
 
@@ -173,7 +227,7 @@ pub enum CameraView {
 /// Mouse state the orbit camera reads; bundled to keep `orbit_camera` within
 /// clippy's argument limit.
 #[derive(SystemParam)]
-struct MouseInput<'w> {
+pub(crate) struct MouseInput<'w> {
     buttons: Res<'w, ButtonInput<MouseButton>>,
     motion: Res<'w, AccumulatedMouseMotion>,
     scroll: Res<'w, AccumulatedMouseScroll>,
@@ -231,7 +285,7 @@ pub struct ModelChoice {
 
 /// Parent of everything that makes up the droid model.
 #[derive(Component)]
-struct DroidRoot;
+pub(crate) struct DroidRoot;
 
 pub struct ScenePlugin;
 
@@ -603,9 +657,18 @@ fn apply_room_light(
     }
 }
 
-fn orbit_camera(
-    viewport: Res<ViewportRect>,
+/// What the camera reads besides the mouse. Its moves run on the real clock
+/// so they ignore sim speed and pause.
+#[derive(SystemParam)]
+pub(crate) struct CamEnv<'w> {
+    viewport: Res<'w, ViewportRect>,
+    time: Res<'w, Time<Real>>,
+    theme: Res<'w, ActiveTheme>,
+}
+
+pub(crate) fn orbit_camera(
     input: MouseInput,
+    env: CamEnv,
     mut cams: Query<(&mut OrbitCam, &mut Transform)>,
     mut drag: ResMut<DragDistance>,
     mut controls: ResMut<crate::capture::ViewControls>,
@@ -617,6 +680,7 @@ fn orbit_camera(
         motion,
         scroll,
     } = input;
+    let viewport = &env.viewport;
     if buttons.get_just_pressed().next().is_some() {
         drag.0 = 0.0;
         // A drag belongs to the 3D view only if it started there: dragging a
@@ -634,61 +698,91 @@ fn orbit_camera(
         .iter()
         .find(|(glow, _)| glow.source() == GlowSource::MainEye)
         .map_or(HOME_FOCUS, |(_, at)| at.translation());
+    let now = env.time.elapsed_secs_f64();
+    let lines = match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
+    };
+    // Any hand on the camera this frame wins over a running glide.
+    let dragging = *grabbed
+        && motion.delta != Vec2::ZERO
+        && (buttons.pressed(MouseButton::Left)
+            || buttons.pressed(MouseButton::Right)
+            || buttons.pressed(MouseButton::Middle));
+    let scrolling = viewport.hovered && lines != 0.0;
     for (mut cam, mut transform) in &mut cams {
         if let Some(view) = preset {
-            apply_view(&mut cam, view, eye_focus);
+            let target = view_pose(view, eye_focus);
+            cam.tween = if env.theme.animations() {
+                Some(Tween {
+                    from: cam.pose,
+                    to: target,
+                    t0: now,
+                    dur: TWEEN_SECS,
+                })
+            } else {
+                cam.pose = target;
+                None
+            };
+        }
+        if dragging || scrolling {
+            cam.tween = None;
+        }
+        if let Some(tween) = cam.tween {
+            let t = ((now - tween.t0) as f32 / tween.dur).clamp(0.0, 1.0);
+            cam.pose = lerp_pose(tween.from, tween.to, smoothstep(t));
+            if t >= 1.0 {
+                cam.tween = None;
+            }
         }
         if *grabbed {
             if buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right) {
-                cam.yaw -= motion.delta.x * 0.006;
-                cam.pitch = (cam.pitch + motion.delta.y * 0.006).clamp(-0.2, 1.45);
+                cam.pose.yaw -= motion.delta.x * 0.006;
+                cam.pose.pitch = (cam.pose.pitch + motion.delta.y * 0.006).clamp(-0.2, 1.45);
             }
             if buttons.pressed(MouseButton::Middle) {
                 let right = transform.right();
                 let up = transform.up();
-                let scale = cam.distance * 0.0015;
-                cam.focus += (-right * motion.delta.x + up * motion.delta.y) * scale;
+                let scale = cam.pose.distance * 0.0015;
+                cam.pose.focus += (-right * motion.delta.x + up * motion.delta.y) * scale;
             }
         }
         if viewport.hovered {
-            let lines = match scroll.unit {
-                MouseScrollUnit::Line => scroll.delta.y,
-                MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
-            };
-            cam.distance = (cam.distance * (1.0 - lines * 0.1)).clamp(1.5, 20.0);
+            cam.pose.distance = (cam.pose.distance * (1.0 - lines * 0.1)).clamp(1.5, 20.0);
         }
-        let rot = Quat::from_euler(EulerRot::YXZ, cam.yaw, -cam.pitch, 0.0);
-        transform.translation = cam.focus + rot * Vec3::new(0.0, 0.0, cam.distance);
-        transform.look_at(cam.focus, Vec3::Y);
+        let p = cam.pose;
+        let rot = Quat::from_euler(EulerRot::YXZ, p.yaw, -p.pitch, 0.0);
+        transform.translation = p.focus + rot * Vec3::new(0.0, 0.0, p.distance);
+        transform.look_at(p.focus, Vec3::Y);
     }
 }
 
-fn apply_view(cam: &mut OrbitCam, view: CameraView, eye_focus: Vec3) {
-    let preset = |yaw, pitch| OrbitCam {
+fn view_pose(view: CameraView, eye_focus: Vec3) -> Pose {
+    let preset = |yaw, pitch| Pose {
         yaw,
         pitch,
         distance: 5.2,
         focus: HOME_FOCUS,
     };
-    *cam = match view {
+    match view {
         CameraView::Front => preset(0.0, 0.15),
         CameraView::Side => preset(std::f32::consts::FRAC_PI_2, 0.15),
         // 1.45 is the pitch clamp used when orbiting.
         CameraView::Top => preset(0.0, 1.45),
-        CameraView::Eyes => OrbitCam {
+        CameraView::Eyes => Pose {
             yaw: 0.0,
             pitch: 0.6,
             distance: 1.6,
             focus: eye_focus,
         },
-        CameraView::Reset => OrbitCam::home(),
-    };
+        CameraView::Reset => Pose::HOME,
+    }
 }
 
 /// Points the 3D camera at the dock's 3D-view rectangle, so the scene renders
 /// only there and egui's panels never sit on top of it. With the tab hidden
 /// there is nothing to draw into, so the camera is switched off.
-fn apply_viewport(
+pub(crate) fn apply_viewport(
     rect: Res<ViewportRect>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut cameras: Query<&mut Camera, With<Camera3d>>,
@@ -745,6 +839,44 @@ mod tests {
                 track.follow(target, DPS * FRAME_S as f32, now)
             })
             .collect()
+    }
+
+    fn pose(yaw: f32) -> Pose {
+        Pose {
+            yaw,
+            pitch: 0.2,
+            distance: 3.0,
+            focus: Vec3::ZERO,
+        }
+    }
+
+    #[test]
+    fn smoothstep_clamps_and_hits_the_ends() {
+        assert_eq!(smoothstep(-1.0), 0.0);
+        assert_eq!(smoothstep(0.0), 0.0);
+        assert_eq!(smoothstep(0.5), 0.5);
+        assert_eq!(smoothstep(1.0), 1.0);
+        assert_eq!(smoothstep(2.0), 1.0);
+    }
+
+    #[test]
+    fn lerp_pose_ends_are_exact() {
+        let (a, b) = (Pose::HOME, pose(1.0));
+        assert_eq!(lerp_pose(a, b, 0.0), a);
+        assert_eq!(lerp_pose(a, b, 1.0), b);
+        assert_eq!(lerp_pose(a, b, -3.0), a);
+        assert_eq!(lerp_pose(a, b, 7.0), b);
+    }
+
+    #[test]
+    fn lerp_pose_yaw_takes_the_short_way() {
+        // 3.0 to -3.0 is 0.28 rad through pi, not 6 rad through 0.
+        let mid = lerp_pose(pose(3.0), pose(-3.0), 0.5);
+        assert!(
+            (mid.yaw.abs() - std::f32::consts::PI).abs() < 1e-4,
+            "{}",
+            mid.yaw
+        );
     }
 
     #[test]
