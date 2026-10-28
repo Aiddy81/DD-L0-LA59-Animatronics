@@ -11,3 +11,7 @@
 
 - **Menus near the window edge get squeezed.** A third-level egui submenu next to the right edge had no room and wrapped every name to a sliver; the user spotted it in a screenshot I had already looked at. Rule: when a capture shows a menu, check it at the edge it actually opens against, and avoid menus nested more than two deep (list items inline instead).
 - **Test the interaction a refactor touches, not just the layout.** Moving the 3D view into a dock tab silently killed orbit and click-to-boop (hover never registered), and it went unnoticed for three steps because captures only checked looks. Rule: after changing how input reaches a view, drag and click it in the running app.
+
+## Simulator UI (PR 5 of #80, Oct 2026)
+
+- **Overlay pointers were off and I hadn't noticed (the user did).** Two causes: an engine call's coordinate space assumed rather than read (`world_to_viewport` already includes the viewport offset), and anchors taken from node origins (a wing's hinge) instead of what is drawn. Rule: check a projection against a point with a known screen position (the camera's look-at point is the view's centre) before trusting it, and anchor labels on the visible geometry, then zoom into the capture to confirm each pointer touches its part.

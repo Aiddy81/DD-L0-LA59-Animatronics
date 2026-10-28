@@ -30,10 +30,17 @@ pub struct Prefs {
     pub theme: ThemeChoice,
     /// egui zoom factor; kept inside theme::SCALE_MIN..=SCALE_MAX on load.
     pub ui_scale: f32,
+    /// Smooth transitions (camera moves, panel fades).
+    pub animations: bool,
     pub strict: bool,
     pub board_speed: bool,
     pub servo_speed: bool,
     pub auto_reload: bool,
+    /// Which readouts are drawn on the 3D model.
+    pub overlay_wings: bool,
+    pub overlay_eyes: bool,
+    pub overlay_led: bool,
+    pub overlay_accel: bool,
     /// The simulator's output volume (0..1) and mute; the firmware's own
     /// mixer level still applies on top.
     pub volume: f32,
@@ -68,10 +75,15 @@ impl Default for Prefs {
             room_light: RoomLight::default(),
             theme: ThemeChoice::default(),
             ui_scale: 1.0,
+            animations: true,
             strict: true,
             board_speed: true,
             servo_speed: true,
             auto_reload: true,
+            overlay_wings: false,
+            overlay_eyes: false,
+            overlay_led: false,
+            overlay_accel: false,
             volume: 1.0,
             muted: false,
             show_firmware: true,
@@ -182,6 +194,17 @@ mod tests {
         assert_eq!(prefs.window_width, MIN_WINDOW);
         assert_eq!(prefs.window_height, MAX_WINDOW);
         assert!(warning.is_none());
+    }
+
+    #[test]
+    fn animations_default_on_and_round_trip() {
+        let (prefs, _) = load_text("anim-missing", "ui_scale = 1.5\n");
+        assert!(prefs.animations);
+        let (prefs, _) = load_text("anim-off", "animations = false\n");
+        assert!(!prefs.animations);
+        let text = toml::to_string(&prefs).expect("serialises");
+        let (again, _) = load_text("anim-again", &text);
+        assert!(!again.animations);
     }
 
     #[test]

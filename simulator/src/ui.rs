@@ -23,6 +23,7 @@ use crate::dock::{self, Detached, Dock, Pane, PaneAction, Viewer, ViewportRect};
 use crate::editor;
 use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
 use crate::layout::{self, DetachedSave, Layout};
+use crate::overlay::{Overlay, Overlays};
 use crate::palette;
 use crate::prefs::{Prefs, MAX_WINDOW, MIN_WINDOW};
 use crate::pyhost::{PyHost, ScenarioRun};
@@ -197,6 +198,10 @@ enum Cmd {
     ServoSpeed,
     LogMode,
     AutoReload,
+    /// Show or hide one readout drawn on the 3D model.
+    Overlay(Overlay),
+    /// Smooth transitions on or off.
+    Animations,
     /// True for the Lola glTF model, false for the primitive shapes.
     Model(bool),
     Deploy,
@@ -238,6 +243,7 @@ impl Shortcut {
             Some(Cmd::TogglePane(pane)) => Cow::Borrowed(pane.title()),
             Some(Cmd::Theme(choice)) => Cow::Borrowed(choice.label()),
             Some(Cmd::Light(light)) => Cow::Borrowed(light.label()),
+            Some(Cmd::Overlay(overlay)) => Cow::Owned(format!("Overlay: {}", overlay.label())),
             Some(Cmd::Speed(i)) => SPEED_PRESETS
                 .get(i)
                 .map_or(Cow::Borrowed(""), |s| Cow::Owned(format!("{s}x"))),
@@ -365,6 +371,19 @@ const SHORTCUTS: &[Shortcut] = &[
     action("Options", "Servo speed limit", Cmd::ServoSpeed),
     action("Options", "log_mode on the simulated drive", Cmd::LogMode),
     action("Options", "Restart when firmware is saved", Cmd::AutoReload),
+    action("View", "Overlay: wing angles", Cmd::Overlay(Overlay::Wings)),
+    action("View", "Overlay: eye colours", Cmd::Overlay(Overlay::Eyes)),
+    action(
+        "View",
+        "Overlay: white LED duty",
+        Cmd::Overlay(Overlay::Led),
+    ),
+    action(
+        "View",
+        "Overlay: accelerometer arrow",
+        Cmd::Overlay(Overlay::Accel),
+    ),
+    action("View", "Animations", Cmd::Animations),
     action("Options", "Use the Lola model", Cmd::Model(true)),
     action("Options", "Use the primitive model", Cmd::Model(false)),
     action("Panel", "", Cmd::TogglePane(Pane::Motion)),
@@ -762,18 +781,21 @@ type WindowState<'w, 's> = (
     Res<'w, Dock>,
 );
 
+type SavedState<'w> = (
+    Option<Res<'w, ModelChoice>>,
+    Res<'w, RoomLight>,
+    Res<'w, AudioMix>,
+    Res<'w, ActiveTheme>,
+    Res<'w, Overlays>,
+);
+
 /// Writes the preferences when they change (checked once a second, so a drag
 /// on a panel edge isn't a write per frame, and building the layouts to
 /// compare isn't a per-frame cost) and once more on exit. Runs in `Last` so
 /// the AppExit event is still readable.
 fn save_prefs(
     ui: Res<UiState>,
-    (model, room, mix, theme): (
-        Option<Res<ModelChoice>>,
-        Res<RoomLight>,
-        Res<AudioMix>,
-        Res<ActiveTheme>,
-    ),
+    (model, room, mix, theme, overlays): SavedState,
     (windows, detached, dock): WindowState,
     mut saved: ResMut<Prefs>,
     paths: Res<crate::Paths>,
@@ -826,10 +848,15 @@ fn save_prefs(
         room_light: *room,
         theme: theme.choice,
         ui_scale: theme.scale,
+        animations: theme.animations(),
         strict,
         board_speed,
         servo_speed,
         auto_reload: ui.auto_reload,
+        overlay_wings: overlays.get(Overlay::Wings),
+        overlay_eyes: overlays.get(Overlay::Eyes),
+        overlay_led: overlays.get(Overlay::Led),
+        overlay_accel: overlays.get(Overlay::Accel),
         volume: mix.volume,
         muted: mix.muted,
         show_firmware: ui.show_firmware,
@@ -857,7 +884,7 @@ fn save_prefs(
     }
 }
 
-fn servo_angle(cfg: &SimConfig, channel: usize) -> Option<f32> {
+pub(crate) fn servo_angle(cfg: &SimConfig, channel: usize) -> Option<f32> {
     let pulse = hw().pulse_us(channel)?;
     (pulse > 0.0).then(|| cfg.servo.angle_for_pulse(pulse))
 }
@@ -890,7 +917,7 @@ fn channel_view(cfg: &SimConfig, ch: usize) -> ChannelView {
 /// Colour swatch of an eye's duty-cycle RGB, scaled so the peak duty is full
 /// brightness (the raw duty tops out near a third, which would look dim).
 fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3, outline: Color32) -> egui::Response {
-    let scaled = (duty_rgb / EYE_PEAK_DUTY).clamp(Vec3::ZERO, Vec3::ONE);
+    let scaled = eye_scaled(duty_rgb);
     // egui::Rgba is linear; converting to Color32 applies the sRGB gamma.
     let colour = Color32::from(egui::Rgba::from_rgb(scaled.x, scaled.y, scaled.z));
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
@@ -902,12 +929,29 @@ fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3, outline: Color32) -> egui::Resp
         Stroke::new(1.0, outline),
         egui::StrokeKind::Inside,
     );
-    response.on_hover_text(format!(
+    response.on_hover_text(eye_rgb_text(duty_rgb))
+}
+
+/// An eye's duty-cycle RGB as a fraction of the peak duty.
+fn eye_scaled(duty_rgb: Vec3) -> Vec3 {
+    (duty_rgb / EYE_PEAK_DUTY).clamp(Vec3::ZERO, Vec3::ONE)
+}
+
+/// The eye readout shared by the PCA9685 panel's swatch tooltip and the 3D
+/// view's overlay.
+pub(crate) fn eye_rgb_text(duty_rgb: Vec3) -> String {
+    let scaled = eye_scaled(duty_rgb);
+    format!(
         "R {:.0}%  G {:.0}%  B {:.0}% of peak",
         scaled.x * 100.0,
         scaled.y * 100.0,
         scaled.z * 100.0
-    ))
+    )
+}
+
+/// The white LED readout shared by the PCA9685 panel and the 3D overlay.
+pub(crate) fn white_led_text(duty: u16) -> String {
+    format!("White LED duty {:.1}%", duty as f32 / 655.35)
 }
 
 fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
@@ -1110,15 +1154,13 @@ impl Captures<'_, '_> {
     }
 }
 
-const TOOLBAR_GROUPS: usize = 5;
+const TOOLBAR_GROUPS: usize = 3;
 const GROUP_RUN: usize = 0;
 const GROUP_SPEED: usize = 1;
-const GROUP_CAMERA: usize = 2;
-const GROUP_CAPTURE: usize = 3;
-const GROUP_OPTIONS: usize = 4;
+const GROUP_OPTIONS: usize = 2;
 /// Which toolbar group collapses into a menu first when the window is narrow.
 /// Run is never listed, so it always stays inline.
-const COLLAPSE_ORDER: [usize; 4] = [GROUP_OPTIONS, GROUP_CAPTURE, GROUP_CAMERA, GROUP_SPEED];
+const COLLAPSE_ORDER: [usize; 2] = [GROUP_OPTIONS, GROUP_SPEED];
 /// Menu-button width assumed until a collapsed group has been drawn once.
 const DEFAULT_MENU_WIDTH: f32 = 80.0;
 /// Room kept for the More button.
@@ -1327,75 +1369,132 @@ fn speed_group(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>) {
     });
 }
 
-fn camera_group(row: &mut egui::Ui, room: RoomLight, cmds: &mut Vec<Cmd>) {
-    row.horizontal(|views| {
-        views.label("View");
+/// The mini-toolbar floating over the 3D view: camera views, room light,
+/// capture and overlays. Pushes commands like every other control, and greys
+/// them by the same `cmd_enabled` the main toolbar uses.
+fn viewport_bar(
+    ui: &mut egui::Ui,
+    en: &Enabled,
+    room: RoomLight,
+    recording: bool,
+    overlays: &Overlays,
+    cmds: &mut Vec<Cmd>,
+) {
+    fn button(
+        ui: &mut egui::Ui,
+        en: &Enabled,
+        cmds: &mut Vec<Cmd>,
+        label: &str,
+        hint: &str,
+        cmd: Cmd,
+    ) {
+        let resp = ui.add_enabled(cmd_enabled(cmd, en), egui::Button::new(label));
+        if tip(resp, hint, Some(cmd)).clicked() {
+            cmds.push(cmd);
+        }
+    }
+    ui.horizontal_wrapped(|ui| {
         for (label, view) in [
             ("Front", CameraView::Front),
             ("Side", CameraView::Side),
             ("Top", CameraView::Top),
         ] {
-            if tip(
-                views.button(label),
+            button(
+                ui,
+                en,
+                cmds,
+                label,
                 &format!("Look at the droid from the {}", label.to_lowercase()),
-                None,
-            )
-            .clicked()
-            {
-                cmds.push(Cmd::Camera(view));
-            }
-        }
-        if tip(views.button("Eyes"), "Close-up of the eyes", None).clicked() {
-            cmds.push(Cmd::Camera(CameraView::Eyes));
-        }
-        if tip(views.button("Reset"), "Back to the starting view", None).clicked() {
-            cmds.push(Cmd::Camera(CameraView::Reset));
-        }
-    });
-    row.separator();
-    row.horizontal(|lights| {
-        lights.label("Light").on_hover_text(
-            "Room lighting, to judge how bright the eyes and white LED look in a dim room",
-        );
-        let mut light = room;
-        for choice in RoomLight::ALL {
-            tip(
-                lights.selectable_value(&mut light, choice, choice.label()),
-                &format!("{} room lighting", choice.label()),
-                None,
+                Cmd::Camera(view),
             );
         }
-        // Only on a real change, so the lights aren't reset every frame.
-        if light != room {
-            cmds.push(Cmd::Light(light));
-        }
+        button(
+            ui,
+            en,
+            cmds,
+            "Eyes",
+            "Close-up of the eyes",
+            Cmd::Camera(CameraView::Eyes),
+        );
+        button(
+            ui,
+            en,
+            cmds,
+            "Reset",
+            "Back to the starting view",
+            Cmd::Camera(CameraView::Reset),
+        );
+        ui.separator();
+        let light = ui.menu_button("Light", |m| {
+            for choice in RoomLight::ALL {
+                let cmd = Cmd::Light(choice);
+                let resp = m.add_enabled(
+                    cmd_enabled(cmd, en),
+                    egui::SelectableLabel::new(room == choice, choice.label()),
+                );
+                if tip(
+                    resp,
+                    &format!("{} room lighting", choice.label()),
+                    Some(cmd),
+                )
+                .clicked()
+                {
+                    cmds.push(cmd);
+                    m.close_menu();
+                }
+            }
+        });
+        tip(
+            light.response,
+            "Room lighting, to judge how bright the eyes and white LED look in a dim room",
+            None,
+        );
+        ui.separator();
+        button(
+            ui,
+            en,
+            cmds,
+            "📷 Screenshot",
+            "Save a PNG of the window to the captures folder next to the exe",
+            Cmd::Screenshot,
+        );
+        button(
+            ui,
+            en,
+            cmds,
+            if recording {
+                "⏹ Stop recording"
+            } else {
+                "⏺ Record"
+            },
+            "Save a PNG every 0.1 s, up to 30 s, for making a GIF",
+            Cmd::Record,
+        );
+        ui.separator();
+        let menu = ui.menu_button("Overlays", |m| {
+            for overlay in Overlay::ALL {
+                let cmd = Cmd::Overlay(overlay);
+                let mut on = overlays.get(overlay);
+                let resp = m.add_enabled(
+                    cmd_enabled(cmd, en),
+                    egui::Checkbox::new(&mut on, capitalised(overlay.label())),
+                );
+                if tip(resp, "Show this readout over the droid", Some(cmd)).changed() {
+                    cmds.push(cmd);
+                }
+            }
+        });
+        tip(menu.response, "Readouts drawn over the droid", None);
     });
 }
 
-fn capture_group(row: &mut egui::Ui, recording: bool, cmds: &mut Vec<Cmd>) {
-    if tip(
-        row.button("📷 Screenshot"),
-        "Save a PNG of the window to the captures folder next to the exe",
-        None,
-    )
-    .clicked()
-    {
-        cmds.push(Cmd::Screenshot);
-    }
-    let record_label = if recording {
-        "⏹ Stop recording"
-    } else {
-        "⏺ Record"
-    };
-    if tip(
-        row.button(record_label),
-        "Save a PNG every 0.1 s, up to 30 s, for making a GIF",
-        None,
-    )
-    .clicked()
-    {
-        cmds.push(Cmd::Record);
-    }
+/// `text` with its first letter upper-cased, for menu entries.
+fn capitalised(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// `model` is whether the Lola glTF model is in use, or None where there is no choice to make.
@@ -1496,7 +1595,12 @@ fn panels(
     mut host: ResMut<Host>,
     mut model: Option<ResMut<ModelChoice>>,
     mut room: ResMut<RoomLight>,
-    (cfg, mut audio, mut theme): (Res<SimConfig>, AudioUi, ResMut<ActiveTheme>),
+    (cfg, mut audio, mut theme, mut overlays): (
+        Res<SimConfig>,
+        AudioUi,
+        ResMut<ActiveTheme>,
+        ResMut<Overlays>,
+    ),
     mut captures: Captures,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else {
@@ -1559,20 +1663,6 @@ fn panels(
                     "⏩ Speed",
                     "How fast code.py's clock runs",
                     |g| speed_group(g, &en, &mut cmds),
-                );
-                groups.show(
-                    row,
-                    GROUP_CAMERA,
-                    "🎥 Camera",
-                    "Camera views and room light",
-                    |g| camera_group(g, *room, &mut cmds),
-                );
-                groups.show(
-                    row,
-                    GROUP_CAPTURE,
-                    "📷 Capture",
-                    "Save a screenshot or record frames",
-                    |g| capture_group(g, captures.controls.is_recording(), &mut cmds),
                 );
                 groups.show(
                     row,
@@ -1642,6 +1732,7 @@ fn panels(
                             theme.choice,
                             theme.scale,
                             &mut ui.scale_drag,
+                            theme.animations(),
                             &mut cmds,
                         )
                     });
@@ -1703,15 +1794,34 @@ fn panels(
         palette,
     };
     let mut actions = Vec::new();
+    let now = ctx.input(|i| i.time);
+    let animate = theme.animations();
+    // A copy, so the viewer doesn't hold the dock resource while the dock is drawn.
+    let fades = captures.dock.fades.clone();
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |area| {
             let style = dock::dock_style(area.style().as_ref(), palette);
             let bounds = area.max_rect();
+            let recording = captures.controls.is_recording();
+            let mut bar = |bar_ui: &mut egui::Ui| {
+                egui::Frame::NONE
+                    .fill(palette.panel)
+                    .stroke(Stroke::new(palette.stroke_width, palette.border))
+                    .corner_radius(palette.rounding)
+                    .inner_margin(4.0)
+                    .show(bar_ui, |f| {
+                        viewport_bar(f, &en, *room, recording, &overlays, &mut cmds)
+                    });
+            };
             let mut viewer = Viewer {
                 draw: |pane_ui, pane| draw_pane(pane_ui, pane, &mut cx),
                 viewport: &mut captures.viewport,
                 actions: &mut actions,
+                bar: &mut bar,
+                fades: &fades,
+                now,
+                animate,
             };
             if let Some(focus) = captures.dock.focus.as_mut() {
                 egui_dock::DockArea::new(focus)
@@ -1736,6 +1846,23 @@ fn panels(
     if captures.dock.focus.is_none() {
         captures.dock.floats = dock::read_floats(ctx, &captures.dock.state);
     }
+    // Tab close buttons ask for a fade-out; the pane goes once it is done.
+    for (pane, _) in actions.iter().filter(|(_, a)| *a == PaneAction::Close) {
+        set_pane_shown(
+            &mut captures.dock,
+            &detached,
+            &mut captures.commands,
+            *pane,
+            false,
+            Some(now),
+        );
+    }
+    for pane in captures.dock.fades.settle(now) {
+        dock::set_shown(&mut captures.dock.state, pane, false);
+    }
+    if !captures.dock.fades.is_empty() {
+        ctx.request_repaint();
+    }
 
     // Run after the dock is drawn: a command can edit the layout it was drawn from.
     // A floated panel opens near the middle; egui_dock sizes the window at 0.8 of this.
@@ -1755,6 +1882,7 @@ fn panels(
             prefs: captures.prefs.reborrow(),
             paths: &captures.paths,
             room: room.reborrow(),
+            overlays: overlays.reborrow(),
             model: model.as_mut().map(|m| m.reborrow()),
             theme: theme.reborrow(),
             detached: &detached,
@@ -1878,6 +2006,7 @@ fn panels(
             prefs: captures.prefs.reborrow(),
             paths: &captures.paths,
             room: room.reborrow(),
+            overlays: overlays.reborrow(),
             model: model.as_mut().map(|m| m.reborrow()),
             theme: theme.reborrow(),
             detached: &detached,
@@ -1930,6 +2059,7 @@ struct CmdCx<'a, 'w, 's> {
     prefs: Mut<'a, Prefs>,
     paths: &'a crate::Paths,
     room: Mut<'a, RoomLight>,
+    overlays: Mut<'a, Overlays>,
     model: Option<Mut<'a, ModelChoice>>,
     theme: Mut<'a, ActiveTheme>,
     detached: &'a [(Entity, Pane)],
@@ -1967,6 +2097,12 @@ impl CmdCx<'_, '_, '_> {
         )
     }
 
+    /// The time to start a panel fade at, or `None` with animations off (the
+    /// panel then opens or closes at once).
+    fn fade_now(&self) -> Option<f64> {
+        self.theme.animations().then(|| self.ctx.input(|i| i.time))
+    }
+
     fn apply_layout(&mut self, action: LayoutAction) {
         let mut lcx = LayoutCx {
             dock: &mut *self.dock,
@@ -1998,15 +2134,26 @@ impl CmdCx<'_, '_, '_> {
                 shake(dir);
             }
             Cmd::ToggleHelp => {
-                toggle_pane(self.dock, self.detached, self.commands, Pane::Shortcuts)
+                let fade = self.fade_now();
+                toggle_pane(
+                    self.dock,
+                    self.detached,
+                    self.commands,
+                    Pane::Shortcuts,
+                    fade,
+                )
             }
-            Cmd::CloseHelp => set_pane_shown(
-                self.dock,
-                self.detached,
-                self.commands,
-                Pane::Shortcuts,
-                false,
-            ),
+            Cmd::CloseHelp => {
+                let fade = self.fade_now();
+                set_pane_shown(
+                    self.dock,
+                    self.detached,
+                    self.commands,
+                    Pane::Shortcuts,
+                    false,
+                    fade,
+                )
+            }
             Cmd::Speed(i) => {
                 if let Some(&speed) = SPEED_PRESETS.get(i) {
                     hw().set_speed(speed);
@@ -2035,6 +2182,11 @@ impl CmdCx<'_, '_, '_> {
             }
             Cmd::LogMode => toggle_log_mode(&self.paths.fs),
             Cmd::AutoReload => self.ui.auto_reload = !self.ui.auto_reload,
+            Cmd::Overlay(overlay) => self.overlays.toggle(overlay),
+            Cmd::Animations => {
+                let on = !self.theme.animations();
+                self.theme.set_animations(on);
+            }
             Cmd::Model(use_gltf) => {
                 // Only touch the resource on a real change, so the model isn't rebuilt every frame.
                 if let Some(model) = self.model.as_mut() {
@@ -2047,7 +2199,10 @@ impl CmdCx<'_, '_, '_> {
                 let fw_dir = self.paths.code.parent().unwrap_or(Path::new("."));
                 self.ui.deploy = open_deploy(fw_dir);
             }
-            Cmd::TogglePane(pane) => toggle_pane(self.dock, self.detached, self.commands, pane),
+            Cmd::TogglePane(pane) => {
+                let fade = self.fade_now();
+                toggle_pane(self.dock, self.detached, self.commands, pane, fade)
+            }
             Cmd::Theme(choice) => {
                 if self.theme.choice != choice {
                     self.theme.set_choice(choice);
@@ -2072,7 +2227,8 @@ impl CmdCx<'_, '_, '_> {
             }
             Cmd::ClosePanel => {
                 if let Some(pane) = focused_pane(self.dock) {
-                    set_pane_shown(self.dock, self.detached, self.commands, pane, false);
+                    let fade = self.fade_now();
+                    set_pane_shown(self.dock, self.detached, self.commands, pane, false, fade);
                 }
             }
             Cmd::Palette => palette::open(self.ctx),
@@ -2151,6 +2307,23 @@ fn detach_pane(
     }
 }
 
+/// Whether an on/off command is on now, or `None` for one that isn't a toggle;
+/// the palette ticks the ones that are on. `options` is the hardware toggles'
+/// (strict, board speed, servo speed), read once for all the rows.
+fn cmd_checked(cmd: Cmd, cx: &CmdCx, options: (bool, bool, bool)) -> Option<bool> {
+    Some(match cmd {
+        Cmd::Animations => cx.theme.animations(),
+        Cmd::Overlay(overlay) => cx.overlays.get(overlay),
+        Cmd::Strict => options.0,
+        Cmd::BoardSpeed => options.1,
+        Cmd::ServoSpeed => options.2,
+        Cmd::AutoReload => cx.ui.auto_reload,
+        Cmd::Focus => cx.dock.focus.is_some(),
+        Cmd::TogglePane(pane) => pane_shown(cx.dock, cx.detached, pane),
+        _ => return None,
+    })
+}
+
 /// While this window's palette is open, builds its rows from the shortcut
 /// table plus the layouts, draws it and queues what was picked.
 fn palette_step(cx: &mut CmdCx, detached_window: bool, cmds: &mut Vec<Cmd>, palette: &Palette) {
@@ -2158,6 +2331,10 @@ fn palette_step(cx: &mut CmdCx, detached_window: bool, cmds: &mut Vec<Cmd>, pale
         return;
     }
     let en = cx.enabled(detached_window);
+    let options = {
+        let s = hw();
+        (s.strict, s.board_speed, s.servo_speed)
+    };
     let mut rows: Vec<palette::Row<PaletteItem>> = SHORTCUTS
         .iter()
         .filter_map(|row| {
@@ -2167,6 +2344,7 @@ fn palette_step(cx: &mut CmdCx, detached_window: bool, cmds: &mut Vec<Cmd>, pale
                 label: row.label().into_owned(),
                 keys: row.keys,
                 enabled: cmd_enabled(cmd, &en),
+                checked: cmd_checked(cmd, cx, options),
                 item: PaletteItem::Cmd(cmd),
             })
         })
@@ -2176,6 +2354,7 @@ fn palette_step(cx: &mut CmdCx, detached_window: bool, cmds: &mut Vec<Cmd>, pale
         label: name.clone(),
         keys: "",
         enabled: true,
+        checked: None,
         item: PaletteItem::Layout(LayoutAction::User(name.clone())),
     }));
     if cx
@@ -2191,6 +2370,7 @@ fn palette_step(cx: &mut CmdCx, detached_window: bool, cmds: &mut Vec<Cmd>, pale
         label: name.clone(),
         keys: "",
         enabled: true,
+        checked: None,
         item: PaletteItem::Layout(LayoutAction::Import(path.clone())),
     }));
     match palette::show(cx.ctx, &rows, palette) {
@@ -2375,10 +2555,7 @@ fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, palette: &Palette) {
         });
     {
         let s = hw();
-        side.label(format!(
-            "White LED duty {:.1}%",
-            s.white_duty as f32 / 655.35
-        ));
+        side.label(white_led_text(s.white_duty));
         side.label(format!(
             "Onboard LED {}   External power {}",
             if s.onboard_led { "on" } else { "off" },
@@ -2618,19 +2795,24 @@ fn shortcuts_window(win: &mut egui::Ui) {
     );
 }
 
-/// Whether `pane` is open, docked or in a window of its own.
+/// Whether `pane` is open, docked or in a window of its own. A docked pane
+/// fading out already counts as closed.
 fn pane_shown(dock: &Dock, detached: &[(Entity, Pane)], pane: Pane) -> bool {
-    detached.iter().any(|&(_, p)| p == pane) || dock::is_shown(&dock.state, pane)
+    detached.iter().any(|&(_, p)| p == pane)
+        || (dock::is_shown(&dock.state, pane) && !dock.fades.is_closing(pane))
 }
 
 /// Opens or closes `pane` wherever it lives. Closing a detached pane closes
 /// its window rather than docking it back; a pane never exists in both places.
+/// With `fade` (the time to start at) a docked pane fades in or out; without
+/// it the change is instant. Detached windows are always instant.
 fn set_pane_shown(
     dock: &mut Dock,
     detached: &[(Entity, Pane)],
     commands: &mut Commands,
     pane: Pane,
     show: bool,
+    fade: Option<f64>,
 ) {
     if let Some(&(window, _)) = detached.iter().find(|&&(_, p)| p == pane) {
         if !show {
@@ -2638,12 +2820,32 @@ fn set_pane_shown(
         }
         return;
     }
-    dock::set_shown(&mut dock.state, pane, show);
+    let Some(now) = fade.filter(|_| pane != Pane::Viewport) else {
+        dock.fades.remove(pane);
+        dock::set_shown(&mut dock.state, pane, show);
+        return;
+    };
+    if show {
+        let was_shown = dock::is_shown(&dock.state, pane);
+        dock::set_shown(&mut dock.state, pane, true);
+        // Also turns a close in progress back round.
+        if !was_shown || dock.fades.is_closing(pane) {
+            dock.fades.fade_in(pane, now);
+        }
+    } else if dock::is_shown(&dock.state, pane) {
+        dock.fades.fade_out(pane, now);
+    }
 }
 
-fn toggle_pane(dock: &mut Dock, detached: &[(Entity, Pane)], commands: &mut Commands, pane: Pane) {
+fn toggle_pane(
+    dock: &mut Dock,
+    detached: &[(Entity, Pane)],
+    commands: &mut Commands,
+    pane: Pane,
+    fade: Option<f64>,
+) {
     let show = !pane_shown(dock, detached, pane);
-    set_pane_shown(dock, detached, commands, pane, show);
+    set_pane_shown(dock, detached, commands, pane, show, fade);
 }
 
 /// Whether the widget with keyboard focus is a text field (a DragValue being
@@ -2974,6 +3176,7 @@ fn appearance_controls(
     choice: ThemeChoice,
     scale: f32,
     scale_drag: &mut Option<f32>,
+    animations: bool,
     cmds: &mut Vec<Cmd>,
 ) -> Option<f32> {
     row.label("Theme");
@@ -3018,6 +3221,16 @@ fn appearance_controls(
     {
         *scale_drag = None;
         cmds.push(Cmd::ScaleReset);
+    }
+    let mut animated = animations;
+    if tip(
+        row.checkbox(&mut animated, "Animations"),
+        "Smooth camera moves and panel fades",
+        Some(Cmd::Animations),
+    )
+    .changed()
+    {
+        cmds.push(Cmd::Animations);
     }
     if picked != choice {
         cmds.push(Cmd::Theme(picked));
@@ -4601,6 +4814,9 @@ mod table_tests {
         }
         for light in RoomLight::ALL {
             assert!(has(Cmd::Light(light)), "{light:?}");
+        }
+        for overlay in Overlay::ALL {
+            assert!(has(Cmd::Overlay(overlay)), "{overlay:?}");
         }
         for i in 0..SPEED_PRESETS.len() {
             assert!(has(Cmd::Speed(i)), "speed {i}");
