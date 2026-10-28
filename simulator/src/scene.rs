@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::SimConfig;
 use crate::hw::hw;
+use crate::theme::ActiveTheme;
 use crate::Paths;
 
 pub const MODEL_FILE: &str = "droid.glb";
@@ -200,12 +201,14 @@ impl RoomLight {
         }
     }
 
-    /// (ambient brightness, overhead lamp lux, background colour)
-    fn levels(self) -> (f32, f32, Color) {
+    /// (ambient brightness, overhead lamp lux, background brightness factor).
+    /// The factor scales the theme's scene background, so Dim and Dark stay
+    /// darker than Bright in every theme.
+    fn levels(self) -> (f32, f32, f32) {
         match self {
-            RoomLight::Bright => (250.0, 4_000.0, Color::srgb(0.07, 0.08, 0.1)),
-            RoomLight::Dim => (25.0, 300.0, Color::srgb(0.025, 0.028, 0.035)),
-            RoomLight::Dark => (0.0, 0.0, Color::srgb(0.004, 0.004, 0.006)),
+            RoomLight::Bright => (250.0, 4_000.0, 1.0),
+            RoomLight::Dim => (25.0, 300.0, 0.36),
+            RoomLight::Dark => (0.0, 0.0, 0.06),
         }
     }
 }
@@ -213,6 +216,10 @@ impl RoomLight {
 /// The room's overhead lamp, dimmed by `RoomLight`.
 #[derive(Component)]
 struct RoomLamp;
+
+/// The floor plane's material, so a theme change can recolour it.
+#[derive(Resource)]
+struct FloorMaterial(Handle<StandardMaterial>);
 
 /// Which droid model is shown. Switching it swaps the model live.
 #[derive(Resource)]
@@ -247,7 +254,8 @@ impl Plugin for ScenePlugin {
                     adopt_glow_materials,
                     (slew_servos, drive_wings).chain(),
                     drive_glow,
-                    apply_room_light.run_if(resource_changed::<RoomLight>),
+                    apply_room_light
+                        .run_if(resource_changed::<RoomLight>.or(resource_changed::<ActiveTheme>)),
                     orbit_camera,
                 ),
             );
@@ -261,6 +269,7 @@ fn setup(
     paths: Res<Paths>,
     cfg: Res<SimConfig>,
     prefs: Option<Res<crate::prefs::Prefs>>,
+    theme: Res<ActiveTheme>,
 ) {
     let gltf_available = paths.assets.join(MODEL_FILE).exists();
     // A saved choice beats sim.toml, which only sets the default.
@@ -278,7 +287,6 @@ fn setup(
         Camera3d::default(),
         Camera {
             hdr: true,
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.07, 0.08, 0.1)),
             ..default()
         },
         Tonemapping::TonyMcMapface,
@@ -295,13 +303,15 @@ fn setup(
         Transform::from_xyz(3.0, 6.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
         RoomLamp,
     ));
+    let floor = materials.add(StandardMaterial {
+        base_color: to_color(theme.palette.floor),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+    commands.insert_resource(FloorMaterial(floor.clone()));
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(20.0, 20.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.18, 0.19, 0.21),
-            perceptual_roughness: 0.9,
-            ..default()
-        })),
+        MeshMaterial3d(floor),
     ));
 }
 
@@ -561,13 +571,27 @@ fn drive_glow(
     }
 }
 
+/// An egui colour as a Bevy sRGB one.
+fn to_color(c: bevy_egui::egui::Color32) -> Color {
+    Color::srgb_u8(c.r(), c.g(), c.b())
+}
+
+/// Room brightness and the theme's scene colours; runs when either changes.
 fn apply_room_light(
     room: Res<RoomLight>,
+    theme: Res<ActiveTheme>,
+    floor: Option<Res<FloorMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut ambient: ResMut<AmbientLight>,
     mut lamps: Query<&mut DirectionalLight, With<RoomLamp>>,
     mut cameras: Query<&mut Camera, With<Camera3d>>,
 ) {
-    let (brightness, lux, background) = room.levels();
+    let (brightness, lux, factor) = room.levels();
+    let bg = to_color(theme.palette.scene_bg).to_srgba();
+    let background = Color::srgb(bg.red * factor, bg.green * factor, bg.blue * factor);
+    if let Some(material) = floor.and_then(|f| materials.get_mut(&f.0)) {
+        material.base_color = to_color(theme.palette.floor);
+    }
     ambient.brightness = brightness;
     for mut lamp in &mut lamps {
         lamp.illuminance = lux;

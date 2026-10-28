@@ -1,3 +1,25 @@
+# Simulator: UI refresh part 1 — style, themes, UI scale, tooltips (#80)
+
+Branch: `feature/sim-ui-theme` (off `Documentation`). PR 1 of 5 from the issue; toolbar/status bar/toasts, docking, palette and overlays follow in later PRs.
+
+- [x] `theme.rs` (new): `ThemeChoice`, `Palette` tokens (Okabe-Ito), Light/Dark/High contrast, `apply` (style, type scale, focus ring), `ActiveTheme`, `ThemePlugin` (system theme via registry + `WindowThemeChanged`, zoom)
+- [x] `prefs.rs` / `main.rs`: `theme`, `ui_scale` saved; plugin wired in
+- [x] `ui.rs`: all `Color32` literals → palette tokens; Theme combo + UI scale on toolbar; Ctrl+= / - / 0 in `SHORTCUTS`; shared section header; tooltips with shortcut keys from `SHORTCUTS`
+- [x] `scene.rs`: clear colour and floor follow theme (× room light)
+- [x] README: themes & UI scale, remembered prefs, tooltips
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` clean; headless scenarios pass
+- [x] Captured Light, Dark and High contrast (Dim, plus High contrast in Bright and Dark rooms): panels, log, plot and 3D readable; an old prefs file without the new keys loads
+- [ ] Interactive: follow-system flipping live, scale slider and Ctrl+= / - / 0, theme and scale restored after restart, tooltips — user
+
+## Review
+- egui draws a selected button's text in `selection.stroke`'s colour. The first draft set that to the accent, so in Dark and High contrast the selected Light/Model/Log buttons were accent-on-accent and unreadable. It's the text colour now; the focus ring comes from `widgets.active`.
+- High contrast's floor at `#202020` showed bright white speckle in the Dim room only (not Bright, not Dark, not the Dark theme at `#2E3036`). Using `#2E3036` there too removed it. Not traced further into Bevy's lighting.
+- The UI scale reset button said "100%" right next to the slider's own "100%" value; it's "Reset scale" now.
+- The slider applies the new scale on release; zooming mid-drag moved the slider out from under the cursor.
+- Toolbar rows wrap (`horizontal_wrapped`), since the larger type would push controls off a narrow window. PR 2 rebuilds the toolbar properly.
+- Plot x/y/z accel lines have their own colours instead of z-bright, x/y-dim; README updated to match.
+
+
 # Simulator: shortcuts window (#77), audio panel (#58), deploy to CIRCUITPY (#61)
 
 Branch: `feature/sim-audio-deploy-shortcuts` (off `Documentation`). #14 left alone (user's choice).

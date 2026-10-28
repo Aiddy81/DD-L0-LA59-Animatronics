@@ -8,6 +8,7 @@ use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
 use crate::scene::RoomLight;
+use crate::theme::{self, ThemeChoice};
 
 /// Everything remembered between runs. Missing keys fall back to the defaults
 /// so a file written by an older build still loads.
@@ -24,6 +25,9 @@ pub struct Prefs {
     /// `None` follows `[model] kind` in sim.toml; `Some` is the user's choice.
     pub model_gltf: Option<bool>,
     pub room_light: RoomLight,
+    pub theme: ThemeChoice,
+    /// egui zoom factor; kept inside theme::SCALE_MIN..=SCALE_MAX on load.
+    pub ui_scale: f32,
     pub strict: bool,
     pub board_speed: bool,
     pub servo_speed: bool,
@@ -57,6 +61,8 @@ impl Default for Prefs {
             log_height: 170.0,
             model_gltf: None,
             room_light: RoomLight::default(),
+            theme: ThemeChoice::default(),
+            ui_scale: 1.0,
             strict: true,
             board_speed: true,
             servo_speed: true,
@@ -82,8 +88,11 @@ impl Default for Prefs {
 /// or invalid one gives the defaults plus a warning for the log.
 pub fn load(path: &Path) -> (Prefs, Option<String>) {
     match std::fs::read_to_string(path) {
-        Ok(text) => match toml::from_str(&text) {
-            Ok(prefs) => (prefs, None),
+        Ok(text) => match toml::from_str::<Prefs>(&text) {
+            Ok(mut prefs) => {
+                prefs.ui_scale = theme::clamp_scale(prefs.ui_scale);
+                (prefs, None)
+            }
             Err(e) => (
                 Prefs::default(),
                 Some(format!(
