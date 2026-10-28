@@ -1,3 +1,24 @@
+# Simulator: UI refresh part 4 — command palette and keyboard navigation (#80)
+
+Branch: `feature/sim-ui-palette`, stacked on `feature/sim-ui-docking` (PR #84, not yet merged). PR 4 of 5; no overlays, mini-toolbar or transitions. No new crates.
+
+- [x] Step 1 — `ui.rs`: `Cmd` covers every toolbar, View-menu and detached-bar action; keyless rows in `SHORTCUTS` (labels for panes/themes/lights/speeds/layouts from their enums); Shortcuts window lists only keyed rows; one dispatcher (`CmdCx::run`) — toolbar/menu clicks queue a `Cmd`; shared `cmd_enabled`
+- [x] Step 2 — `palette.rs` (new): Ctrl+K palette per egui context (works in detached windows), filter, Up/Down/Enter/Esc, disabled rows greyed, saved layouts and layout files listed at run time
+- [x] Step 3 — keyboard navigation: Tab/arrows (egui built-in, checked in 0.31.1 source), F6 / Shift+F6 between dock tabs with keyboard focus on the tab button; `theme::focus_ring` from palette tokens, keyboard-only (`:focus-visible` style); egui_dock `*_with_kb_focus` tab styles
+- [x] Unit tests: no duplicate binds; every pane/theme/light/speed/built-in layout has a row with a label; filter ranking; `step_tab` wraps through every tab (65 tests pass, Windows test exe run against `dist\`)
+- [x] README: command palette and keyboard navigation
+- [x] Docker build (locked), `CHECK=1` (fmt, clippy -D warnings), `--all-targets` clippy; 7 scenarios pass
+- [x] Captures (SendInput + PrintWindow): palette runs Screenshot (toast), Layout: Debug, Restart, Theme ×4, detach; typing in palette or log search fires no shortcuts; Space on a focused button pauses once; Tab/arrows/F6 with the ring in Light, Dark, High contrast, Follow system; palette in a detached Log window (Larger UI → 110%, Dock back)
+- [ ] Commit, push, PR (stacked on #84; #82–#84 still open)
+- [ ] Interactive with a real keyboard: Nudge/Shake from the palette with code.py running (this worktree has no `sounds/`, so code.py stopped at boot here; scenarios cover the firmware) — user
+
+## Review
+- **Shortcuts died after one Tab (pre-existing, exposed by keyboard nav).** `read_cmds` skipped keys while `ctx.wants_keyboard_input()`, which egui 0.31 defines as *any* widget focused, not just text fields. With mouse use nothing kept focus, so it never showed. Now `text_field_focused` checks for a `TextEditState` on the focused id.
+- **Palette list showed two rows.** Inside the modal a `ScrollArea` gets almost no room and falls back to its 64 px `min_scrolled_height`; set it to the list's max.
+- **Shift+F6 before F6 in the table:** egui's key match ignores extra modifiers, so a plain-F6 bind would also take Shift+F6.
+- Typing "detach" didn't find the row labelled "Move the focused panel to its own window"; labels now use the word people type (Detach…, Dock back…).
+- `FindWindow` is ANSI by default, so a detached window's em-dash title can't be found by name; enumerate the process's windows instead.
+
 # Simulator: UI refresh part 3 — dockable, detachable panels and layouts (#80)
 
 Branch: `feature/sim-ui-docking`, stacked on `feature/sim-ui-toolbar` (PR #83, not yet merged). PR 3 of 5; no command palette, keyboard navigation, overlays or transitions. Crate: `egui_dock =0.16.0` (egui 0.31 release; confirmed with the user over `egui_tiles =0.12.0` because it has floating windows, close buttons and tab menus built in).

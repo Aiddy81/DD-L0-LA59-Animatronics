@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::{WindowTheme, WindowThemeChanged};
 use bevy_egui::egui::{
-    self, Color32, CornerRadius, FontFamily, FontId, Margin, Stroke, TextStyle, Theme,
+    self, Color32, CornerRadius, FontFamily, FontId, Margin, Stroke, StrokeKind, TextStyle, Theme,
 };
 use bevy_egui::{EguiContext, EguiContextSettings};
 use serde::{Deserialize, Serialize};
@@ -436,6 +436,81 @@ fn style(p: &Palette, resolved: ResolvedTheme) -> egui::Style {
     style
 }
 
+/// Where `focus_ring` remembers whether the last key was a navigation key.
+const FOCUS_VISIBLE: &str = "focus_visible";
+
+/// Makes the focus ring show, as after a keyboard move that egui doesn't see
+/// as one (F6 hands focus to a tab itself).
+pub fn show_focus(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(FOCUS_VISIBLE), true));
+}
+
+/// Draws a ring round the widget that has keyboard focus, but only after the
+/// keyboard moved focus there (like CSS `:focus-visible`): a click hides it.
+/// Call once per context, after everything is drawn. Two strokes, so it shows
+/// on both a plain widget and an accent-filled (selected) one.
+pub fn focus_ring(ctx: &egui::Context, palette: &Palette) {
+    let id = egui::Id::new(FOCUS_VISIBLE);
+    let (keyed, clicked) = ctx.input(|i| {
+        let keyed = i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Key {
+                    key: egui::Key::Tab
+                        | egui::Key::ArrowUp
+                        | egui::Key::ArrowDown
+                        | egui::Key::ArrowLeft
+                        | egui::Key::ArrowRight
+                        | egui::Key::F6,
+                    pressed: true,
+                    ..
+                }
+            )
+        });
+        let clicked = i
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. }));
+        (keyed, clicked)
+    });
+    let visible = ctx.data_mut(|d| {
+        let mut visible = d.get_temp::<bool>(id).unwrap_or(false);
+        if clicked {
+            visible = false;
+        }
+        if keyed {
+            visible = true;
+        }
+        d.insert_temp(id, visible);
+        visible
+    });
+    if !visible {
+        return;
+    }
+    let Some(resp) = ctx
+        .memory(|m| m.focused())
+        .and_then(|focused| ctx.read_response(focused))
+    else {
+        return;
+    };
+    let painter = ctx
+        .layer_painter(resp.layer_id)
+        .with_clip_rect(resp.interact_rect.expand(4.0));
+    let radius = CornerRadius::same(palette.rounding.saturating_add(2));
+    painter.rect_stroke(
+        resp.rect.expand(2.0),
+        radius,
+        Stroke::new(2.0, palette.accent),
+        StrokeKind::Outside,
+    );
+    painter.rect_stroke(
+        resp.rect.expand(1.0),
+        CornerRadius::same(palette.rounding),
+        Stroke::new(1.0, palette.surface),
+        StrokeKind::Outside,
+    );
+}
+
 fn visuals(p: &Palette, resolved: ResolvedTheme) -> egui::Visuals {
     let mut v = match resolved.egui_theme() {
         Theme::Light => egui::Visuals::light(),
@@ -462,7 +537,7 @@ fn visuals(p: &Palette, resolved: ResolvedTheme) -> egui::Visuals {
     v.selection.bg_fill = p.accent.linear_multiply(0.35);
     // egui draws a selected button's text in this colour, over the accent tint,
     // so it must be the text colour: the accent itself would vanish into the
-    // tint. The focus ring comes from `widgets.active` instead.
+    // tint.
     v.selection.stroke = Stroke::new(p.stroke_width.max(1.5), p.text);
 
     let w = &mut v.widgets;
@@ -479,7 +554,7 @@ fn visuals(p: &Palette, resolved: ResolvedTheme) -> egui::Visuals {
     w.hovered.weak_bg_fill = hover_fill;
     w.hovered.bg_stroke = stroke(p.accent);
     w.hovered.fg_stroke = stroke(p.text);
-    // A focused widget is drawn with the active style, so this is the focus ring.
+    // The pressed look; the keyboard focus ring is drawn by `focus_ring`.
     w.active.bg_fill = active_fill;
     w.active.weak_bg_fill = active_fill;
     w.active.bg_stroke = Stroke::new(p.stroke_width.max(1.5), p.accent);

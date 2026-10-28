@@ -120,11 +120,18 @@ pub fn main_dock_id() -> egui::Id {
     egui::Id::new("dock_main")
 }
 
+/// The id egui_dock 0.16.0 gives the button of tab `t` in node `n` of surface
+/// `s` of the dock `dock`: the dock id, then surface, node and tab index. The
+/// crate is pinned with `=`, so the scheme can't change underneath this.
+pub fn tab_button_id(dock: egui::Id, s: usize, n: usize, t: usize) -> egui::Id {
+    dock.with((SurfaceIndex(s), "surface"))
+        .with((NodeIndex(n), "node"))
+        .with((t, "tab"))
+}
+
 /// The tab being dragged in the main dock, if any. egui_dock doesn't report
 /// it (while dragging, its tab callbacks get a stand-in widget), so this
-/// rebuilds the id egui_dock 0.16.0 gives each tab button (dock id, then
-/// surface, node and tab index) and asks egui. The crate is pinned with `=`,
-/// so the scheme can't change underneath this.
+/// asks egui about each tab button's id.
 pub fn dragged_tab(state: &DockState<Pane>, ctx: &egui::Context) -> Option<Pane> {
     ctx.dragged_id()?;
     let dock = main_dock_id();
@@ -132,14 +139,49 @@ pub fn dragged_tab(state: &DockState<Pane>, ctx: &egui::Context) -> Option<Pane>
         let tree = surface.node_tree()?;
         tree.iter().enumerate().find_map(|(n, node)| {
             node.tabs()?.iter().enumerate().find_map(|(t, pane)| {
-                let id = dock
-                    .with((SurfaceIndex(s), "surface"))
-                    .with((NodeIndex(n), "node"))
-                    .with((t, "tab"));
-                ctx.is_being_dragged(id).then_some(*pane)
+                ctx.is_being_dragged(tab_button_id(dock, s, n, t))
+                    .then_some(*pane)
             })
         })
     })
+}
+
+/// Makes the tab `dir` places after (before, if negative) the current one the
+/// active, focused tab, wrapping round, and returns its button's id so the
+/// caller can give it keyboard focus. The current tab is the focused leaf's
+/// active one; with none, stepping forward lands on the first tab and back on
+/// the last.
+pub fn step_tab(state: &mut DockState<Pane>, dir: i32) -> Option<egui::Id> {
+    let tabs: Vec<(usize, usize, usize)> = state
+        .iter_surfaces()
+        .enumerate()
+        .flat_map(|(s, surface)| {
+            surface
+                .node_tree()
+                .into_iter()
+                .flat_map(|tree| tree.iter().enumerate())
+                .flat_map(move |(n, node)| {
+                    (0..node.tabs().map_or(0, |tabs| tabs.len())).map(move |t| (s, n, t))
+                })
+        })
+        .collect();
+    let len = i64::try_from(tabs.len()).ok().filter(|len| *len > 0)?;
+    let current = state.focused_leaf().and_then(|(surface, node)| {
+        let egui_dock::Node::Leaf { active, .. } = &state[surface][node] else {
+            return None;
+        };
+        tabs.iter()
+            .position(|&at| at == (surface.0, node.0, active.0))
+    });
+    let next = match current {
+        Some(at) => (i64::try_from(at).ok()? + i64::from(dir)).rem_euclid(len),
+        None if dir < 0 => len - 1,
+        None => 0,
+    };
+    let (s, n, t) = tabs[usize::try_from(next).ok()?];
+    state.set_active_tab((SurfaceIndex(s), NodeIndex(n), egui_dock::TabIndex(t)));
+    state.set_focused_node_and_surface((SurfaceIndex(s), NodeIndex(n)));
+    Some(tab_button_id(main_dock_id(), s, n, t))
 }
 
 /// The mouse pointer in screen pixels, to open a torn-off panel's window
@@ -177,6 +219,15 @@ pub fn dock_style(egui_style: &egui::Style, palette: &Palette) -> egui_dock::Sty
         t.text_color = palette.text;
     }
     tab.focused.outline_color = palette.accent;
+    // A tab reached by keyboard keeps its look and gets the accent outline.
+    for (kb, plain) in [
+        (&mut tab.active_with_kb_focus, &tab.active),
+        (&mut tab.inactive_with_kb_focus, &tab.inactive),
+        (&mut tab.focused_with_kb_focus, &tab.focused),
+    ] {
+        *kb = plain.clone();
+        kb.outline_color = palette.accent;
+    }
     tab.inactive.text_color = palette.muted;
     tab.hovered.text_color = palette.text;
     tab.tab_body.bg_fill = palette.panel;
@@ -684,6 +735,27 @@ impl Plugin for DockPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F6 visits every tab once and wraps; Shift+F6 undoes it.
+    #[test]
+    fn step_tab_cycles_every_tab() {
+        let mut state = default_layout();
+        let total: usize = state
+            .iter_surfaces()
+            .filter_map(|s| s.node_tree())
+            .flat_map(|t| t.iter())
+            .map(|n| n.tabs().map_or(0, |tabs| tabs.len()))
+            .sum();
+        assert!(total > 1);
+        let forward: Vec<_> = (0..total)
+            .map(|_| step_tab(&mut state, 1).expect("a tab"))
+            .collect();
+        let distinct: std::collections::HashSet<_> = forward.iter().collect();
+        assert_eq!(distinct.len(), total, "each tab is visited once");
+        assert_eq!(step_tab(&mut state, 1), Some(forward[0]), "wraps round");
+        assert_eq!(step_tab(&mut state, -1), forward.last().copied());
+        assert_eq!(step_tab(&mut state, -1), Some(forward[total - 2]));
+    }
 
     /// Whether the layout could be saved in the prefs file as TOML.
     #[test]

@@ -1,11 +1,13 @@
 //! Control panels: run controls, motion input, channel readouts, plot, log.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::ecs::change_detection::Mut;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::WindowPosition;
@@ -21,6 +23,7 @@ use crate::dock::{self, Detached, Dock, Pane, PaneAction, Viewer, ViewportRect};
 use crate::editor;
 use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
 use crate::layout::{self, DetachedSave, Layout};
+use crate::palette;
 use crate::prefs::{Prefs, MAX_WINDOW, MIN_WINDOW};
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, to_color, CameraView, GlowSource, ModelChoice, RoomLight};
@@ -163,13 +166,17 @@ fn toggle_skip() {
     }
 }
 
-/// What a key press does; the shortcut table maps keys to these.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Everything the user can ask for, by key, toolbar control, menu or the
+/// command palette. Every control pushes one of these and `dispatch` runs it,
+/// so there is one place that does each thing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Cmd {
     Pause,
     Step,
+    StepShort,
     Skip,
     Restart,
+    Stop,
     Idle,
     Nudge,
     Shake,
@@ -179,20 +186,69 @@ enum Cmd {
     ScaleUp,
     ScaleDown,
     ScaleReset,
+    /// An index into `SPEED_PRESETS`.
+    Speed(usize),
+    Camera(CameraView),
+    Light(RoomLight),
+    Screenshot,
+    Record,
+    Strict,
+    BoardSpeed,
+    ServoSpeed,
+    LogMode,
+    AutoReload,
+    /// True for the Lola glTF model, false for the primitive shapes.
+    Model(bool),
+    Deploy,
+    TogglePane(Pane),
+    Theme(ThemeChoice),
+    /// A built-in layout, by name.
+    Layout(&'static str),
+    /// These three act on the main dock's focused tab.
+    FloatPanel,
+    DetachPanel,
+    ClosePanel,
+    DockBack,
+    Palette,
+    /// Move keyboard focus to the next or previous dock tab (F6).
+    NextPanel,
+    PrevPanel,
 }
 
-/// One line of the Shortcuts window. Mouse-only controls have no binds or
-/// cmd; the window and the key handling both read `SHORTCUTS`, so they can't
-/// drift apart.
+/// One line of the shortcut table. The Shortcuts window, the key handling,
+/// the tooltips and the command palette all read `SHORTCUTS`, so they can't
+/// drift apart. A row with no `cmd` only describes a mouse or keyboard
+/// gesture; one with no `keys` is reachable from the palette alone.
 struct Shortcut {
     group: &'static str,
     keys: &'static str,
+    /// Empty for the rows whose text comes from their `cmd` (see `label`).
     action: &'static str,
     binds: &'static [(egui::Modifiers, egui::Key)],
     cmd: Option<Cmd>,
 }
 
-const fn mouse(group: &'static str, keys: &'static str, action: &'static str) -> Shortcut {
+impl Shortcut {
+    /// What the row does, in words.
+    fn label(&self) -> Cow<'static, str> {
+        if !self.action.is_empty() {
+            return Cow::Borrowed(self.action);
+        }
+        match self.cmd {
+            Some(Cmd::TogglePane(pane)) => Cow::Borrowed(pane.title()),
+            Some(Cmd::Theme(choice)) => Cow::Borrowed(choice.label()),
+            Some(Cmd::Light(light)) => Cow::Borrowed(light.label()),
+            Some(Cmd::Speed(i)) => SPEED_PRESETS
+                .get(i)
+                .map_or(Cow::Borrowed(""), |s| Cow::Owned(format!("{s}x"))),
+            Some(Cmd::Layout(name)) => Cow::Borrowed(name),
+            _ => Cow::Borrowed(""),
+        }
+    }
+}
+
+/// A mouse or keyboard gesture with no command behind it.
+const fn info(group: &'static str, keys: &'static str, action: &'static str) -> Shortcut {
     Shortcut {
         group,
         keys,
@@ -218,6 +274,11 @@ const fn bound(
     }
 }
 
+/// A command with no key; `action` may be empty when `Shortcut::label` can derive it.
+const fn action(group: &'static str, label: &'static str, cmd: Cmd) -> Shortcut {
+    bound(group, "", label, &[], cmd)
+}
+
 const NO_MODS: egui::Modifiers = egui::Modifiers::NONE;
 const CTRL: egui::Modifiers = egui::Modifiers::CTRL;
 
@@ -236,6 +297,7 @@ const SHORTCUTS: &[Shortcut] = &[
         &[(NO_MODS, egui::Key::Period)],
         Cmd::Step,
     ),
+    action("Run", "Step the paused clock 10 ms", Cmd::StepShort),
     bound(
         "Run",
         "F",
@@ -250,6 +312,7 @@ const SHORTCUTS: &[Shortcut] = &[
         &[(NO_MODS, egui::Key::R)],
         Cmd::Restart,
     ),
+    action("Run", "Stop code.py", Cmd::Stop),
     bound(
         "Run",
         "I",
@@ -257,6 +320,7 @@ const SHORTCUTS: &[Shortcut] = &[
         &[(NO_MODS, egui::Key::I)],
         Cmd::Idle,
     ),
+    action("Run", "Deploy to CIRCUITPY", Cmd::Deploy),
     bound(
         "Motion",
         "N",
@@ -271,18 +335,78 @@ const SHORTCUTS: &[Shortcut] = &[
         &[(NO_MODS, egui::Key::S)],
         Cmd::Shake,
     ),
-    mouse(
+    info(
         "Motion",
         "Click the droid",
         "Boop (longer press = harder, 0.3-2 g)",
     ),
-    mouse("Camera", "Left or right drag", "Orbit"),
-    mouse("Camera", "Middle drag", "Pan"),
-    mouse("Camera", "Scroll", "Zoom"),
-    mouse("Plot", "Drag", "Pan"),
-    mouse("Plot", "Ctrl+scroll", "Zoom"),
-    mouse("Plot", "Right-drag", "Zoom to the box drawn"),
-    mouse("Plot", "Double-click", "Back to following"),
+    action("Speed", "", Cmd::Speed(0)),
+    action("Speed", "", Cmd::Speed(1)),
+    action("Speed", "", Cmd::Speed(2)),
+    action("Camera", "Front view", Cmd::Camera(CameraView::Front)),
+    action("Camera", "Side view", Cmd::Camera(CameraView::Side)),
+    action("Camera", "Top view", Cmd::Camera(CameraView::Top)),
+    action("Camera", "Eyes close-up", Cmd::Camera(CameraView::Eyes)),
+    action(
+        "Camera",
+        "Back to the starting view",
+        Cmd::Camera(CameraView::Reset),
+    ),
+    info("Camera", "Left or right drag", "Orbit"),
+    info("Camera", "Middle drag", "Pan"),
+    info("Camera", "Scroll", "Zoom"),
+    action("Light", "", Cmd::Light(RoomLight::Bright)),
+    action("Light", "", Cmd::Light(RoomLight::Dim)),
+    action("Light", "", Cmd::Light(RoomLight::Dark)),
+    action("Capture", "Screenshot", Cmd::Screenshot),
+    action("Capture", "Start / stop recording", Cmd::Record),
+    action("Options", "CircuitPython strict", Cmd::Strict),
+    action("Options", "Board speed", Cmd::BoardSpeed),
+    action("Options", "Servo speed limit", Cmd::ServoSpeed),
+    action("Options", "log_mode on the simulated drive", Cmd::LogMode),
+    action("Options", "Restart when firmware is saved", Cmd::AutoReload),
+    action("Options", "Use the Lola model", Cmd::Model(true)),
+    action("Options", "Use the primitive model", Cmd::Model(false)),
+    action("Panel", "", Cmd::TogglePane(Pane::Motion)),
+    action("Panel", "", Cmd::TogglePane(Pane::State)),
+    action("Panel", "", Cmd::TogglePane(Pane::Pca)),
+    action("Panel", "", Cmd::TogglePane(Pane::Board)),
+    action("Panel", "", Cmd::TogglePane(Pane::Audio)),
+    action("Panel", "", Cmd::TogglePane(Pane::Plot)),
+    action("Panel", "", Cmd::TogglePane(Pane::Settings)),
+    action("Panel", "", Cmd::TogglePane(Pane::Log)),
+    action("Panel", "", Cmd::TogglePane(Pane::Shortcuts)),
+    action("Panel", "", Cmd::TogglePane(Pane::Behaviours)),
+    action("Panel", "", Cmd::TogglePane(Pane::Scenarios)),
+    action("Panel", "Float the focused panel", Cmd::FloatPanel),
+    action(
+        "Panel",
+        "Detach the focused panel to its own window",
+        Cmd::DetachPanel,
+    ),
+    action("Panel", "Close the focused panel", Cmd::ClosePanel),
+    action("Layout", "", Cmd::Layout(layout::BUILTINS[0])),
+    action("Layout", "", Cmd::Layout(layout::BUILTINS[1])),
+    action("Layout", "", Cmd::Layout(layout::BUILTINS[2])),
+    action("Layout", "Reset layout", Cmd::Layout(layout::BUILTINS[0])),
+    action("Theme", "", Cmd::Theme(ThemeChoice::System)),
+    action("Theme", "", Cmd::Theme(ThemeChoice::Light)),
+    action("Theme", "", Cmd::Theme(ThemeChoice::Dark)),
+    action("Theme", "", Cmd::Theme(ThemeChoice::HighContrast)),
+    info("Plot", "Drag", "Pan"),
+    info("Plot", "Ctrl+scroll", "Zoom"),
+    info("Plot", "Right-drag", "Zoom to the box drawn"),
+    info("Plot", "Double-click", "Back to following"),
+    info("Keyboard", "Tab / Shift+Tab", "Next / previous control"),
+    info("Keyboard", "Arrow keys", "Move between controls"),
+    info("Keyboard", "Enter", "Press the focused control"),
+    bound(
+        "Window",
+        "Ctrl+K",
+        "Command palette",
+        &[(CTRL, egui::Key::K)],
+        Cmd::Palette,
+    ),
     bound(
         "Window",
         "? or F1",
@@ -312,6 +436,22 @@ const SHORTCUTS: &[Shortcut] = &[
         &[(NO_MODS, egui::Key::F11)],
         Cmd::Focus,
     ),
+    // Shift+F6 first: egui lets a pattern ignore extra Shift, so plain F6
+    // would also take Shift+F6 if it were read first.
+    bound(
+        "Window",
+        "Shift+F6",
+        "Previous panel",
+        &[(egui::Modifiers::SHIFT, egui::Key::F6)],
+        Cmd::PrevPanel,
+    ),
+    bound(
+        "Window",
+        "F6",
+        "Next panel",
+        &[(NO_MODS, egui::Key::F6)],
+        Cmd::NextPanel,
+    ),
     bound(
         "Window",
         "Ctrl+=",
@@ -334,6 +474,11 @@ const SHORTCUTS: &[Shortcut] = &[
         &[(CTRL, egui::Key::Num0)],
         Cmd::ScaleReset,
     ),
+    action(
+        "Window",
+        "Dock back: put this window's panel in the main window",
+        Cmd::DockBack,
+    ),
 ];
 
 /// Hover text for a control. When `cmd` has a key binding in `SHORTCUTS` the
@@ -343,13 +488,71 @@ const SHORTCUTS: &[Shortcut] = &[
 fn tip(resp: egui::Response, text: &str, cmd: Option<Cmd>) -> egui::Response {
     let keys = cmd
         .and_then(|c| SHORTCUTS.iter().find(|row| row.cmd == Some(c)))
-        .map(|row| row.keys);
+        .map(|row| row.keys)
+        .filter(|keys| !keys.is_empty());
     let text = match keys {
         Some(keys) => format!("{text} ({keys})"),
         None => text.to_owned(),
     };
     resp.on_hover_text(text.clone())
         .on_disabled_hover_text(text)
+}
+
+/// What the controls and commands depend on, read fresh whenever it matters.
+struct Enabled {
+    running: bool,
+    paused: bool,
+    skipping: bool,
+    deploying: bool,
+    gltf_available: bool,
+    /// The command comes from a detached panel window, not the main one.
+    detached_window: bool,
+    focus_mode: bool,
+    /// The main dock has a focused tab that isn't the 3D view.
+    panel_focused: bool,
+}
+
+fn read_enabled(
+    host: &PyHost,
+    deploy: &DeployDlg,
+    gltf_available: bool,
+    dock: &mut Dock,
+    detached_window: bool,
+) -> Enabled {
+    let (paused, skipping) = {
+        let s = hw();
+        (s.clock.is_paused(), s.skipping)
+    };
+    Enabled {
+        running: host.is_running(),
+        paused,
+        skipping,
+        deploying: matches!(deploy, DeployDlg::Running(_)),
+        gltf_available,
+        detached_window,
+        focus_mode: dock.focus.is_some(),
+        panel_focused: focused_pane(dock).is_some(),
+    }
+}
+
+/// Whether `cmd` can run now. The toolbar greys controls by this and
+/// `dispatch` refuses a disabled one, so a key can't get past it.
+fn cmd_enabled(cmd: Cmd, en: &Enabled) -> bool {
+    match cmd {
+        Cmd::Stop => en.running,
+        Cmd::Step | Cmd::StepShort => en.paused,
+        Cmd::Speed(_) => !en.skipping,
+        Cmd::Deploy => !en.deploying,
+        Cmd::Model(true) => en.gltf_available,
+        Cmd::Focus => !en.detached_window,
+        Cmd::FloatPanel | Cmd::DetachPanel | Cmd::ClosePanel => {
+            !en.detached_window && !en.focus_mode && en.panel_focused
+        }
+        Cmd::DockBack => en.detached_window,
+        Cmd::NextPanel | Cmd::PrevPanel => !en.detached_window && !en.focus_mode,
+        Cmd::TogglePane(Pane::Viewport) => false,
+        _ => true,
+    }
 }
 
 #[derive(Resource)]
@@ -1011,63 +1214,68 @@ impl GroupLayout {
     }
 }
 
-fn run_group(row: &mut egui::Ui, host: &mut PyHost) {
-    let running = host.is_running();
+fn run_group(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>) {
     if tip(
-        row.button(if running { "🔄 Restart" } else { "▶ Run" }),
+        row.button(if en.running {
+            "🔄 Restart"
+        } else {
+            "▶ Run"
+        }),
         "Run code.py from the start",
         Some(Cmd::Restart),
     )
     .clicked()
     {
-        host.start();
+        cmds.push(Cmd::Restart);
     }
     if tip(
-        row.add_enabled(running, egui::Button::new("⏹ Stop")),
+        row.add_enabled(cmd_enabled(Cmd::Stop, en), egui::Button::new("⏹ Stop")),
         "Stop code.py",
         None,
     )
     .clicked()
     {
-        host.stop();
+        cmds.push(Cmd::Stop);
     }
-    let paused = hw().clock.is_paused();
     if tip(
-        row.button(if paused { "▶ Resume" } else { "⏸ Pause" }),
+        row.button(if en.paused { "▶ Resume" } else { "⏸ Pause" }),
         "Freeze code.py's clock",
         Some(Cmd::Pause),
     )
     .clicked()
     {
-        toggle_pause();
+        cmds.push(Cmd::Pause);
     }
     if tip(
-        row.add_enabled(paused, egui::Button::new("+10 ms")),
+        row.add_enabled(cmd_enabled(Cmd::StepShort, en), egui::Button::new("+10 ms")),
         "Run the paused clock for 10 ms",
         None,
     )
     .clicked()
     {
-        step_clock(STEP_SHORT_S);
+        cmds.push(Cmd::StepShort);
     }
     if tip(
-        row.add_enabled(paused, egui::Button::new("+100 ms")),
+        row.add_enabled(cmd_enabled(Cmd::Step, en), egui::Button::new("+100 ms")),
         "Run the paused clock for 100 ms",
         Some(Cmd::Step),
     )
     .clicked()
     {
-        step_clock(STEP_LONG_S);
+        cmds.push(Cmd::Step);
     }
-    let skipping = hw().skipping;
     if tip(
-        row.button(if skipping { "⏹ Stop skip" } else { "⏩ Skip" }),
+        row.button(if en.skipping {
+            "⏹ Stop skip"
+        } else {
+            "⏩ Skip"
+        }),
         "Run flat out until a behaviour starts (a sound plays or a hardware.py event changes), then drop back to 1x",
         Some(Cmd::Skip),
     )
     .clicked()
     {
-        toggle_skip();
+        cmds.push(Cmd::Skip);
     }
     if tip(
         row.button("Trigger idle"),
@@ -1076,19 +1284,17 @@ fn run_group(row: &mut egui::Ui, host: &mut PyHost) {
     )
     .clicked()
     {
-        hw().trigger_idle();
+        cmds.push(Cmd::Idle);
     }
 }
 
-fn speed_group(row: &mut egui::Ui) {
+fn speed_group(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>) {
     row.label("Speed");
-    let (mut speed, skipping) = {
-        let s = hw();
-        (s.clock.speed, s.skipping)
-    };
+    let mut speed = hw().clock.speed;
+    let can_set = cmd_enabled(Cmd::Speed(0), en);
     // Read back every frame so the slider follows presets and the end of a skip.
     let slider = row.add_enabled(
-        !skipping,
+        can_set,
         egui::Slider::new(&mut speed, 1.0..=200.0)
             .logarithmic(true)
             .suffix("x"),
@@ -1099,30 +1305,29 @@ fn speed_group(row: &mut egui::Ui) {
         None,
     )
     .changed()
-        && !skipping
+        && can_set
     {
         hw().set_speed(speed);
     }
     row.horizontal(|presets| {
-        for preset in SPEED_PRESETS {
+        for (i, preset) in SPEED_PRESETS.iter().enumerate() {
             if tip(
-                presets.button(format!("{preset}x")),
+                presets.add_enabled(
+                    cmd_enabled(Cmd::Speed(i), en),
+                    egui::Button::new(format!("{preset}x")),
+                ),
                 &format!("Run at {preset}x"),
                 None,
             )
             .clicked()
             {
-                hw().set_speed(preset);
+                cmds.push(Cmd::Speed(i));
             }
         }
     });
 }
 
-fn camera_group(
-    row: &mut egui::Ui,
-    controls: &mut ResMut<ViewControls>,
-    room: &mut ResMut<RoomLight>,
-) {
+fn camera_group(row: &mut egui::Ui, room: RoomLight, cmds: &mut Vec<Cmd>) {
     row.horizontal(|views| {
         views.label("View");
         for (label, view) in [
@@ -1137,14 +1342,14 @@ fn camera_group(
             )
             .clicked()
             {
-                controls.camera = Some(view);
+                cmds.push(Cmd::Camera(view));
             }
         }
         if tip(views.button("Eyes"), "Close-up of the eyes", None).clicked() {
-            controls.camera = Some(CameraView::Eyes);
+            cmds.push(Cmd::Camera(CameraView::Eyes));
         }
         if tip(views.button("Reset"), "Back to the starting view", None).clicked() {
-            controls.camera = Some(CameraView::Reset);
+            cmds.push(Cmd::Camera(CameraView::Reset));
         }
     });
     row.separator();
@@ -1152,7 +1357,7 @@ fn camera_group(
         lights.label("Light").on_hover_text(
             "Room lighting, to judge how bright the eyes and white LED look in a dim room",
         );
-        let mut light = **room;
+        let mut light = room;
         for choice in RoomLight::ALL {
             tip(
                 lights.selectable_value(&mut light, choice, choice.label()),
@@ -1160,14 +1365,14 @@ fn camera_group(
                 None,
             );
         }
-        // Only touch the resource on a real change, so the lights aren't reset every frame.
-        if light != **room {
-            **room = light;
+        // Only on a real change, so the lights aren't reset every frame.
+        if light != room {
+            cmds.push(Cmd::Light(light));
         }
     });
 }
 
-fn capture_group(row: &mut egui::Ui, controls: &mut ResMut<ViewControls>) {
+fn capture_group(row: &mut egui::Ui, recording: bool, cmds: &mut Vec<Cmd>) {
     if tip(
         row.button("📷 Screenshot"),
         "Save a PNG of the window to the captures folder next to the exe",
@@ -1175,9 +1380,9 @@ fn capture_group(row: &mut egui::Ui, controls: &mut ResMut<ViewControls>) {
     )
     .clicked()
     {
-        controls.screenshot = true;
+        cmds.push(Cmd::Screenshot);
     }
-    let record_label = if controls.is_recording() {
+    let record_label = if recording {
         "⏹ Stop recording"
     } else {
         "⏺ Record"
@@ -1189,15 +1394,18 @@ fn capture_group(row: &mut egui::Ui, controls: &mut ResMut<ViewControls>) {
     )
     .clicked()
     {
-        controls.toggle_record = true;
+        cmds.push(Cmd::Record);
     }
 }
 
+/// `model` is whether the Lola glTF model is in use, or None where there is no choice to make.
 fn options_group(
     row: &mut egui::Ui,
-    state: &mut UiState,
-    model: Option<&mut ResMut<ModelChoice>>,
-    paths: &crate::Paths,
+    en: &Enabled,
+    auto_reload: bool,
+    model: Option<bool>,
+    fs_dir: &Path,
+    cmds: &mut Vec<Cmd>,
 ) {
     let mut strict = hw().strict;
     if tip(
@@ -1207,7 +1415,7 @@ fn options_group(
     )
     .changed()
     {
-        hw().strict = strict;
+        cmds.push(Cmd::Strict);
     }
     let mut board_speed = hw().board_speed;
     if tip(
@@ -1217,7 +1425,7 @@ fn options_group(
     )
     .changed()
     {
-        hw().board_speed = board_speed;
+        cmds.push(Cmd::BoardSpeed);
     }
     let mut servo_speed = hw().servo_speed;
     if tip(
@@ -1227,22 +1435,27 @@ fn options_group(
     )
     .changed()
     {
-        hw().servo_speed = servo_speed;
+        cmds.push(Cmd::ServoSpeed);
     }
-    log_mode_checkbox(row, &paths.fs);
-    tip(
-        row.checkbox(&mut state.auto_reload, "Restart when firmware is saved"),
+    log_mode_checkbox(row, fs_dir, cmds);
+    let mut reload = auto_reload;
+    if tip(
+        row.checkbox(&mut reload, "Restart when firmware is saved"),
         "Also when a shim in dist\\shims\\ is added, saved or deleted.",
         None,
-    );
-    if let Some(model) = model {
+    )
+    .changed()
+    {
+        cmds.push(Cmd::AutoReload);
+    }
+    if let Some(use_gltf) = model {
         row.separator();
         row.horizontal(|picker| {
             picker.label("Model");
-            let mut use_gltf = model.use_gltf;
-            let gltf_available = model.gltf_available;
+            let mut picked = use_gltf;
+            let gltf_available = cmd_enabled(Cmd::Model(true), en);
             picker.add_enabled_ui(gltf_available, |r| {
-                let lola = r.selectable_value(&mut use_gltf, true, "Lola");
+                let lola = r.selectable_value(&mut picked, true, "Lola");
                 if gltf_available {
                     lola.on_hover_text("The droid model from assets/droid.glb");
                 } else {
@@ -1252,11 +1465,11 @@ fn options_group(
                 }
             });
             picker
-                .selectable_value(&mut use_gltf, false, "Primitive")
+                .selectable_value(&mut picked, false, "Primitive")
                 .on_hover_text("The simple built-in shapes");
-            // Only touch the resource on a real change, so the model isn't rebuilt every frame.
-            if use_gltf != model.use_gltf {
-                model.use_gltf = use_gltf;
+            // Only on a real change, so the model isn't rebuilt every frame.
+            if picked != use_gltf {
+                cmds.push(Cmd::Model(picked));
             }
         });
     }
@@ -1264,18 +1477,16 @@ fn options_group(
 
 /// The toolbar's Deploy button, kept on the right next to View rather than in
 /// the Options menu, so it's one click. `short` drops the text when crowded.
-fn deploy_button(row: &mut egui::Ui, state: &mut UiState, paths: &crate::Paths, short: bool) {
-    let deploying = matches!(state.deploy, DeployDlg::Running(_));
+fn deploy_button(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>, short: bool) {
     let label = if short { "\u{2b06}" } else { "\u{2b06} Deploy" };
     if tip(
-        row.add_enabled(!deploying, egui::Button::new(label)),
+        row.add_enabled(cmd_enabled(Cmd::Deploy, en), egui::Button::new(label)),
         "Deploy to CIRCUITPY: copy the changed firmware files to the board (never lib/ or boot_out.txt)",
         None,
     )
     .clicked()
     {
-        let fw_dir = paths.code.parent().unwrap_or(Path::new("."));
-        state.deploy = open_deploy(fw_dir);
+        cmds.push(Cmd::Deploy);
     }
 }
 
@@ -1316,21 +1527,17 @@ fn panels(
         .collect();
     let help_open = pane_shown(&captures.dock, &detached, Pane::Shortcuts);
 
-    for cmd in read_cmds(ctx, help_open) {
-        match cmd {
-            Cmd::Focus => toggle_focus(&mut captures.dock),
-            Cmd::ScaleUp => theme.set_scale(theme::step_scale(scale, 1)),
-            Cmd::ScaleDown => theme.set_scale(theme::step_scale(scale, -1)),
-            Cmd::ScaleReset => theme.set_scale(1.0),
-            other => run_cmd(
-                other,
-                &mut host,
-                &mut captures.dock,
-                &detached,
-                &mut captures.commands,
-            ),
-        }
-    }
+    // Keys and controls only queue commands; `dispatch` runs them all once
+    // the window is drawn.
+    let mut cmds = read_cmds(ctx, help_open);
+    let gltf_available = model.as_ref().is_some_and(|m| m.gltf_available);
+    let en = read_enabled(
+        &host.0,
+        &ui.deploy,
+        gltf_available,
+        &mut captures.dock,
+        false,
+    );
 
     egui::TopBottomPanel::top("toolbar").show(ctx, |bar| {
         bar.horizontal(|row| {
@@ -1342,7 +1549,7 @@ fn panels(
                 GROUP_RUN,
                 "▶ Run",
                 "Run, stop, pause and step code.py",
-                |g| run_group(g, &mut host.0),
+                |g| run_group(g, &en, &mut cmds),
             );
             let crowded = groups.crowded();
             let mut rest = |row: &mut egui::Ui, groups: &mut GroupLayout| {
@@ -1351,28 +1558,37 @@ fn panels(
                     GROUP_SPEED,
                     "⏩ Speed",
                     "How fast code.py's clock runs",
-                    speed_group,
+                    |g| speed_group(g, &en, &mut cmds),
                 );
                 groups.show(
                     row,
                     GROUP_CAMERA,
                     "🎥 Camera",
                     "Camera views and room light",
-                    |g| camera_group(g, &mut captures.controls, &mut room),
+                    |g| camera_group(g, *room, &mut cmds),
                 );
                 groups.show(
                     row,
                     GROUP_CAPTURE,
                     "📷 Capture",
                     "Save a screenshot or record frames",
-                    |g| capture_group(g, &mut captures.controls),
+                    |g| capture_group(g, captures.controls.is_recording(), &mut cmds),
                 );
                 groups.show(
                     row,
                     GROUP_OPTIONS,
                     "Options",
                     "How faithfully the simulator copies the board, model choice and deploy",
-                    |g| options_group(g, &mut ui, model.as_mut(), &captures.paths),
+                    |g| {
+                        options_group(
+                            g,
+                            &en,
+                            ui.auto_reload,
+                            model.as_ref().map(|m| m.use_gltf),
+                            &captures.paths.fs,
+                            &mut cmds,
+                        )
+                    },
                 );
             };
             rest(row, &mut groups);
@@ -1397,24 +1613,37 @@ fn panels(
                     )
                     .clicked()
                     {
-                        toggle_pane(
-                            &mut captures.dock,
-                            &detached,
-                            &mut captures.commands,
-                            Pane::Shortcuts,
-                        );
+                        cmds.push(Cmd::ToggleHelp);
                     }
                     let menu = r.menu_button(if crowded { "⚙" } else { "⚙ View" }, |m| {
-                        panels_menu(m, &mut captures.dock, &detached, &mut captures.commands);
+                        if tip(
+                            m.button("Command palette…"),
+                            "Search and run any command",
+                            Some(Cmd::Palette),
+                        )
+                        .clicked()
+                        {
+                            cmds.push(Cmd::Palette);
+                            m.close_menu();
+                        }
+                        m.separator();
+                        panels_menu(m, &captures.dock, &detached, &en, &mut cmds);
                         layouts_menu(
                             m,
                             &mut ui,
                             &mut captures,
                             &detached,
                             to_color(palette.panel),
+                            &mut cmds,
                         );
                         m.separator();
-                        appearance_controls(m, theme.choice, theme.scale, &mut ui.scale_drag)
+                        appearance_controls(
+                            m,
+                            theme.choice,
+                            theme.scale,
+                            &mut ui.scale_drag,
+                            &mut cmds,
+                        )
                     });
                     tip(
                         menu.response,
@@ -1422,16 +1651,11 @@ fn panels(
                         None,
                     );
                     // Written only on a real change so the apply system's change check stays quiet.
-                    if let Some((picked, new_scale)) = menu.inner {
-                        if let Some(choice) = picked.filter(|c| *c != theme.choice) {
-                            theme.set_choice(choice);
-                        }
-                        if let Some(s) = new_scale {
-                            theme.set_scale(s);
-                        }
+                    if let Some(Some(s)) = menu.inner {
+                        theme.set_scale(s);
                     }
                     // Right to left, so this lands just left of View.
-                    deploy_button(r, &mut ui, &captures.paths, crowded);
+                    deploy_button(r, &en, &mut cmds, crowded);
                 })
                 .response
                 .rect
@@ -1513,6 +1737,33 @@ fn panels(
         captures.dock.floats = dock::read_floats(ctx, &captures.dock.state);
     }
 
+    // Run after the dock is drawn: a command can edit the layout it was drawn from.
+    // A floated panel opens near the middle; egui_dock sizes the window at 0.8 of this.
+    let float_rect = egui::Rect::from_min_size(
+        ctx.screen_rect().center() - egui::vec2(210.0, 160.0),
+        egui::vec2(525.0, 400.0),
+    );
+    {
+        let mut cmd_cx = CmdCx {
+            ctx,
+            host: &mut *cx.host,
+            ui: &mut *cx.ui,
+            dock: &mut captures.dock,
+            commands: &mut captures.commands,
+            controls: &mut captures.controls,
+            toasts: &mut captures.toasts,
+            prefs: captures.prefs.reborrow(),
+            paths: &captures.paths,
+            room: room.reborrow(),
+            model: model.as_mut().map(|m| m.reborrow()),
+            theme: theme.reborrow(),
+            detached: &detached,
+            float_rect,
+        };
+        palette_step(&mut cmd_cx, false, &mut cmds, palette);
+        dispatch(cmds, &mut cmd_cx, Scope::Main);
+    }
+
     // Applied after the dock is drawn: the tab's menu can't edit the layout
     // it is being drawn from.
     let dragging = captures
@@ -1537,14 +1788,13 @@ fn panels(
         .map(|(pane, _)| (DetachedSave::new(*pane, scale), false))
         .chain(torn.map(|place| (place, true)));
     for (place, under_pointer) in detaches {
-        if let Some(at) = captures.dock.state.find_tab(&place.pane) {
-            captures.dock.state.remove_tab(at);
-            let window =
-                dock::spawn_detached(&mut captures.commands, &place, to_color(palette.panel));
-            if under_pointer {
-                captures.commands.entity(window).insert(dock::FitOnMonitor);
-            }
-        }
+        detach_pane(
+            &mut captures.dock,
+            &mut captures.commands,
+            &place,
+            under_pointer,
+            to_color(palette.panel),
+        );
     }
 
     for (entity, mut window) in &mut captures.detached {
@@ -1556,33 +1806,20 @@ fn panels(
             continue;
         };
         let pane = window.pane;
-        for cmd in read_cmds(&wctx, help_open) {
-            match cmd {
-                // A detached window has no focus mode; its scale is its own.
-                Cmd::Focus => {}
-                Cmd::ScaleUp => window.scale = theme::step_scale(window.scale, 1),
-                Cmd::ScaleDown => window.scale = theme::step_scale(window.scale, -1),
-                Cmd::ScaleReset => window.scale = 1.0,
-                other => run_cmd(
-                    other,
-                    cx.host,
-                    &mut captures.dock,
-                    &detached,
-                    &mut captures.commands,
-                ),
-            }
-        }
-        let mut dock_back = false;
+        let mut wcmds = read_cmds(&wctx, help_open);
         egui::TopBottomPanel::top("detached_bar").show(&wctx, |bar| {
             bar.horizontal(|row| {
                 row.strong(pane.title());
                 row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |r| {
-                    dock_back = tip(
+                    if tip(
                         r.button("Dock back"),
                         "Put this panel back in the main window",
                         None,
                     )
-                    .clicked();
+                    .clicked()
+                    {
+                        wcmds.push(Cmd::DockBack);
+                    }
                     r.separator();
                     // Laid out right to left, so + comes first.
                     if tip(
@@ -1592,7 +1829,7 @@ fn panels(
                     )
                     .clicked()
                     {
-                        window.scale = theme::step_scale(window.scale, 1);
+                        wcmds.push(Cmd::ScaleUp);
                     }
                     if tip(
                         r.small_button(format!("{:.0}%", window.scale * 100.0)),
@@ -1601,7 +1838,7 @@ fn panels(
                     )
                     .clicked()
                     {
-                        window.scale = 1.0;
+                        wcmds.push(Cmd::ScaleReset);
                     }
                     if tip(
                         r.small_button("−"),
@@ -1610,7 +1847,7 @@ fn panels(
                     )
                     .clicked()
                     {
-                        window.scale = theme::step_scale(window.scale, -1);
+                        wcmds.push(Cmd::ScaleDown);
                     }
                 });
             });
@@ -1630,9 +1867,30 @@ fn panels(
                     .show(body, |scroll| draw_pane(scroll, pane, &mut cx));
             }
         });
-        if dock_back {
-            dock::redock(&mut captures.dock, &mut captures.commands, entity, pane);
-        }
+        let mut cmd_cx = CmdCx {
+            ctx: &wctx,
+            host: &mut *cx.host,
+            ui: &mut *cx.ui,
+            dock: &mut captures.dock,
+            commands: &mut captures.commands,
+            controls: &mut captures.controls,
+            toasts: &mut captures.toasts,
+            prefs: captures.prefs.reborrow(),
+            paths: &captures.paths,
+            room: room.reborrow(),
+            model: model.as_mut().map(|m| m.reborrow()),
+            theme: theme.reborrow(),
+            detached: &detached,
+            float_rect,
+        };
+        palette_step(&mut cmd_cx, true, &mut wcmds, palette);
+        let scope = Scope::Window {
+            entity,
+            pane,
+            scale: &mut window.scale,
+        };
+        dispatch(wcmds, &mut cmd_cx, scope);
+        theme::focus_ring(&wctx, palette);
     }
 
     let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
@@ -1652,6 +1910,293 @@ fn panels(
             ui.log_filter.clear();
         }
         ui.log_jump = Some(seq);
+    }
+    theme::focus_ring(ctx, palette);
+}
+
+/// Everything a command can touch, bundled for clippy's argument limit. Built
+/// once per window (the main one and each detached one).
+struct CmdCx<'a, 'w, 's> {
+    /// The window the command came from.
+    ctx: &'a egui::Context,
+    host: &'a mut Host,
+    ui: &'a mut UiState,
+    dock: &'a mut Dock,
+    commands: &'a mut Commands<'w, 's>,
+    controls: &'a mut ViewControls,
+    toasts: &'a mut Toasts,
+    // The resources the scene or the saved prefs react to when written are
+    // reborrowed as `Mut`, so they are only marked changed on a real change.
+    prefs: Mut<'a, Prefs>,
+    paths: &'a crate::Paths,
+    room: Mut<'a, RoomLight>,
+    model: Option<Mut<'a, ModelChoice>>,
+    theme: Mut<'a, ActiveTheme>,
+    detached: &'a [(Entity, Pane)],
+    /// Where a panel floated from the palette or a key opens.
+    float_rect: egui::Rect,
+}
+
+/// Which window a command came from. Focus mode, the dock and the UI scale
+/// are per window, so the same command means something different in each.
+enum Scope<'a> {
+    Main,
+    Window {
+        entity: Entity,
+        pane: Pane,
+        scale: &'a mut f32,
+    },
+}
+
+/// What a palette row runs: a command, or a saved or exported layout.
+#[derive(Clone)]
+enum PaletteItem {
+    Cmd(Cmd),
+    Layout(LayoutAction),
+}
+
+impl CmdCx<'_, '_, '_> {
+    fn enabled(&mut self, detached_window: bool) -> Enabled {
+        let gltf_available = self.model.as_ref().is_some_and(|m| m.gltf_available);
+        read_enabled(
+            &self.host.0,
+            &self.ui.deploy,
+            gltf_available,
+            self.dock,
+            detached_window,
+        )
+    }
+
+    fn apply_layout(&mut self, action: LayoutAction) {
+        let mut lcx = LayoutCx {
+            dock: &mut *self.dock,
+            commands: &mut *self.commands,
+            prefs: self.prefs.reborrow(),
+            toasts: &mut *self.toasts,
+            dir: &self.paths.layouts,
+            open: self.detached.iter().map(|&(window, _)| window).collect(),
+            clear: to_color(self.theme.palette.panel),
+        };
+        apply_layout_action(action, None, &mut lcx);
+    }
+
+    fn run(&mut self, cmd: Cmd, scope: &mut Scope) {
+        match cmd {
+            Cmd::Pause => toggle_pause(),
+            Cmd::Step => step_clock(STEP_LONG_S),
+            Cmd::StepShort => step_clock(STEP_SHORT_S),
+            Cmd::Skip => toggle_skip(),
+            Cmd::Restart => self.host.0.start(),
+            Cmd::Stop => self.host.0.stop(),
+            Cmd::Idle => hw().trigger_idle(),
+            Cmd::Nudge => {
+                let dir = hw().nudge_dir;
+                nudge(dir);
+            }
+            Cmd::Shake => {
+                let dir = hw().nudge_dir;
+                shake(dir);
+            }
+            Cmd::ToggleHelp => {
+                toggle_pane(self.dock, self.detached, self.commands, Pane::Shortcuts)
+            }
+            Cmd::CloseHelp => set_pane_shown(
+                self.dock,
+                self.detached,
+                self.commands,
+                Pane::Shortcuts,
+                false,
+            ),
+            Cmd::Speed(i) => {
+                if let Some(&speed) = SPEED_PRESETS.get(i) {
+                    hw().set_speed(speed);
+                }
+            }
+            Cmd::Camera(view) => self.controls.camera = Some(view),
+            Cmd::Light(light) => {
+                // Only touch the resource on a real change, so the lights aren't reset every frame.
+                if *self.room != light {
+                    *self.room = light;
+                }
+            }
+            Cmd::Screenshot => self.controls.screenshot = true,
+            Cmd::Record => self.controls.toggle_record = true,
+            Cmd::Strict => {
+                let mut s = hw();
+                s.strict = !s.strict;
+            }
+            Cmd::BoardSpeed => {
+                let mut s = hw();
+                s.board_speed = !s.board_speed;
+            }
+            Cmd::ServoSpeed => {
+                let mut s = hw();
+                s.servo_speed = !s.servo_speed;
+            }
+            Cmd::LogMode => toggle_log_mode(&self.paths.fs),
+            Cmd::AutoReload => self.ui.auto_reload = !self.ui.auto_reload,
+            Cmd::Model(use_gltf) => {
+                // Only touch the resource on a real change, so the model isn't rebuilt every frame.
+                if let Some(model) = self.model.as_mut() {
+                    if model.use_gltf != use_gltf {
+                        model.use_gltf = use_gltf;
+                    }
+                }
+            }
+            Cmd::Deploy => {
+                let fw_dir = self.paths.code.parent().unwrap_or(Path::new("."));
+                self.ui.deploy = open_deploy(fw_dir);
+            }
+            Cmd::TogglePane(pane) => toggle_pane(self.dock, self.detached, self.commands, pane),
+            Cmd::Theme(choice) => {
+                if self.theme.choice != choice {
+                    self.theme.set_choice(choice);
+                }
+            }
+            Cmd::Layout(name) => self.apply_layout(LayoutAction::Builtin(name)),
+            Cmd::FloatPanel => {
+                if let Some(pane) = focused_pane(self.dock) {
+                    if let Some(at) = self.dock.state.find_tab(&pane) {
+                        if at.0.is_main() {
+                            self.dock.state.detach_tab(at, self.float_rect);
+                        }
+                    }
+                }
+            }
+            Cmd::DetachPanel => {
+                if let Some(pane) = focused_pane(self.dock) {
+                    let place = DetachedSave::new(pane, self.theme.scale);
+                    let clear = to_color(self.theme.palette.panel);
+                    detach_pane(self.dock, self.commands, &place, false, clear);
+                }
+            }
+            Cmd::ClosePanel => {
+                if let Some(pane) = focused_pane(self.dock) {
+                    set_pane_shown(self.dock, self.detached, self.commands, pane, false);
+                }
+            }
+            Cmd::Palette => palette::open(self.ctx),
+            Cmd::NextPanel | Cmd::PrevPanel => {
+                let dir = if cmd == Cmd::NextPanel { 1 } else { -1 };
+                if let (Scope::Main, Some(id)) =
+                    (&*scope, dock::step_tab(&mut self.dock.state, dir))
+                {
+                    self.ctx.memory_mut(|m| m.request_focus(id));
+                    theme::show_focus(self.ctx);
+                }
+            }
+            Cmd::Focus => {
+                if matches!(scope, Scope::Main) {
+                    toggle_focus(self.dock);
+                }
+            }
+            Cmd::ScaleUp | Cmd::ScaleDown | Cmd::ScaleReset => {
+                let step = |scale: f32| match cmd {
+                    Cmd::ScaleUp => theme::step_scale(scale, 1),
+                    Cmd::ScaleDown => theme::step_scale(scale, -1),
+                    _ => 1.0,
+                };
+                match scope {
+                    Scope::Main => {
+                        let next = step(self.theme.scale);
+                        self.theme.set_scale(next);
+                    }
+                    Scope::Window { scale, .. } => **scale = step(**scale),
+                }
+            }
+            Cmd::DockBack => {
+                if let Scope::Window { entity, pane, .. } = scope {
+                    dock::redock(self.dock, self.commands, *entity, *pane);
+                }
+            }
+        }
+    }
+}
+
+/// Runs every queued command, in order, skipping any that can't run now.
+fn dispatch(cmds: Vec<Cmd>, cx: &mut CmdCx, mut scope: Scope) {
+    let detached_window = matches!(scope, Scope::Window { .. });
+    for cmd in cmds {
+        // Read again per command: an earlier one may have changed what is allowed.
+        let en = cx.enabled(detached_window);
+        if cmd_enabled(cmd, &en) {
+            cx.run(cmd, &mut scope);
+        }
+    }
+}
+
+/// The tab focused in the main dock, unless it is the 3D view, which can't be
+/// floated, detached or closed.
+fn focused_pane(dock: &mut Dock) -> Option<Pane> {
+    dock.state
+        .find_active_focused()
+        .map(|(_, pane)| *pane)
+        .filter(|pane| *pane != Pane::Viewport)
+}
+
+/// Moves a docked pane into its own OS window.
+fn detach_pane(
+    dock: &mut Dock,
+    commands: &mut Commands,
+    place: &DetachedSave,
+    under_pointer: bool,
+    clear: Color,
+) {
+    if let Some(at) = dock.state.find_tab(&place.pane) {
+        dock.state.remove_tab(at);
+        let window = dock::spawn_detached(commands, place, clear);
+        if under_pointer {
+            commands.entity(window).insert(dock::FitOnMonitor);
+        }
+    }
+}
+
+/// While this window's palette is open, builds its rows from the shortcut
+/// table plus the layouts, draws it and queues what was picked.
+fn palette_step(cx: &mut CmdCx, detached_window: bool, cmds: &mut Vec<Cmd>, palette: &Palette) {
+    if !palette::is_open(cx.ctx) {
+        return;
+    }
+    let en = cx.enabled(detached_window);
+    let mut rows: Vec<palette::Row<PaletteItem>> = SHORTCUTS
+        .iter()
+        .filter_map(|row| {
+            let cmd = row.cmd?;
+            Some(palette::Row {
+                group: row.group,
+                label: row.label().into_owned(),
+                keys: row.keys,
+                enabled: cmd_enabled(cmd, &en),
+                item: PaletteItem::Cmd(cmd),
+            })
+        })
+        .collect();
+    rows.extend(cx.prefs.layouts.keys().map(|name| palette::Row {
+        group: "Layout",
+        label: name.clone(),
+        keys: "",
+        enabled: true,
+        item: PaletteItem::Layout(LayoutAction::User(name.clone())),
+    }));
+    if cx
+        .ui
+        .layout_files_at
+        .is_none_or(|t| t.elapsed() > LAYOUT_LIST_REFRESH)
+    {
+        cx.ui.layout_files = layout::list_files(&cx.paths.layouts);
+        cx.ui.layout_files_at = Some(Instant::now());
+    }
+    rows.extend(cx.ui.layout_files.iter().map(|(name, path)| palette::Row {
+        group: "Import layout",
+        label: name.clone(),
+        keys: "",
+        enabled: true,
+        item: PaletteItem::Layout(LayoutAction::Import(path.clone())),
+    }));
+    match palette::show(cx.ctx, &rows, palette) {
+        Some(PaletteItem::Cmd(cmd)) => cmds.push(cmd),
+        Some(PaletteItem::Layout(action)) => cx.apply_layout(action),
+        None => {}
     }
 }
 
@@ -2037,8 +2582,10 @@ fn log_panel(
 
 /// The window body, read from the same table the key handling uses.
 fn shortcuts_window(win: &mut egui::Ui) {
+    // Rows with no keys are for the command palette only.
+    let keyed = || SHORTCUTS.iter().filter(|r| !r.keys.is_empty());
     let mut groups: Vec<&str> = Vec::new();
-    for row in SHORTCUTS {
+    for row in keyed() {
         if !groups.contains(&row.group) {
             groups.push(row.group);
         }
@@ -2049,9 +2596,9 @@ fn shortcuts_window(win: &mut egui::Ui) {
             .num_columns(2)
             .spacing([16.0, 4.0])
             .show(win, |grid| {
-                for row in SHORTCUTS.iter().filter(|r| r.group == group) {
+                for row in keyed().filter(|r| r.group == group) {
                     grid.label(egui::RichText::new(row.keys).monospace().strong());
-                    grid.label(row.action);
+                    grid.label(row.label());
                     grid.end_row();
                 }
             });
@@ -2059,10 +2606,15 @@ fn shortcuts_window(win: &mut egui::Ui) {
     }
     win.label(
         egui::RichText::new(
-            "Keys are ignored while a text field (log search, Settings) has focus.",
+            "Keys are ignored while a text field or the command palette has focus.",
         )
         .small()
         .weak(),
+    );
+    win.label(
+        egui::RichText::new("F6 moves between panels; Tab goes into the panel's controls.")
+            .small()
+            .weak(),
     );
 }
 
@@ -2094,11 +2646,19 @@ fn toggle_pane(dock: &mut Dock, detached: &[(Entity, Pane)], commands: &mut Comm
     set_pane_shown(dock, detached, commands, pane, show);
 }
 
+/// Whether the widget with keyboard focus is a text field (a DragValue being
+/// typed into counts). Not `wants_keyboard_input`: in egui 0.31 that is true
+/// for any focused widget, so tabbing to a button would turn every key off.
+fn text_field_focused(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused())
+        .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
+}
+
 /// The shortcuts pressed in one window. Consumed (not just read) so a button
 /// that kept focus after a click doesn't also activate on Space. None while a
-/// text field has focus.
+/// text field has focus or the command palette is open, which owns the keys.
 fn read_cmds(ctx: &egui::Context, help_open: bool) -> Vec<Cmd> {
-    if ctx.wants_keyboard_input() {
+    if text_field_focused(ctx) || palette::is_open(ctx) {
         return Vec::new();
     }
     ctx.input_mut(|inp| {
@@ -2122,35 +2682,6 @@ fn read_cmds(ctx: &egui::Context, help_open: bool) -> Vec<Cmd> {
     })
 }
 
-/// Runs a shortcut that means the same in every window. Focus mode and the UI
-/// scale are per window, so the callers handle those.
-fn run_cmd(
-    cmd: Cmd,
-    host: &mut Host,
-    dock: &mut Dock,
-    detached: &[(Entity, Pane)],
-    commands: &mut Commands,
-) {
-    match cmd {
-        Cmd::Pause => toggle_pause(),
-        Cmd::Step => step_clock(STEP_LONG_S),
-        Cmd::Skip => toggle_skip(),
-        Cmd::Restart => host.0.start(),
-        Cmd::Idle => hw().trigger_idle(),
-        Cmd::Nudge => {
-            let dir = hw().nudge_dir;
-            nudge(dir);
-        }
-        Cmd::Shake => {
-            let dir = hw().nudge_dir;
-            shake(dir);
-        }
-        Cmd::ToggleHelp => toggle_pane(dock, detached, commands, Pane::Shortcuts),
-        Cmd::CloseHelp => set_pane_shown(dock, detached, commands, Pane::Shortcuts, false),
-        Cmd::Focus | Cmd::ScaleUp | Cmd::ScaleDown | Cmd::ScaleReset => {}
-    }
-}
-
 /// Shows only the focused panel, or the 3D view if none is focused; the main
 /// layout is kept as it was.
 fn toggle_focus(dock: &mut Dock) {
@@ -2169,20 +2700,21 @@ fn toggle_focus(dock: &mut Dock) {
 /// The View menu's panel checkboxes and focus toggle.
 fn panels_menu(
     m: &mut egui::Ui,
-    dock: &mut Dock,
+    dock: &Dock,
     detached: &[(Entity, Pane)],
-    commands: &mut Commands,
+    en: &Enabled,
+    cmds: &mut Vec<Cmd>,
 ) {
     m.label("Panels");
     for pane in Pane::ALL {
         let mut shown = pane_shown(dock, detached, pane);
         let check = egui::Checkbox::new(&mut shown, pane.title());
-        if pane == Pane::Viewport {
+        if !cmd_enabled(Cmd::TogglePane(pane), en) {
             m.add_enabled(false, check).on_disabled_hover_text(
                 "The 3D view is always there (use focus mode to hide everything else)",
             );
         } else if m.add(check).changed() {
-            set_pane_shown(dock, detached, commands, pane, shown);
+            cmds.push(Cmd::TogglePane(pane));
         }
     }
     let mut focused = dock.focus.is_some();
@@ -2193,7 +2725,7 @@ fn panels_menu(
     )
     .changed()
     {
-        toggle_focus(dock);
+        cmds.push(Cmd::Focus);
     }
 }
 
@@ -2202,7 +2734,8 @@ const MAX_USER_LAYOUTS: usize = 50;
 /// How often the Import list re-reads the layouts folder while it is open.
 const LAYOUT_LIST_REFRESH: Duration = Duration::from_secs(1);
 
-/// What a click in the Layouts menu asked for, applied once the menu is drawn.
+/// What a click in the Layouts menu or a palette row asked for.
+#[derive(Clone)]
 enum LayoutAction {
     Builtin(&'static str),
     User(String),
@@ -2210,6 +2743,94 @@ enum LayoutAction {
     Save(String),
     Export(String),
     Import(PathBuf),
+}
+
+/// What carrying out a `LayoutAction` touches.
+struct LayoutCx<'a, 'w, 's> {
+    dock: &'a mut Dock,
+    commands: &'a mut Commands<'w, 's>,
+    prefs: Mut<'a, Prefs>,
+    toasts: &'a mut Toasts,
+    /// Where layout files are exported to and imported from.
+    dir: &'a Path,
+    /// The detached windows, closed when a layout replaces them.
+    open: Vec<Entity>,
+    /// The colour new detached windows clear to.
+    clear: Color,
+}
+
+/// Carries out a layout action. `now` is the current layout, which Save and
+/// Export need and the other actions don't.
+fn apply_layout_action(action: LayoutAction, now: Option<Layout>, cx: &mut LayoutCx) {
+    let mut switch = None;
+    match action {
+        LayoutAction::Builtin(name) => switch = layout::builtin(name),
+        LayoutAction::User(name) => switch = cx.prefs.layouts.get(&name).cloned(),
+        LayoutAction::Delete(name) => {
+            cx.prefs.layouts.remove(&name);
+        }
+        LayoutAction::Save(name) => {
+            let Some(mut now) = now else { return };
+            let result = layout::validate(&mut now).and_then(|()| {
+                let room = cx.prefs.layouts.len() < MAX_USER_LAYOUTS
+                    || cx.prefs.layouts.contains_key(&name);
+                if room {
+                    cx.prefs.layouts.insert(name.clone(), now);
+                    Ok(())
+                } else {
+                    Err(format!("at most {MAX_USER_LAYOUTS} saved layouts"))
+                }
+            });
+            match result {
+                Ok(()) => cx
+                    .toasts
+                    .push(ToastKind::Ok, format!("Saved layout \"{name}\""), None),
+                Err(e) => cx.toasts.push(
+                    ToastKind::Error,
+                    format!("Could not save layout: {e}"),
+                    None,
+                ),
+            }
+        }
+        LayoutAction::Export(name) => {
+            let Some(mut now) = now else { return };
+            let result =
+                layout::validate(&mut now).and_then(|()| layout::export(cx.dir, &name, &now));
+            match result {
+                Ok(path) => {
+                    let file = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |f| f.to_string_lossy().into_owned(),
+                    );
+                    cx.toasts.push(
+                        ToastKind::Ok,
+                        format!("Exported {file} to the layouts folder"),
+                        None,
+                    );
+                }
+                Err(e) => cx.toasts.push(
+                    ToastKind::Error,
+                    format!("Could not export layout: {e}"),
+                    None,
+                ),
+            }
+        }
+        LayoutAction::Import(path) => match layout::import(&path) {
+            Ok(imported) => {
+                cx.toasts.push(ToastKind::Ok, "Imported layout", None);
+                switch = Some(imported);
+            }
+            Err(e) => cx.toasts.push(
+                ToastKind::Error,
+                format!("Could not import layout: {e}"),
+                None,
+            ),
+        },
+    }
+    if let Some(next) = switch {
+        let open = std::mem::take(&mut cx.open);
+        dock::apply_layout(next, cx.dock, cx.commands, open, cx.clear);
+    }
 }
 
 /// The View menu's Layouts submenu: switch between built-in and saved
@@ -2220,13 +2841,15 @@ fn layouts_menu(
     captures: &mut Captures,
     detached: &[(Entity, Pane)],
     clear: Color,
+    cmds: &mut Vec<Cmd>,
 ) {
     let mut action = None;
+    let mut builtin = None;
     let folder = captures.paths.layouts.display().to_string();
     m.menu_button("Layouts", |m| {
         for name in layout::BUILTINS {
             if m.button(name).clicked() {
-                action = Some(LayoutAction::Builtin(name));
+                builtin = Some(name);
             }
         }
         if !captures.prefs.layouts.is_empty() {
@@ -2314,10 +2937,14 @@ fn layouts_menu(
 
         m.separator();
         if tip(m.button("Reset layout"), "Back to the Default layout", None).clicked() {
-            action = Some(LayoutAction::Builtin("Default"));
+            builtin = Some(layout::BUILTINS[0]);
         }
     });
 
+    if let Some(name) = builtin {
+        m.close_menu();
+        cmds.push(Cmd::Layout(name));
+    }
     let Some(action) = action else {
         return;
     };
@@ -2325,93 +2952,30 @@ fn layouts_menu(
     if !matches!(action, LayoutAction::Delete(_)) {
         m.close_menu();
     }
-    let open: Vec<Entity> = detached.iter().map(|&(window, _)| window).collect();
-    let mut switch = None;
-    match action {
-        LayoutAction::Builtin(name) => switch = layout::builtin(name),
-        LayoutAction::User(name) => switch = captures.prefs.layouts.get(&name).cloned(),
-        LayoutAction::Delete(name) => {
-            captures.prefs.layouts.remove(&name);
-        }
-        LayoutAction::Save(name) => {
-            let mut now = captures.current_layout();
-            let result = layout::validate(&mut now).and_then(|()| {
-                let room = captures.prefs.layouts.len() < MAX_USER_LAYOUTS
-                    || captures.prefs.layouts.contains_key(&name);
-                if room {
-                    captures.prefs.layouts.insert(name.clone(), now);
-                    Ok(())
-                } else {
-                    Err(format!("at most {MAX_USER_LAYOUTS} saved layouts"))
-                }
-            });
-            match result {
-                Ok(()) => {
-                    captures
-                        .toasts
-                        .push(ToastKind::Ok, format!("Saved layout \"{name}\""), None)
-                }
-                Err(e) => captures.toasts.push(
-                    ToastKind::Error,
-                    format!("Could not save layout: {e}"),
-                    None,
-                ),
-            }
-        }
-        LayoutAction::Export(name) => {
-            let mut now = captures.current_layout();
-            let result = layout::validate(&mut now)
-                .and_then(|()| layout::export(&captures.paths.layouts, &name, &now));
-            match result {
-                Ok(path) => {
-                    let file = path.file_name().map_or_else(
-                        || path.display().to_string(),
-                        |f| f.to_string_lossy().into_owned(),
-                    );
-                    captures.toasts.push(
-                        ToastKind::Ok,
-                        format!("Exported {file} to the layouts folder"),
-                        None,
-                    );
-                }
-                Err(e) => captures.toasts.push(
-                    ToastKind::Error,
-                    format!("Could not export layout: {e}"),
-                    None,
-                ),
-            }
-        }
-        LayoutAction::Import(path) => match layout::import(&path) {
-            Ok(imported) => {
-                captures.toasts.push(ToastKind::Ok, "Imported layout", None);
-                switch = Some(imported);
-            }
-            Err(e) => captures.toasts.push(
-                ToastKind::Error,
-                format!("Could not import layout: {e}"),
-                None,
-            ),
-        },
-    }
-    if let Some(next) = switch {
-        dock::apply_layout(
-            next,
-            &mut captures.dock,
-            &mut captures.commands,
-            open,
-            clear,
-        );
-    }
+    let now = matches!(action, LayoutAction::Save(_) | LayoutAction::Export(_))
+        .then(|| captures.current_layout());
+    let mut lcx = LayoutCx {
+        dock: &mut captures.dock,
+        commands: &mut captures.commands,
+        prefs: captures.prefs.reborrow(),
+        toasts: &mut captures.toasts,
+        dir: &captures.paths.layouts,
+        open: detached.iter().map(|&(window, _)| window).collect(),
+        clear,
+    };
+    apply_layout_action(action, now, &mut lcx);
 }
 
-/// Theme picker and UI scale controls for the toolbar. Returns what changed,
-/// for the caller to write to the `ActiveTheme` resource.
+/// Theme picker and UI scale controls for the toolbar. A picked theme or the
+/// reset button queue a command; the slider is continuous, so it returns the
+/// scale it set for the caller to write to the `ActiveTheme` resource.
 fn appearance_controls(
     row: &mut egui::Ui,
     choice: ThemeChoice,
     scale: f32,
     scale_drag: &mut Option<f32>,
-) -> (Option<ThemeChoice>, Option<f32>) {
+    cmds: &mut Vec<Cmd>,
+) -> Option<f32> {
     row.label("Theme");
     let mut picked = choice;
     let combo = egui::ComboBox::from_id_salt("theme")
@@ -2453,9 +3017,12 @@ fn appearance_controls(
     .clicked()
     {
         *scale_drag = None;
-        new_scale = Some(1.0);
+        cmds.push(Cmd::ScaleReset);
     }
-    (Some(picked), new_scale)
+    if picked != choice {
+        cmds.push(Cmd::Theme(picked));
+    }
+    new_scale
 }
 
 /// Scenario picker, Run scenario button and the current scenario's verdict.
@@ -2557,16 +3124,21 @@ fn line_visible(line: &LogLine, show_firmware: bool, show_sim: bool, filter: &st
 
 /// Toolbar toggle for the log_mode file on the simulated drive, which makes
 /// boot.py remount it writable and log.py write log.txt.
-fn log_mode_checkbox(row: &mut egui::Ui, fs_dir: &Path) {
-    let flag = fs_dir.join("log_mode");
-    let mut on = flag.is_file();
-    if !row
+fn log_mode_checkbox(row: &mut egui::Ui, fs_dir: &Path, cmds: &mut Vec<Cmd>) {
+    let mut on = fs_dir.join("log_mode").is_file();
+    if row
         .checkbox(&mut on, "log_mode")
         .on_hover_text("Puts log_mode on the simulated drive (dist\\fs\\), so log.py also writes log.txt. Applies on restart, like a reset on the board.")
         .changed()
     {
-        return;
+        cmds.push(Cmd::LogMode);
     }
+}
+
+/// Adds or removes the log_mode file, whichever flips the toggle.
+fn toggle_log_mode(fs_dir: &Path) {
+    let flag = fs_dir.join("log_mode");
+    let on = !flag.is_file();
     let result = if on {
         std::fs::create_dir_all(fs_dir).and_then(|()| std::fs::write(&flag, b""))
     } else {
@@ -3995,5 +4567,46 @@ mod status_tests {
         assert_eq!(trim_speed(1.0), "1");
         assert_eq!(trim_speed(2.5), "2.5");
         assert_eq!(trim_speed(100.0), "100");
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+
+    #[test]
+    fn no_two_rows_share_a_bind() {
+        let mut seen: Vec<(egui::Modifiers, egui::Key)> = Vec::new();
+        for bind in SHORTCUTS.iter().flat_map(|row| row.binds) {
+            assert!(!seen.contains(bind), "{bind:?} is bound twice");
+            seen.push(*bind);
+        }
+    }
+
+    #[test]
+    fn every_command_row_has_a_label() {
+        for row in SHORTCUTS.iter().filter(|row| row.cmd.is_some()) {
+            assert!(!row.label().is_empty(), "{:?} has no label", row.cmd);
+        }
+    }
+
+    #[test]
+    fn families_have_a_row_each() {
+        let has = |cmd: Cmd| SHORTCUTS.iter().any(|row| row.cmd == Some(cmd));
+        for pane in Pane::ALL.into_iter().filter(|p| *p != Pane::Viewport) {
+            assert!(has(Cmd::TogglePane(pane)), "{pane:?}");
+        }
+        for choice in ThemeChoice::ALL {
+            assert!(has(Cmd::Theme(choice)), "{choice:?}");
+        }
+        for light in RoomLight::ALL {
+            assert!(has(Cmd::Light(light)), "{light:?}");
+        }
+        for i in 0..SPEED_PRESETS.len() {
+            assert!(has(Cmd::Speed(i)), "speed {i}");
+        }
+        for name in layout::BUILTINS {
+            assert!(has(Cmd::Layout(name)), "{name}");
+        }
     }
 }
