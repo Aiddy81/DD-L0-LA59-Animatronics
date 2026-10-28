@@ -14,6 +14,7 @@ mod pyhost;
 mod scene;
 mod settings;
 mod theme;
+mod toast;
 mod ui;
 mod wav;
 
@@ -147,6 +148,7 @@ fn main() {
         )
         .add_plugins((
             MeshPickingPlugin,
+            bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
             EguiPlugin {
                 enable_multipass_for_primary_context: false,
             },
@@ -168,6 +170,7 @@ fn main() {
             scene::ScenePlugin,
             audio::AudioPlugin,
             capture::CapturePlugin,
+            toast::ToastPlugin,
             ui::UiPlugin,
         ))
         .run();
