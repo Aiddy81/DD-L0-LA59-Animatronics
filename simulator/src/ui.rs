@@ -16,7 +16,7 @@ use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::deploy;
-use crate::dock::{Dock, Pane, Viewer, ViewportRect};
+use crate::dock::{self, Dock, Pane, Viewer, ViewportRect};
 use crate::editor;
 use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
 use crate::prefs::Prefs;
@@ -173,6 +173,7 @@ enum Cmd {
     Shake,
     ToggleHelp,
     CloseHelp,
+    Focus,
     ScaleUp,
     ScaleDown,
     ScaleReset,
@@ -304,6 +305,13 @@ const SHORTCUTS: &[Shortcut] = &[
     ),
     bound(
         "Window",
+        "F11",
+        "Focus mode: show only the focused panel (or the 3D view); again to restore",
+        &[(NO_MODS, egui::Key::F11)],
+        Cmd::Focus,
+    ),
+    bound(
+        "Window",
         "Ctrl+=",
         "Larger UI",
         // Plus covers a layout where = needs Shift; egui ignores extra Shift.
@@ -375,7 +383,6 @@ pub struct UiState {
     log_highlight: Option<(u64, Instant)>,
     drive_file: DriveFile,
     /// The Shortcuts window; not saved to prefs.
-    show_shortcuts: bool,
     deploy: DeployDlg,
     /// UI scale (percent) while its slider is being dragged. Zooming the UI
     /// under the cursor mid-drag would move the slider away from it, so the
@@ -492,7 +499,6 @@ impl UiState {
             log_jump: None,
             log_highlight: None,
             drive_file: DriveFile::default(),
-            show_shortcuts: false,
             deploy: DeployDlg::Closed,
             scale_drag: None,
             group_widths: [0.0; TOOLBAR_GROUPS],
@@ -1229,7 +1235,7 @@ fn panels(
     // Consumed (not just read) so a button that kept focus after a click
     // doesn't also activate on Space. Skipped while a text field has focus.
     if !ctx.wants_keyboard_input() {
-        let window_open = ui.show_shortcuts;
+        let window_open = dock::is_shown(&captures.dock.state, Pane::Shortcuts);
         let cmds: Vec<Cmd> = ctx.input_mut(|inp| {
             let mut cmds = Vec::new();
             for row in SHORTCUTS {
@@ -1264,8 +1270,9 @@ fn panels(
                     let dir = hw().nudge_dir;
                     shake(dir);
                 }
-                Cmd::ToggleHelp => ui.show_shortcuts = !ui.show_shortcuts,
-                Cmd::CloseHelp => ui.show_shortcuts = false,
+                Cmd::ToggleHelp => toggle_pane(&mut captures.dock.state, Pane::Shortcuts),
+                Cmd::CloseHelp => dock::set_shown(&mut captures.dock.state, Pane::Shortcuts, false),
+                Cmd::Focus => toggle_focus(&mut captures.dock),
                 Cmd::ScaleUp => theme.set_scale(theme::step_scale(scale, 1)),
                 Cmd::ScaleDown => theme.set_scale(theme::step_scale(scale, -1)),
                 Cmd::ScaleReset => theme.set_scale(1.0),
@@ -1328,12 +1335,18 @@ fn panels(
                     )
                     .clicked()
                     {
-                        ui.show_shortcuts = !ui.show_shortcuts;
+                        toggle_pane(&mut captures.dock.state, Pane::Shortcuts);
                     }
                     let menu = r.menu_button(if crowded { "⚙" } else { "⚙ View" }, |m| {
+                        panels_menu(m, &mut captures.dock);
+                        m.separator();
                         appearance_controls(m, theme.choice, theme.scale, &mut ui.scale_drag)
                     });
-                    tip(menu.response, "Theme and UI scale", None);
+                    tip(
+                        menu.response,
+                        "Panels, focus mode, theme and UI scale",
+                        None,
+                    );
                     // Written only on a real change so the apply system's change check stays quiet.
                     if let Some((picked, new_scale)) = menu.inner {
                         if let Some(choice) = picked.filter(|c| *c != theme.choice) {
@@ -1393,7 +1406,15 @@ fn panels(
     let status = egui::TopBottomPanel::bottom("status")
         .resizable(false)
         .show(ctx, |bar| {
-            bar.horizontal(|row| status_bar(row, host.0.is_running(), fps, palette));
+            bar.horizontal(|row| {
+                status_bar(
+                    row,
+                    host.0.is_running(),
+                    fps,
+                    captures.dock.focus.is_some(),
+                    palette,
+                )
+            });
         });
     let status_height = status.response.rect.height();
 
@@ -1412,25 +1433,31 @@ fn panels(
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |area| {
-            let style = egui_dock::Style::from_egui(area.style().as_ref());
-            egui_dock::DockArea::new(&mut captures.dock.state)
-                .style(style)
-                .show_inside(
-                    area,
-                    &mut Viewer {
-                        draw: |pane_ui, pane| draw_pane(pane_ui, pane, &mut cx),
-                        viewport: &mut captures.viewport,
-                    },
-                );
+            let style = dock::dock_style(area.style().as_ref(), palette);
+            let bounds = area.max_rect();
+            let mut viewer = Viewer {
+                draw: |pane_ui, pane| draw_pane(pane_ui, pane, &mut cx),
+                viewport: &mut captures.viewport,
+            };
+            if let Some(focus) = captures.dock.focus.as_mut() {
+                egui_dock::DockArea::new(focus)
+                    .id(egui::Id::new("dock_focus"))
+                    .style(style)
+                    .show_close_buttons(false)
+                    .tab_context_menus(false)
+                    .draggable_tabs(false)
+                    .show_leaf_close_all_buttons(false)
+                    .show_leaf_collapse_buttons(false)
+                    .show_add_buttons(false)
+                    .show_inside(area, &mut viewer);
+            } else {
+                egui_dock::DockArea::new(&mut captures.dock.state)
+                    .style(style)
+                    .show_add_buttons(false)
+                    .window_bounds(bounds)
+                    .show_inside(area, &mut viewer);
+            }
         });
-
-    let mut open = ui.show_shortcuts;
-    egui::Window::new("Shortcuts")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, shortcuts_window);
-    ui.show_shortcuts = open;
 
     let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
     deploy_window(ctx, &mut ui.deploy, fw_dir);
@@ -1850,6 +1877,52 @@ fn shortcuts_window(win: &mut egui::Ui) {
         .small()
         .weak(),
     );
+}
+
+fn toggle_pane(state: &mut egui_dock::DockState<Pane>, pane: Pane) {
+    let show = !dock::is_shown(state, pane);
+    dock::set_shown(state, pane, show);
+}
+
+/// Shows only the focused panel, or the 3D view if none is focused; the main
+/// layout is kept as it was.
+fn toggle_focus(dock: &mut Dock) {
+    if dock.focus.take().is_some() {
+        return;
+    }
+    let pane = dock
+        .state
+        .find_active_focused()
+        .map_or(Pane::Viewport, |(_, pane)| *pane);
+    let mut focus = egui_dock::DockState::new(vec![pane]);
+    dock::prepare(&mut focus);
+    dock.focus = Some(focus);
+}
+
+/// The View menu's panel checkboxes and focus toggle.
+fn panels_menu(m: &mut egui::Ui, dock: &mut Dock) {
+    m.label("Panels");
+    for pane in Pane::ALL {
+        let mut shown = dock::is_shown(&dock.state, pane);
+        let check = egui::Checkbox::new(&mut shown, pane.title());
+        if pane == Pane::Viewport {
+            m.add_enabled(false, check).on_disabled_hover_text(
+                "The 3D view is always there (use focus mode to hide everything else)",
+            );
+        } else if m.add(check).changed() {
+            dock::set_shown(&mut dock.state, pane, shown);
+        }
+    }
+    let mut focused = dock.focus.is_some();
+    if tip(
+        m.checkbox(&mut focused, "Focus mode"),
+        "Show only the focused panel (or the 3D view); again to restore",
+        Some(Cmd::Focus),
+    )
+    .changed()
+    {
+        toggle_focus(dock);
+    }
 }
 
 /// Theme picker and UI scale controls for the toolbar. Returns what changed,
@@ -2871,7 +2944,7 @@ fn trim_speed(speed: f64) -> String {
 
 /// One-row footer of live readouts, from the same sources as the panels.
 /// `hw()` is locked once and released before drawing.
-fn status_bar(ui: &mut egui::Ui, running: bool, fps: Option<f64>, palette: &Palette) {
+fn status_bar(ui: &mut egui::Ui, running: bool, fps: Option<f64>, focus: bool, palette: &Palette) {
     let (paused, skipping, scenario, now, speed, behaviour, heap_bytes, budget_kb, used) = {
         let s = hw();
         let budget = s.heap_budget();
@@ -2943,6 +3016,14 @@ fn status_bar(ui: &mut egui::Ui, running: bool, fps: Option<f64>, palette: &Pale
     ui.separator();
     let fps_text = fps.map_or_else(|| "— FPS".to_owned(), |f| format!("{f:.0} FPS"));
     tip(ui.label(fps_text), "Frames drawn per second", None);
+    if focus {
+        ui.separator();
+        tip(
+            ui.label(egui::RichText::new("Focus — F11 to restore").color(palette.accent)),
+            "Only one panel is showing; F11 brings the full layout back",
+            Some(Cmd::Focus),
+        );
+    }
 }
 
 fn board_panel(ui: &mut egui::Ui, palette: &Palette) {

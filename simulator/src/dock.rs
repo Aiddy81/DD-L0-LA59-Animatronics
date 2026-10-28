@@ -4,8 +4,10 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use egui_dock::{DockState, TabViewer};
+use egui_dock::{DockState, TabStyle, TabViewer};
 use serde::{Deserialize, Serialize};
+
+use crate::theme::Palette;
 
 /// Everything that can sit in a dock tab.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -24,8 +26,6 @@ pub enum Pane {
 }
 
 impl Pane {
-    // Not used until the View menu lists the panes.
-    #[allow(dead_code)]
     pub const ALL: [Pane; 10] = [
         Pane::Viewport,
         Pane::Motion,
@@ -58,6 +58,67 @@ impl Pane {
 #[derive(Resource)]
 pub struct Dock {
     pub state: DockState<Pane>,
+    /// Focus mode: a one-pane layout shown in place of `state`, which is left
+    /// untouched so leaving focus mode restores it exactly.
+    pub focus: Option<DockState<Pane>>,
+}
+
+/// Settings every `DockState` gets, however it was made or loaded.
+pub fn prepare(state: &mut DockState<Pane>) {
+    state.translations.tab_context_menu.eject_button = "Float".into();
+}
+
+/// The dock's look, from the theme's tokens so it follows theme changes.
+pub fn dock_style(egui_style: &egui::Style, palette: &Palette) -> egui_dock::Style {
+    let mut style = egui_dock::Style::from_egui(egui_style);
+
+    style.tab_bar.bg_fill = palette.panel;
+    style.tab_bar.hline_color = palette.border;
+
+    let tab = &mut style.tab;
+    for t in [&mut tab.active, &mut tab.focused] {
+        t.bg_fill = palette.surface;
+        t.text_color = palette.text;
+    }
+    tab.focused.outline_color = palette.accent;
+    tab.inactive.text_color = palette.muted;
+    tab.hovered.text_color = palette.text;
+    tab.tab_body.bg_fill = palette.panel;
+
+    style.separator.color_idle = palette.border;
+    style.separator.color_hovered = palette.accent;
+    style.separator.color_dragged = palette.accent;
+
+    style.overlay.selection_color = palette.accent.gamma_multiply(0.35);
+    style.overlay.button_color = palette.accent;
+    style
+}
+
+/// Whether `pane` is open in any surface.
+pub fn is_shown(state: &DockState<Pane>, pane: Pane) -> bool {
+    state.find_tab(&pane).is_some()
+}
+
+/// Opens or closes `pane`. The 3D view can't be hidden: the camera and mouse
+/// handling assume it exists.
+pub fn set_shown(state: &mut DockState<Pane>, pane: Pane, show: bool) {
+    if pane == Pane::Viewport {
+        return;
+    }
+    if !show {
+        if let Some(at) = state.find_tab(&pane) {
+            state.remove_tab(at);
+        }
+    } else if !is_shown(state, pane) {
+        if pane == Pane::Shortcuts {
+            state.add_window(vec![pane]);
+        } else if state.focused_leaf().is_some_and(|(s, _)| !s.is_main()) {
+            // A panel dropped into a small floating window would be easy to miss.
+            state.main_surface_mut().push_to_focused_leaf(pane);
+        } else {
+            state.push_to_focused_leaf(pane);
+        }
+    }
 }
 
 /// The 3D view in the top-left, controls on the right, log and plot below it.
@@ -72,6 +133,7 @@ pub fn default_layout() -> DockState<Pane> {
     );
     tree.split_below(right, 0.5, vec![Pane::State, Pane::Pca, Pane::Board]);
     tree.split_below(view, 0.78, vec![Pane::Log, Pane::Plot]);
+    prepare(&mut state);
     state
 }
 
@@ -131,6 +193,15 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
         }
     }
 
+    // The 3D view fills its tab edge to edge.
+    fn tab_style_override(&self, tab: &Pane, global: &TabStyle) -> Option<TabStyle> {
+        (*tab == Pane::Viewport).then(|| {
+            let mut style = global.clone();
+            style.tab_body.inner_margin = egui::Margin::ZERO;
+            style
+        })
+    }
+
     fn allowed_in_windows(&self, tab: &mut Pane) -> bool {
         *tab != Pane::Viewport
     }
@@ -142,6 +213,7 @@ impl Plugin for DockPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Dock {
             state: default_layout(),
+            focus: None,
         })
         .insert_resource(ViewportRect::default());
     }
