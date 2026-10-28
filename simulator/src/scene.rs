@@ -610,6 +610,7 @@ fn orbit_camera(
     mut drag: ResMut<DragDistance>,
     mut controls: ResMut<crate::capture::ViewControls>,
     glows: Query<(&Glow, &GlobalTransform)>,
+    mut grabbed: Local<bool>,
 ) {
     let MouseInput {
         buttons,
@@ -618,6 +619,13 @@ fn orbit_camera(
     } = input;
     if buttons.get_just_pressed().next().is_some() {
         drag.0 = 0.0;
+        // A drag belongs to the 3D view only if it started there: dragging a
+        // dock tab across it must not spin the camera, and an orbit may carry
+        // on past the view's edge.
+        *grabbed = viewport.hovered;
+    }
+    if buttons.get_pressed().next().is_none() {
+        *grabbed = false;
     }
     drag.0 += motion.delta.length();
     let preset = controls.camera.take();
@@ -630,7 +638,7 @@ fn orbit_camera(
         if let Some(view) = preset {
             apply_view(&mut cam, view, eye_focus);
         }
-        if viewport.hovered {
+        if *grabbed {
             if buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right) {
                 cam.yaw -= motion.delta.x * 0.006;
                 cam.pitch = (cam.pitch + motion.delta.y * 0.006).clamp(-0.2, 1.45);
@@ -641,6 +649,8 @@ fn orbit_camera(
                 let scale = cam.distance * 0.0015;
                 cam.focus += (-right * motion.delta.x + up * motion.delta.y) * scale;
             }
+        }
+        if viewport.hovered {
             let lines = match scroll.unit {
                 MouseScrollUnit::Line => scroll.delta.y,
                 MouseScrollUnit::Pixel => scroll.delta.y / 40.0,

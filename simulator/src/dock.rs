@@ -5,13 +5,16 @@
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
 use bevy::window::{
-    PrimaryWindow, WindowCloseRequested, WindowPosition, WindowRef, WindowResolution,
+    Monitor, MonitorSelection, PrimaryMonitor, PrimaryWindow, WindowCloseRequested, WindowPosition,
+    WindowRef, WindowResolution,
 };
 use bevy_egui::egui;
 use egui_dock::{DockState, NodeIndex, SurfaceIndex, TabStyle, TabViewer};
 use serde::{Deserialize, Serialize};
 
-use crate::theme::Palette;
+use crate::layout::{DetachedSave, FloatSave, Layout};
+use crate::prefs::Prefs;
+use crate::theme::{ActiveTheme, Palette};
 
 /// Everything that can sit in a dock tab.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -65,6 +68,9 @@ pub struct Dock {
     /// Focus mode: a one-pane layout shown in place of `state`, which is left
     /// untouched so leaving focus mode restores it exactly.
     pub focus: Option<DockState<Pane>>,
+    /// Where the floating windows were drawn last frame, kept by `panels` so a
+    /// snapshot can save them.
+    pub floats: Vec<FloatSave>,
 }
 
 /// Settings every `DockState` gets, however it was made or loaded.
@@ -161,50 +167,33 @@ pub struct Detached {
     pub scale: f32,
 }
 
-/// Where and how big a detached window opens.
-pub struct DetachedPlace {
-    /// `None` lets the OS place it.
-    pub position: Option<IVec2>,
-    /// In logical pixels.
-    pub size: Vec2,
-    pub scale: f32,
-}
-
-impl DetachedPlace {
-    pub fn new(scale: f32) -> Self {
-        Self {
-            position: None,
-            size: Vec2::new(480.0, 600.0),
-            scale,
-        }
-    }
-}
-
-/// Opens an OS window for `pane`. `clear` is the colour its camera clears to:
+/// Opens an OS window for `place.pane`. `clear` is the colour its camera clears to:
 /// egui draws onto the window without clearing it first.
-pub fn spawn_detached(
-    commands: &mut Commands,
-    pane: Pane,
-    place: &DetachedPlace,
-    clear: Color,
-) -> Entity {
+pub fn spawn_detached(commands: &mut Commands, place: &DetachedSave, clear: Color) -> Entity {
     let window = commands
         .spawn((
             Window {
-                title: format!("DD-L0-LA59 \u{2014} {}", pane.title()),
-                resolution: WindowResolution::new(place.size.x, place.size.y),
+                title: format!("DD-L0-LA59 \u{2014} {}", place.pane.title()),
+                resolution: WindowResolution::new(place.w, place.h),
                 position: place
-                    .position
-                    .map_or(WindowPosition::Automatic, WindowPosition::At),
+                    .x
+                    .zip(place.y)
+                    .map_or(WindowPosition::Automatic, |(x, y)| {
+                        WindowPosition::At(IVec2::new(x, y))
+                    }),
                 // A second vsync'd swap chain makes each frame wait for two
                 // vblanks; the main window's vsync already paces the app.
                 present_mode: bevy::window::PresentMode::AutoNoVsync,
                 ..default()
             },
             Detached {
-                pane,
+                pane: place.pane,
                 scale: place.scale,
             },
+            // The clear camera is a child; without these Bevy warns the hierarchy
+            // is inconsistent.
+            Transform::default(),
+            Visibility::default(),
         ))
         .id();
     commands.entity(window).with_child((
@@ -222,6 +211,190 @@ pub fn spawn_detached(
 pub fn redock(dock: &mut Dock, commands: &mut Commands, window: Entity, pane: Pane) {
     commands.entity(window).despawn();
     set_shown(&mut dock.state, pane, true);
+}
+
+/// What `save_prefs` and the Layouts menu store for one detached window.
+pub fn detached_save(pane: Pane, scale: f32, window: &Window) -> DetachedSave {
+    let (x, y) = match window.position {
+        WindowPosition::At(p) => (Some(p.x), Some(p.y)),
+        _ => (None, None),
+    };
+    DetachedSave {
+        pane,
+        x,
+        y,
+        w: window.resolution.width(),
+        h: window.resolution.height(),
+        scale,
+    }
+}
+
+/// The layout on screen now. Focus mode is not part of it: the real layout is
+/// kept underneath. Detached windows are sorted so the result doesn't change
+/// just because the ECS iterates them in another order.
+pub fn snapshot(dock: &Dock, mut detached: Vec<DetachedSave>) -> Layout {
+    detached.sort_by_key(|d| Pane::ALL.iter().position(|p| *p == d.pane));
+    Layout {
+        dock: dock.state.clone(),
+        detached,
+        floats: dock
+            .floats
+            .iter()
+            .filter(|f| {
+                matches!(
+                    dock.state.get_surface(SurfaceIndex(f.surface)),
+                    Some(egui_dock::Surface::Window(..))
+                )
+            })
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Where `state`'s floating windows were drawn, read from egui's memory:
+/// egui_dock 0.16 never records it in its own `WindowState`. The id is the one
+/// egui_dock gives its window areas (`format!("window {surface:?}")`). The
+/// size is the content size, as `set_size` takes, so a restore doesn't grow
+/// the window by its frame each time.
+pub fn read_floats(ctx: &egui::Context, state: &DockState<Pane>) -> Vec<FloatSave> {
+    let frame = egui::Frame::window(&ctx.style()).total_margin().sum();
+    state
+        .iter_surfaces()
+        .enumerate()
+        .filter(|(_, surface)| matches!(surface, egui_dock::Surface::Window(..)))
+        .filter_map(|(n, _)| {
+            let id = egui::Id::new(format!("window {:?}", SurfaceIndex(n)));
+            let rect = ctx.memory(|m| m.area_rect(id))?;
+            let size = rect.size() - frame;
+            Some(FloatSave {
+                surface: n,
+                x: rect.min.x,
+                y: rect.min.y,
+                w: size.x,
+                h: size.y,
+            })
+        })
+        .collect()
+}
+
+/// Switches to `layout` (already validated): closes the open detached
+/// windows, replaces the dock and opens the layout's own windows.
+pub fn apply_layout(
+    layout: Layout,
+    dock: &mut Dock,
+    commands: &mut Commands,
+    open: impl IntoIterator<Item = Entity>,
+    clear: Color,
+) {
+    for window in open {
+        commands.entity(window).despawn();
+    }
+    dock.state = layout.dock;
+    dock.focus = None;
+    for place in &layout.detached {
+        spawn_detached(commands, place, clear);
+    }
+}
+
+/// Opens the detached windows the saved layout had.
+fn spawn_saved_windows(
+    mut commands: Commands,
+    prefs: Res<Prefs>,
+    theme: Res<ActiveTheme>,
+    primary: Query<(), (With<PrimaryWindow>, With<bevy_egui::EguiContext>)>,
+    mut done: Local<bool>,
+) {
+    // Not at Startup: bevy_egui sets up each window's render node on the
+    // frame its context appears, and a second window created alongside the
+    // primary one left the primary window with no egui drawn at all.
+    if *done || primary.is_empty() {
+        return;
+    }
+    *done = true;
+    let clear = crate::scene::to_color(theme.palette.panel);
+    for place in prefs.layout.iter().flat_map(|l| &l.detached) {
+        spawn_detached(&mut commands, place, clear);
+    }
+}
+
+/// Marks a window whose position and size have been checked against the
+/// monitors, so it is only done once.
+#[derive(Component)]
+struct OnScreenChecked;
+
+/// Smallest part of a window that must be over a monitor for it to count as
+/// reachable (enough to grab the title bar), in physical pixels.
+const MIN_VISIBLE: IVec2 = IVec2::new(64, 32);
+
+/// Brings back a window a saved position left off-screen (a monitor that was
+/// unplugged, a changed resolution) and shrinks one bigger than its monitor.
+/// Runs for every window once, so it also covers windows a layout switch
+/// opens.
+fn keep_windows_on_screen(
+    mut commands: Commands,
+    monitors: Query<(&Monitor, Has<PrimaryMonitor>)>,
+    mut windows: Query<(Entity, &mut Window), Without<OnScreenChecked>>,
+) {
+    // Bevy learns the monitors a moment after start-up.
+    if monitors.is_empty() {
+        return;
+    }
+    let primary = monitors
+        .iter()
+        .find_map(|(m, is_primary)| is_primary.then_some(m))
+        .or_else(|| monitors.iter().next().map(|(m, _)| m));
+    for (entity, mut window) in &mut windows {
+        let mut monitor = primary;
+        match window.position {
+            WindowPosition::At(pos) => {
+                let size = IVec2::new(
+                    window.resolution.physical_width().min(i32::MAX as u32) as i32,
+                    window.resolution.physical_height().min(i32::MAX as u32) as i32,
+                );
+                let visible = monitors
+                    .iter()
+                    .map(|(m, _)| m)
+                    .filter_map(|m| {
+                        let overlap = overlap(pos, size, m);
+                        (overlap.x >= MIN_VISIBLE.x && overlap.y >= MIN_VISIBLE.y)
+                            .then_some((i64::from(overlap.x) * i64::from(overlap.y), m))
+                    })
+                    .max_by_key(|(area, _)| *area);
+                match visible {
+                    Some((_, m)) => monitor = Some(m),
+                    None => window.position = WindowPosition::Centered(MonitorSelection::Primary),
+                }
+            }
+            // Not placed yet; looked at again once the OS has put it somewhere.
+            WindowPosition::Automatic => continue,
+            WindowPosition::Centered(_) => {}
+        }
+        if let Some(m) = monitor.filter(|m| m.scale_factor > 0.0) {
+            let max_w = (f64::from(m.physical_width) / m.scale_factor) as f32;
+            let max_h = (f64::from(m.physical_height) / m.scale_factor) as f32;
+            let (w, h) = (window.resolution.width(), window.resolution.height());
+            if w > max_w || h > max_h {
+                window.resolution.set(w.min(max_w), h.min(max_h));
+            }
+        }
+        commands.entity(entity).insert(OnScreenChecked);
+    }
+}
+
+/// The size of the part of a window at `pos` (physical pixels) that is over
+/// `monitor`; zero or negative in an axis when they don't overlap there.
+fn overlap(pos: IVec2, size: IVec2, monitor: &Monitor) -> IVec2 {
+    let mon_pos = monitor.physical_position;
+    let mon_end = mon_pos.as_i64vec2() + monitor.physical_size().as_i64vec2();
+    let end = pos.as_i64vec2() + size.as_i64vec2();
+    let lo = pos.as_i64vec2().max(mon_pos.as_i64vec2());
+    let hi = end.min(mon_end);
+    (hi - lo)
+        .clamp(
+            bevy::math::I64Vec2::splat(i64::from(i32::MIN)),
+            bevy::math::I64Vec2::splat(i64::from(i32::MAX)),
+        )
+        .as_ivec2()
 }
 
 /// Something a tab's context menu asked for, applied once the dock is drawn.
@@ -249,9 +422,14 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
         if *tab == Pane::Viewport {
             let rect = ui.max_rect();
             self.viewport.rect = Some(rect);
-            self.viewport.hovered = ui
-                .interact(rect, ui.id().with("viewport"), egui::Sense::hover())
-                .hovered();
+            // Worked out by hand: a hover-only widget here never reports
+            // hovered, because the dock's own tab-body widget wins egui's hit
+            // test. The pointer counts when nothing (a floating panel, a menu)
+            // is above the dock's layer.
+            let ctx = ui.ctx();
+            self.viewport.hovered = ctx.pointer_hover_pos().is_some_and(|pos| {
+                rect.contains(pos) && ctx.layer_id_at(pos) == Some(ui.layer_id())
+            });
             self.viewport.ppp = ui.ctx().pixels_per_point();
         } else {
             (self.draw)(ui, *tab);
@@ -328,12 +506,27 @@ pub struct DockPlugin;
 
 impl Plugin for DockPlugin {
     fn build(&self, app: &mut App) {
+        // The saved layout was checked when the prefs loaded.
+        let saved = app
+            .world()
+            .get_resource::<Prefs>()
+            .and_then(|prefs| prefs.layout.clone());
+        // The saved floats are kept until the dock has measured its windows,
+        // so quitting straight after start doesn't lose their places.
+        let (state, floats) = saved.map_or_else(
+            || (default_layout(), Vec::new()),
+            |layout| (layout.dock, layout.floats),
+        );
         app.insert_resource(Dock {
-            state: default_layout(),
+            state,
             focus: None,
+            floats,
         })
         .insert_resource(ViewportRect::default())
-        .add_systems(Update, close_windows);
+        .add_systems(
+            Update,
+            (spawn_saved_windows, close_windows, keep_windows_on_screen),
+        );
     }
 }
 

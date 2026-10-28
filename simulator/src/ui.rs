@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::window::WindowPosition;
 use bevy_egui::egui::{self, Color32, Stroke};
 use bevy_egui::EguiContexts;
 use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine};
@@ -16,10 +17,11 @@ use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::deploy;
-use crate::dock::{self, Detached, DetachedPlace, Dock, Pane, PaneAction, Viewer, ViewportRect};
+use crate::dock::{self, Detached, Dock, Pane, PaneAction, Viewer, ViewportRect};
 use crate::editor;
 use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
-use crate::prefs::Prefs;
+use crate::layout::{self, DetachedSave, Layout};
+use crate::prefs::{Prefs, MAX_WINDOW, MIN_WINDOW};
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, to_color, CameraView, GlowSource, ModelChoice, RoomLight};
 use crate::settings::SettingsState;
@@ -393,6 +395,11 @@ pub struct UiState {
     /// Widths of the collapsed groups' menu buttons, and of the right-aligned toolbar area.
     menu_widths: [f32; TOOLBAR_GROUPS],
     right_width: f32,
+    /// The Layouts menu's name box, shared by Save and Export.
+    layout_name: String,
+    /// The exported layout files, re-listed at most once a second while the Import menu is open.
+    layout_files: Vec<(String, PathBuf)>,
+    layout_files_at: Option<Instant>,
 }
 
 /// What the bottom panel shows: the console log, or a file on the simulated drive.
@@ -504,6 +511,9 @@ impl UiState {
             group_widths: [0.0; TOOLBAR_GROUPS],
             menu_widths: [DEFAULT_MENU_WIDTH; TOOLBAR_GROUPS],
             right_width: 0.0,
+            layout_name: String::new(),
+            layout_files: Vec::new(),
+            layout_files_at: None,
         }
     }
 }
@@ -524,20 +534,31 @@ impl Plugin for UiPlugin {
     }
 }
 
-/// Smallest window size worth remembering; a minimised window reports ~0.
-const MIN_SAVED_WINDOW: f32 = 200.0;
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 struct SaveState {
-    last_write: Option<Instant>,
+    /// When the preferences were last compared with the saved ones.
+    last_check: Option<Instant>,
+    /// The saved preferences were edited elsewhere since the last write.
+    dirty: bool,
     /// Whether the last write failed, so the error is logged once, not every second.
     failed: bool,
+    /// The detached windows at the last check, for an exit that finds them gone.
+    detached: Vec<DetachedSave>,
 }
 
-/// Writes the preferences when they change (at most once a second, so a drag
-/// on a panel edge isn't a write per frame) and once more on exit. Runs in
-/// `Last` so the AppExit event is still readable.
+/// The main window, the detached ones and the dock, which `save_prefs` reads.
+type WindowState<'w, 's> = (
+    Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
+    Query<'w, 's, (&'static Detached, &'static Window)>,
+    Res<'w, Dock>,
+);
+
+/// Writes the preferences when they change (checked once a second, so a drag
+/// on a panel edge isn't a write per frame, and building the layouts to
+/// compare isn't a per-frame cost) and once more on exit. Runs in `Last` so
+/// the AppExit event is still readable.
 fn save_prefs(
     ui: Res<UiState>,
     (model, room, mix, theme): (
@@ -546,27 +567,54 @@ fn save_prefs(
         Res<AudioMix>,
         Res<ActiveTheme>,
     ),
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    (windows, detached, dock): WindowState,
     mut saved: ResMut<Prefs>,
     paths: Res<crate::Paths>,
     mut state: Local<SaveState>,
     mut exits: EventReader<AppExit>,
 ) {
     let exiting = exits.read().count() > 0;
+    // The Layouts menu edits the saved layouts in place, which a comparison with
+    // what was last written would not see, so a change flags a write.
+    if saved.is_changed() && !saved.is_added() {
+        state.dirty = true;
+    }
+    if !exiting
+        && state
+            .last_check
+            .is_some_and(|t| t.elapsed() < SAVE_INTERVAL)
+    {
+        return;
+    }
+    state.last_check = Some(Instant::now());
+
     // The window may already be gone on exit, or minimised to nothing.
-    let (width, height) = windows
+    let primary = windows
         .single()
-        .map(|w| (w.resolution.width(), w.resolution.height()))
         .ok()
-        .filter(|&(w, h)| w >= MIN_SAVED_WINDOW && h >= MIN_SAVED_WINDOW)
+        .filter(|w| w.resolution.width() >= MIN_WINDOW && w.resolution.height() >= MIN_WINDOW);
+    let (width, height) = primary
+        .map(|w| (w.resolution.width(), w.resolution.height()))
         .unwrap_or((saved.window_width, saved.window_height));
+    let (window_x, window_y) = match primary.map(|w| w.position) {
+        Some(WindowPosition::At(p)) => (Some(p.x), Some(p.y)),
+        _ => (saved.window_x, saved.window_y),
+    };
+    if !windows.is_empty() {
+        state.detached = detached
+            .iter()
+            .map(|(d, window)| dock::detached_save(d.pane, d.scale, window))
+            .collect();
+    }
     let (strict, board_speed, servo_speed) = {
         let s = hw();
         (s.strict, s.board_speed, s.servo_speed)
     };
     let current = Prefs {
-        window_width: width,
-        window_height: height,
+        window_width: width.min(MAX_WINDOW),
+        window_height: height.min(MAX_WINDOW),
+        window_x,
+        window_y,
         model_gltf: model.map(|m| m.use_gltf).or(saved.model_gltf),
         room_light: *room,
         theme: theme.choice,
@@ -581,20 +629,16 @@ fn save_prefs(
         show_sim: ui.show_sim,
         plot_window_s: ui.plot.window_s,
         plot_hidden: ui.plot.hidden(),
+        layout: Some(dock::snapshot(&dock, state.detached.clone())),
+        layouts: saved.layouts.clone(),
     };
-    if current == *saved {
+    if !state.dirty && current == *saved {
         return;
     }
-    let recent = state
-        .last_write
-        .is_some_and(|t| t.elapsed() < SAVE_INTERVAL);
-    if recent && !exiting {
-        return;
-    }
-    state.last_write = Some(Instant::now());
     match current.save(&paths.prefs) {
         Ok(()) => {
             state.failed = false;
+            state.dirty = false;
             *saved = current;
         }
         Err(e) => {
@@ -839,7 +883,24 @@ struct Captures<'w, 's> {
     dock: ResMut<'w, Dock>,
     viewport: ResMut<'w, ViewportRect>,
     detached: Query<'w, 's, (Entity, &'static mut Detached)>,
+    windows: Query<'w, 's, &'static Window, With<Detached>>,
+    prefs: ResMut<'w, Prefs>,
     commands: Commands<'w, 's>,
+}
+
+impl Captures<'_, '_> {
+    /// The dock and detached windows as they are now, for saving as a layout.
+    fn current_layout(&self) -> Layout {
+        let open = self
+            .detached
+            .iter()
+            .filter_map(|(entity, d)| {
+                let window = self.windows.get(entity).ok()?;
+                Some(dock::detached_save(d.pane, d.scale, window))
+            })
+            .collect();
+        dock::snapshot(&self.dock, open)
+    }
 }
 
 const TOOLBAR_GROUPS: usize = 5;
@@ -1325,6 +1386,7 @@ fn panels(
                     }
                     let menu = r.menu_button(if crowded { "⚙" } else { "⚙ View" }, |m| {
                         panels_menu(m, &mut captures.dock, &detached, &mut captures.commands);
+                        layouts_menu(m, &mut ui, &mut captures, &detached, to_color(palette.panel));
                         m.separator();
                         appearance_controls(m, theme.choice, theme.scale, &mut ui.scale_drag)
                     });
@@ -1446,6 +1508,9 @@ fn panels(
                     .show_inside(area, &mut viewer);
             }
         });
+    if captures.dock.focus.is_none() {
+        captures.dock.floats = dock::read_floats(ctx, &captures.dock.state);
+    }
 
     // Applied after the dock is drawn: the tab's menu can't edit the layout
     // it is being drawn from.
@@ -1456,8 +1521,7 @@ fn panels(
                     captures.dock.state.remove_tab(at);
                     dock::spawn_detached(
                         &mut captures.commands,
-                        pane,
-                        &DetachedPlace::new(scale),
+                        &DetachedSave::new(pane, scale),
                         to_color(palette.panel),
                     );
                 }
@@ -2096,6 +2160,213 @@ fn panels_menu(
     .changed()
     {
         toggle_focus(dock);
+    }
+}
+
+/// Most layouts the user can keep, so the prefs file stays small.
+const MAX_USER_LAYOUTS: usize = 50;
+/// How often the Import list re-reads the layouts folder while it is open.
+const LAYOUT_LIST_REFRESH: Duration = Duration::from_secs(1);
+
+/// What a click in the Layouts menu asked for, applied once the menu is drawn.
+enum LayoutAction {
+    Builtin(&'static str),
+    User(String),
+    Delete(String),
+    Save(String),
+    Export(String),
+    Import(PathBuf),
+}
+
+/// The View menu's Layouts submenu: switch between built-in and saved
+/// layouts, save the current one, and export or import layout files.
+fn layouts_menu(
+    m: &mut egui::Ui,
+    ui: &mut UiState,
+    captures: &mut Captures,
+    detached: &[(Entity, Pane)],
+    clear: Color,
+) {
+    let mut action = None;
+    let folder = captures.paths.layouts.display().to_string();
+    m.menu_button("Layouts", |m| {
+        for name in layout::BUILTINS {
+            if m.button(name).clicked() {
+                action = Some(LayoutAction::Builtin(name));
+            }
+        }
+        if !captures.prefs.layouts.is_empty() {
+            m.separator();
+        }
+        for name in captures.prefs.layouts.keys() {
+            m.horizontal(|row| {
+                if row.button(name).clicked() {
+                    action = Some(LayoutAction::User(name.clone()));
+                }
+                if tip(row.small_button("✖"), "Delete this layout", None).clicked() {
+                    action = Some(LayoutAction::Delete(name.clone()));
+                }
+            });
+        }
+        m.separator();
+
+        let name = layout::sanitize_name(&ui.layout_name);
+        m.horizontal(|row| {
+            row.label("Save current as");
+            row.add(
+                egui::TextEdit::singleline(&mut ui.layout_name)
+                    .hint_text("name")
+                    .char_limit(40)
+                    .desired_width(110.0),
+            );
+        });
+        m.horizontal(|row| {
+            let can_save = name.as_deref().is_some_and(|n| !layout::is_builtin(n));
+            let save_tip = if can_save {
+                "Keep the current layout under this name"
+            } else {
+                "Type a name first: letters, digits, spaces, _ and -, and not Default, Debug or Demo"
+            };
+            if tip(
+                row.add_enabled(can_save, egui::Button::new("Save")),
+                save_tip,
+                None,
+            )
+            .clicked()
+            {
+                action = name.clone().map(LayoutAction::Save);
+            }
+            let export_tip = if name.is_some() {
+                format!("Write the current layout to {folder}")
+            } else {
+                "Type a name first: letters, digits, spaces, _ and -".to_owned()
+            };
+            if tip(
+                row.add_enabled(name.is_some(), egui::Button::new("Export")),
+                &export_tip,
+                None,
+            )
+            .clicked()
+            {
+                action = name.clone().map(LayoutAction::Export);
+            }
+        });
+
+        // Listed inline rather than as a third menu level: next to the screen
+        // edge a nested submenu had no room and squeezed the names.
+        m.separator();
+        m.label("Import from layouts\\");
+        if ui
+            .layout_files_at
+            .is_none_or(|t| t.elapsed() > LAYOUT_LIST_REFRESH)
+        {
+            ui.layout_files = layout::list_files(&captures.paths.layouts);
+            ui.layout_files_at = Some(Instant::now());
+        }
+        if ui.layout_files.is_empty() {
+            m.weak("No .layout.toml files yet");
+        }
+        for (name, path) in &ui.layout_files {
+            if tip(
+                m.button(format!("  {name}")),
+                "Load this layout file",
+                None,
+            )
+            .clicked()
+            {
+                action = Some(LayoutAction::Import(path.clone()));
+            }
+        }
+
+        m.separator();
+        if tip(m.button("Reset layout"), "Back to the Default layout", None).clicked() {
+            action = Some(LayoutAction::Builtin("Default"));
+        }
+    });
+
+    let Some(action) = action else {
+        return;
+    };
+    // Deleting leaves the menu open so several can go in one visit.
+    if !matches!(action, LayoutAction::Delete(_)) {
+        m.close_menu();
+    }
+    let open: Vec<Entity> = detached.iter().map(|&(window, _)| window).collect();
+    let mut switch = None;
+    match action {
+        LayoutAction::Builtin(name) => switch = layout::builtin(name),
+        LayoutAction::User(name) => switch = captures.prefs.layouts.get(&name).cloned(),
+        LayoutAction::Delete(name) => {
+            captures.prefs.layouts.remove(&name);
+        }
+        LayoutAction::Save(name) => {
+            let mut now = captures.current_layout();
+            let result = layout::validate(&mut now).and_then(|()| {
+                let room = captures.prefs.layouts.len() < MAX_USER_LAYOUTS
+                    || captures.prefs.layouts.contains_key(&name);
+                if room {
+                    captures.prefs.layouts.insert(name.clone(), now);
+                    Ok(())
+                } else {
+                    Err(format!("at most {MAX_USER_LAYOUTS} saved layouts"))
+                }
+            });
+            match result {
+                Ok(()) => {
+                    captures
+                        .toasts
+                        .push(ToastKind::Ok, format!("Saved layout \"{name}\""), None)
+                }
+                Err(e) => captures.toasts.push(
+                    ToastKind::Error,
+                    format!("Could not save layout: {e}"),
+                    None,
+                ),
+            }
+        }
+        LayoutAction::Export(name) => {
+            let mut now = captures.current_layout();
+            let result = layout::validate(&mut now)
+                .and_then(|()| layout::export(&captures.paths.layouts, &name, &now));
+            match result {
+                Ok(path) => {
+                    let file = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |f| f.to_string_lossy().into_owned(),
+                    );
+                    captures.toasts.push(
+                        ToastKind::Ok,
+                        format!("Exported {file} to the layouts folder"),
+                        None,
+                    );
+                }
+                Err(e) => captures.toasts.push(
+                    ToastKind::Error,
+                    format!("Could not export layout: {e}"),
+                    None,
+                ),
+            }
+        }
+        LayoutAction::Import(path) => match layout::import(&path) {
+            Ok(imported) => {
+                captures.toasts.push(ToastKind::Ok, "Imported layout", None);
+                switch = Some(imported);
+            }
+            Err(e) => captures.toasts.push(
+                ToastKind::Error,
+                format!("Could not import layout: {e}"),
+                None,
+            ),
+        },
+    }
+    if let Some(next) = switch {
+        dock::apply_layout(
+            next,
+            &mut captures.dock,
+            &mut captures.commands,
+            open,
+            clear,
+        );
     }
 }
 

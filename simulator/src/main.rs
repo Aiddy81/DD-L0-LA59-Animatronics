@@ -10,6 +10,7 @@ mod dock;
 mod droid;
 mod editor;
 mod hw;
+mod layout;
 mod prefs;
 mod pyhost;
 mod scene;
@@ -23,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
+use bevy::window::WindowPosition;
 use bevy_egui::EguiPlugin;
 
 use config::SimConfig;
@@ -47,6 +49,8 @@ pub struct Paths {
     /// The writable layer of the simulated CIRCUITPY drive (log.txt, log_mode).
     /// Next to the exe; rebuilding keeps it.
     pub fs: PathBuf,
+    /// Layout files the user exports and imports. Next to the exe; rebuilding keeps it.
+    pub layouts: PathBuf,
 }
 
 impl Paths {
@@ -85,6 +89,7 @@ impl Paths {
             prefs: exe_dir.join("ddl0-sim.prefs.toml"),
             shims: exe_dir.join("shims"),
             fs: exe_dir.join("fs"),
+            layouts: exe_dir.join("layouts"),
             simulator,
         })
     }
@@ -138,6 +143,10 @@ fn main() {
                     primary_window: Some(Window {
                         title: "DD-L0-LA59 Simulator".into(),
                         resolution: (prefs.window_width, prefs.window_height).into(),
+                        position: match (prefs.window_x, prefs.window_y) {
+                            (Some(x), Some(y)) => WindowPosition::At(IVec2::new(x, y)),
+                            _ => WindowPosition::Automatic,
+                        },
                         ..default()
                     }),
                     // Closing is handled in dock.rs: a detached pane's window
