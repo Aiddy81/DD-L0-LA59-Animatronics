@@ -29,8 +29,9 @@ def write(path, text):
         f.write(text)
 
 
-def run(workdir, code, shim_dir):
-    """Run `code` as code.py and return the log text."""
+def run(workdir, code, shim_dir, setup=None):
+    """Run `code` as code.py and return the log text. `setup` runs after the
+    stand-in simhw is reset, as the app's parts are set up at each start."""
     import simhw
     import sim_runtime
 
@@ -38,8 +39,110 @@ def run(workdir, code, shim_dir):
     write(code_path, code)
     simhw.log_lines.clear()
     simhw.reset()
+    if setup:
+        setup()
     sim_runtime.run(code_path, sim_runtime.load_shim_dir(SHIMS), shim_dir)
     return "\n".join(simhw.log_lines)
+
+
+def guide_shims():
+    """The example shims in docs/custom-shims.md, by module name: each is a
+    ```python block whose first line is `# simulator\\dist\\shims\\NAME.py`."""
+    with open(os.path.join(SIM, "docs", "custom-shims.md"), encoding="utf-8") as f:
+        blocks = f.read().split("```python\n")[1:]
+    found = {}
+    for block in blocks:
+        code = block.split("```", 1)[0]
+        first = code.split("\n", 1)[0]
+        prefix = "# simulator\\dist\\shims\\"
+        if first.startswith(prefix) and first.endswith(".py"):
+            found[first[len(prefix):-3]] = code
+    return found
+
+
+def close(a, b):
+    return all(abs(x - y) < 1e-6 for x, y in zip(a, b))
+
+
+def check_part_calls(workdir, shim_dir):
+    """The simhw part calls, through the guide's neopixel and touchio shims,
+    and straight on the stand-in with bad input."""
+    import simhw
+
+    examples = guide_shims()
+    check({"neopixel", "touchio"} <= set(examples), "guide has the neopixel and touchio shims")
+    for name in ("neopixel", "touchio"):
+        write(os.path.join(shim_dir, name + ".py"), examples.get(name, ""))
+    simhw.parts.clear()
+    simhw.parts.update({
+        "band_pixels": ("pixels", True),
+        "touch_pad": ("button", True),
+        "lamp": ("led", True),
+        "flap": ("servo_part", True),
+        "tail": ("servo_part", False),
+    })
+
+    def touched():
+        simhw.part_values["touch_pad"] = ("pressed", True)
+
+    log = run(workdir, (
+        "import board, neopixel, touchio\n"
+        "ring = neopixel.NeoPixel(board.D10, 12, brightness=0.5, auto_write=False)\n"
+        "pad = touchio.TouchIn(board.A1)\n"
+        "ring.fill(0x0050FF)\n"
+        "ring[1] = (255, 0, 0) if pad.value else 0\n"
+        "ring[2:4] = [(10, 20, 30), (40, 50, 60)]\n"
+        "ring.show()\n"
+        "print('pad', pad.value, ring[1], len(ring))\n"
+        "other = neopixel.NeoPixel(board.D11, 3)\n"
+        "other.fill((1, 2, 3))\n"
+        "other.fill((4, 5, 6))\n"
+    ), shim_dir, touched)
+    check("Traceback" not in log, "neopixel example: runs in strict mode")
+    kind, pixels = simhw.part_values.get("band_pixels", (None, []))
+    check(kind == "pixels" and len(pixels) == 12, "neopixel example: sets all 12 pixels")
+    check(len(pixels) == 12 and close(pixels[0], (0, 40 / 255, 0.5))
+          and close(pixels[1], (0.5, 0, 0)) and close(pixels[3], (20 / 255, 25 / 255, 30 / 255)),
+          "neopixel example: packed ints, tuples, slices and brightness")
+    check("pad True (255, 0, 0) 12" in log, "touchio example: a pressed button reaches code.py")
+    check(log.count('simhw.set_pixels("D11")') == 1 and "no part has this name" in log,
+          "an unknown part name warns once per run")
+
+    simhw.log_lines.clear()
+    simhw.reset()
+    simhw.set_part("lamp", 0.25)
+    check(simhw.part_values.get("lamp") == ("level", 0.25), "set_part: led brightness")
+    simhw.set_part("lamp", (255, 51, 0))
+    kind, rgb = simhw.part_values.get("lamp", (None, ()))
+    check(kind == "rgb" and close(rgb, (1.0, 0.2, 0.0)), "set_part: led (r, g, b)")
+    simhw.set_part("band_pixels", True)
+    check(simhw.part_values.get("band_pixels") == ("level", 1.0), "set_part: pixels on")
+    simhw.set_part("flap", 120)
+    check(simhw.part_values.get("flap") == ("angle", 120.0), "set_part: servo angle")
+    check(simhw.part_input("touch_pad") is False, "part_input: released button")
+    before = dict(simhw.part_values)
+    raised = None
+    try:
+        simhw.set_part("lamp", float("nan"))
+        simhw.set_part("lamp", "bright")
+        simhw.set_part("flap", True)
+        simhw.set_part("touch_pad", 1)
+        simhw.set_part("tail", 90)
+        simhw.set_part(42, 1)
+        simhw.set_pixels("band_pixels", [(0, 0, 0)] * 2000)
+        simhw.set_pixels("band_pixels", iter(lambda: (1, 2, 3), None))
+        simhw.set_pixels("band_pixels", "red")
+        simhw.set_pixels("band_pixels", [(0, float("inf"), 0)])
+        simhw.set_pixels("lamp", [(1, 2, 3)])
+        check(simhw.part_input("flap") is False and simhw.part_input(None) is False,
+              "part_input: not a button reads False")
+    except Exception as e:  # noqa: BLE001 - any escape is a failure here
+        raised = e
+    check(raised is None, "bad part calls never raise ({})".format(raised))
+    check(simhw.part_values == before, "bad part calls change nothing")
+    warned = [l for l in simhw.log_lines if l.startswith("[sim] simhw.")]
+    check(len(warned) == 6, "one warning per name ({} lines)".format(len(warned)))
+    simhw.parts.clear()
 
 
 def main():
@@ -97,6 +200,10 @@ def main():
             f.write(b"NAME = '\xe9'\n")
         log = run(workdir, "import board\n", shim_dir)
         check("shim 'latin'" in log and "skipped" in log, "an unreadable shim is skipped and logged")
+        os.remove(os.path.join(shim_dir, "latin.py"))
+        os.remove(os.path.join(shim_dir, "broken.py"))
+
+        check_part_calls(workdir, shim_dir)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

@@ -183,7 +183,7 @@ The RP2040 is much slower than a PC and has far less memory, so the simulator mo
 - **Heap gauge** (Board panel): an estimate of how much of the board's free memory the firmware (`code.py` and its modules, bytecode included) uses. It warns in the log at 80% and 100%. `gc.mem_free()` and `gc.mem_alloc()` return the estimate too. It's approximate: it catches "this clearly won't fit", not the last few KB. The Plot graphs it over time.
 - **Blocked loop**: every task's run between two awaits (one *step*) is timed in board time: blocking `time.sleep()` calls and *Board speed* costs in full, desktop CPU at 1x, so the speed slider doesn't inflate it. Nothing else runs during a step, so when one takes longer than `loop_hold_warn_ms` in `sim.toml` `[board]` (50 ms; 0 turns it off), the log warns `[sim] <task> held the loop for N ms without an await`, at most once per task every 5 s. The Board panel shows the longest step this run and which task took it (amber when over the limit).
 - **The simulated drive**: to the firmware, `/` is the CIRCUITPY drive. In the simulator that is `PropMaker_Feather/` with a writable folder, `simulator\dist\fs\`, laid over it. Reads find the file in `fs\` first, then in `PropMaker_Feather/` (so `sounds/` and `settings.toml` work as usual). Every write lands in `fs\`, so the firmware's own files are never changed; deleting or renaming one of them fails with *Permission denied*. As on the board with USB connected, the drive is read-only to the firmware: `boot.py` runs before `code.py` on every (re)start, and writes only work after it calls `storage.remount("/", readonly=False)`. Otherwise they fail with CircuitPython's `[Errno 30] Read-only filesystem`, and `log.py` prints `Log file off: ...`. The *log_mode* checkbox (toolbar) adds or removes `fs\log_mode`; restart to apply, as a reset is needed on the board.
-- **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel. To make it do something, write a shim for it (see [Custom shims](#custom-shims)).
+- **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel. To make it do something, write a shim for it (see [Custom shims](#custom-shims); the shim guide has a ready-made `neopixel` one).
 
 The timing and memory figures in `simulator/sim.toml` `[board]` start as estimates. To measure your robot:
 
@@ -231,7 +231,7 @@ by = 20.0
 
 The hardware stand-ins ("shims") are compiled into the exe, so it runs on its own. To add one, or change a built-in one, without rebuilding, put a `.py` file in `simulator\dist\shims\` (create the folder). A file there replaces the built-in shim of the same name or adds a new one, and is read at the start of every run; the log names each shim taken from it. Rebuilding keeps the folder.
 
-[`simulator/docs/custom-shims.md`](simulator/docs/custom-shims.md) is a step-by-step guide: when you need a shim, mirroring the real library's API, the `simhw` calls a shim uses to reach the simulator, worked examples, testing, and when Rust changes are needed.
+[`simulator/docs/custom-shims.md`](simulator/docs/custom-shims.md) is a step-by-step guide: when you need a shim, mirroring the real library's API, the `simhw` calls a shim uses to reach the simulator, worked examples (including a `neopixel` shim lighting a ring of pixels), testing, and when Rust changes are needed. With the [parts file](#parts-file), most new hardware needs no Rust at all.
 
 ### Parts file
 
@@ -247,7 +247,7 @@ Each part is one `[[part]]` entry. Only `name` is required; leave out the rest t
 | `kind` | `"led"` | `"led"` (a glowing sphere), `"pixels"` (a row or ring of dots), `"servo_part"` (a shape turned about a hinge) or `"button"` (a cap you can press with the mouse). |
 | `pca` | none | Follow PCA9685 channel 0-15, like the wings and eyes. An `led` or `pixels` part shows the duty as brightness; a `servo_part` turns to the servo angle (from the pulse width, via `sim.toml` `[servo]`). Sharing a channel with a wing or eye is fine. |
 | `pin` | none | Follow a board pin, e.g. `"D5"`. A `pwmio` duty gives brightness, or for a `servo_part` a pulse at the PWMOut's frequency. A `digitalio` output is on/off. A `button` drives the pin as an input instead: `DigitalInOut.value` reads `False` while pressed with `Pull.UP`, `True` otherwise. |
-| | | With neither `pca` nor `pin`, the part is left to shims (and a button to the mouse). Giving both is an error, and so is `pca` on a button. |
+| | | With neither `pca` nor `pin`, the part is left to shims (and a button to the mouse): see [Driving parts from a shim](#driving-parts-from-a-shim). Giving both is an error, and so is `pca` on a button. |
 | `anchor` | `"body"` | The node the part sits on and moves with. `"body"` is the droid itself. `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white` work on both models; other Lola node names (`head`, `antenna_base`, …) only on Lola. On the primitive model, such a part is skipped with a warning. |
 | `pos` | `[0, 0, 0]` | Position relative to the anchor (x right, y up, z forward). The head is about 2.5 across, with its top about 2.1 up. |
 | `rot_deg` | `[0, 0, 0]` | Rotation in degrees about x, y, z. A part's +y points out of the surface it sits on: `[0, 0, -90]` faces right, `[90, 0, 0]` forward, `[-90, 0, 0]` back. |
@@ -282,9 +282,23 @@ colour = [0.9, 0.75, 0.1]
 
 The **PCA9685** panel lists the parts with their source and live value. A spare channel that a part follows is shown under the part's name. Clicking a button part presses it without booping the droid.
 
+#### Driving parts from a shim
+
+A part with neither `pca` nor `pin` is driven by a [custom shim](#custom-shims) through three `simhw` calls, so a library the simulator doesn't model (`neopixel`, `touchio`, …) can still show on the droid:
+
+| Call | Part kinds | Value |
+|---|---|---|
+| `simhw.set_part(name, value)` | `led`, `pixels`, `servo_part` | Brightness `0.0`-`1.0` or `True`/`False` for an `led` or `pixels` part; `(r, g, b)` `0`-`255` for an `led`; the servo angle in degrees for a `servo_part`. |
+| `simhw.set_pixels(name, [(r, g, b), ...])` | `pixels` | One colour per pixel, `0`-`255` per channel, as `neopixel` holds them after its brightness. At most 1024. |
+| `simhw.part_input(name)` | `button` | `True` while the button is held down on the model, otherwise `False`. |
+
+A name that isn't in the file, the wrong kind, a part that follows a `pca` or `pin`, or a bad value (wrong type, NaN, too many pixels) logs one `[sim] simhw.…: …; ignored` warning per name per run and does nothing else; the firmware keeps running. [Example D in the shim guide](simulator/docs/custom-shims.md#example-d-a-neopixel-ring-and-a-touch-pad-with-no-rust-neopixel-touchio) is a working `neopixel` shim on a ring and a `touchio` shim on a button.
+
 ### Tests and CI
 
 `python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a hard shake, a nudge, an idle trigger, repeated nudges and a *boot_sequence* behaviour button. It fails on any traceback, if the boop, attention or angry behaviour doesn't happen, if the State panel's events, tasks, nudge count or timers can't be read, if the behaviour buttons are wrong or don't run, if the wings and motion sensing stall during a white-LED flicker, or if any task step holds the loop longer than `loop_hold_warn_ms` (a small blocking test checks the timing itself). Then it plays every scenario in `simulator/scenarios/` against a fresh run each and fails if any of them doesn't pass. `--scenario NAME` (repeatable) runs only those scenarios. It needs Python 3.11+ (CI uses 3.13); without Python on the host, run it in the dev image: `docker run --rm -v "${PWD}:/workspace" -w /workspace ddl0-sim-dev python3 simulator/tests/headless.py`.
+
+`python simulator/tests/shim_dir.py` checks drop-in shims: overriding and adding modules, a broken or unreadable shim, and the `simhw` part calls, running the `neopixel` and `touchio` examples straight from `simulator/docs/custom-shims.md` and feeding the calls bad input. CI runs it too.
 
 The Settings panel's `settings.toml` reader and writer (`simulator/src/settings.rs`) has unit tests that need only `rustc`: `docker run --rm -v "${PWD}:/workspace" -w /workspace/simulator ddl0-sim-dev bash -c "rustc --edition 2021 --test src/settings.rs -o /tmp/settings-test && /tmp/settings-test"`. The Audio panel's WAV reader (`src/wav.rs`) and the deploy planner (`src/deploy.rs`, against temporary folders, never a real drive) are tested the same way: swap the file name in that command.
 

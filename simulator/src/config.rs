@@ -261,6 +261,18 @@ pub enum PartKind {
     Button,
 }
 
+impl PartKind {
+    /// As written in the parts file.
+    pub fn name(self) -> &'static str {
+        match self {
+            PartKind::Led => "led",
+            PartKind::Pixels => "pixels",
+            PartKind::ServoPart => "servo_part",
+            PartKind::Button => "button",
+        }
+    }
+}
+
 #[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PixelLayout {

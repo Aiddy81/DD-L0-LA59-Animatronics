@@ -2605,20 +2605,11 @@ fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, parts: &Parts, palette: &Pale
         for part in &parts.0 {
             grid.label(&part.name);
             grid.label(part_value_text(part, s.parts.get(&part.name)));
-            grid.label(part_kind_text(part.kind));
+            grid.label(part.kind.name());
             grid.label(part_source_text(part));
             grid.end_row();
         }
     });
-}
-
-fn part_kind_text(kind: PartKind) -> &'static str {
-    match kind {
-        PartKind::Led => "led",
-        PartKind::Pixels => "pixels",
-        PartKind::ServoPart => "servo_part",
-        PartKind::Button => "button",
-    }
 }
 
 fn part_source_text(part: &PartCfg) -> String {
