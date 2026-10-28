@@ -140,6 +140,9 @@ fn main() {
                         resolution: (prefs.window_width, prefs.window_height).into(),
                         ..default()
                     }),
+                    // Closing is handled in dock.rs: a detached pane's window
+                    // docks back instead of vanishing, the main one exits.
+                    close_when_requested: false,
                     ..default()
                 })
                 .set(AssetPlugin {

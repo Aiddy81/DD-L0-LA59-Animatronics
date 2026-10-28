@@ -574,7 +574,7 @@ fn drive_glow(
 }
 
 /// An egui colour as a Bevy sRGB one.
-fn to_color(c: bevy_egui::egui::Color32) -> Color {
+pub(crate) fn to_color(c: bevy_egui::egui::Color32) -> Color {
     Color::srgb_u8(c.r(), c.g(), c.b())
 }
 

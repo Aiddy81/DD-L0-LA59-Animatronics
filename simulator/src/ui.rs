@@ -16,12 +16,12 @@ use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::deploy;
-use crate::dock::{self, Dock, Pane, Viewer, ViewportRect};
+use crate::dock::{self, Detached, DetachedPlace, Dock, Pane, PaneAction, Viewer, ViewportRect};
 use crate::editor;
 use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
 use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
-use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice, RoomLight};
+use crate::scene::{glow_rgb, to_color, CameraView, GlowSource, ModelChoice, RoomLight};
 use crate::settings::SettingsState;
 use crate::theme::{self, ActiveTheme, Palette, ThemeChoice};
 use crate::toast::{ToastKind, Toasts};
@@ -828,16 +828,18 @@ fn stop_on_exit(mut exits: EventReader<AppExit>, mut host: ResMut<Host>) {
     }
 }
 
-/// Where saved files go, plus the camera/screenshot requests; bundled to keep
-/// `panels` within clippy's argument limit.
+/// Where saved files go, the camera/screenshot requests, the dock and the
+/// detached windows; bundled to keep `panels` within clippy's argument limit.
 #[derive(SystemParam)]
-struct Captures<'w> {
+struct Captures<'w, 's> {
     paths: Res<'w, crate::Paths>,
     controls: ResMut<'w, ViewControls>,
     diagnostics: Res<'w, DiagnosticsStore>,
     toasts: ResMut<'w, Toasts>,
     dock: ResMut<'w, Dock>,
     viewport: ResMut<'w, ViewportRect>,
+    detached: Query<'w, 's, (Entity, &'static mut Detached)>,
+    commands: Commands<'w, 's>,
 }
 
 const TOOLBAR_GROUPS: usize = 5;
@@ -1218,6 +1220,8 @@ fn panels(
     let Some(ctx) = contexts.try_ctx_mut() else {
         return;
     };
+    // Cloned (it is a handle) so `contexts` is free to hand out the detached windows' ones.
+    let ctx = &egui::Context::clone(ctx);
     let palette = theme.palette;
     let scale = theme.scale;
 
@@ -1232,51 +1236,28 @@ fn panels(
         }
     }
 
-    // Consumed (not just read) so a button that kept focus after a click
-    // doesn't also activate on Space. Skipped while a text field has focus.
-    if !ctx.wants_keyboard_input() {
-        let window_open = dock::is_shown(&captures.dock.state, Pane::Shortcuts);
-        let cmds: Vec<Cmd> = ctx.input_mut(|inp| {
-            let mut cmds = Vec::new();
-            for row in SHORTCUTS {
-                let Some(cmd) = row.cmd else { continue };
-                // Esc is only ours while the window is open, else it is left alone.
-                if cmd == Cmd::CloseHelp && !window_open {
-                    continue;
-                }
-                // Every bind is consumed (no short-circuit) so none is left behind.
-                let hit = row
-                    .binds
-                    .iter()
-                    .fold(false, |hit, &(mods, key)| inp.consume_key(mods, key) | hit);
-                if hit {
-                    cmds.push(cmd);
-                }
-            }
-            cmds
-        });
-        for cmd in cmds {
-            match cmd {
-                Cmd::Pause => toggle_pause(),
-                Cmd::Step => step_clock(STEP_LONG_S),
-                Cmd::Skip => toggle_skip(),
-                Cmd::Restart => host.0.start(),
-                Cmd::Idle => hw().trigger_idle(),
-                Cmd::Nudge => {
-                    let dir = hw().nudge_dir;
-                    nudge(dir);
-                }
-                Cmd::Shake => {
-                    let dir = hw().nudge_dir;
-                    shake(dir);
-                }
-                Cmd::ToggleHelp => toggle_pane(&mut captures.dock.state, Pane::Shortcuts),
-                Cmd::CloseHelp => dock::set_shown(&mut captures.dock.state, Pane::Shortcuts, false),
-                Cmd::Focus => toggle_focus(&mut captures.dock),
-                Cmd::ScaleUp => theme.set_scale(theme::step_scale(scale, 1)),
-                Cmd::ScaleDown => theme.set_scale(theme::step_scale(scale, -1)),
-                Cmd::ScaleReset => theme.set_scale(1.0),
-            }
+    // Panes in their own windows, as (window, pane): the key handling, the
+    // View menu and the Shortcuts toggle all need to know where a pane lives.
+    let detached: Vec<(Entity, Pane)> = captures
+        .detached
+        .iter()
+        .map(|(entity, d)| (entity, d.pane))
+        .collect();
+    let help_open = pane_shown(&captures.dock, &detached, Pane::Shortcuts);
+
+    for cmd in read_cmds(ctx, help_open) {
+        match cmd {
+            Cmd::Focus => toggle_focus(&mut captures.dock),
+            Cmd::ScaleUp => theme.set_scale(theme::step_scale(scale, 1)),
+            Cmd::ScaleDown => theme.set_scale(theme::step_scale(scale, -1)),
+            Cmd::ScaleReset => theme.set_scale(1.0),
+            other => run_cmd(
+                other,
+                &mut host,
+                &mut captures.dock,
+                &detached,
+                &mut captures.commands,
+            ),
         }
     }
 
@@ -1335,10 +1316,15 @@ fn panels(
                     )
                     .clicked()
                     {
-                        toggle_pane(&mut captures.dock.state, Pane::Shortcuts);
+                        toggle_pane(
+                            &mut captures.dock,
+                            &detached,
+                            &mut captures.commands,
+                            Pane::Shortcuts,
+                        );
                     }
                     let menu = r.menu_button(if crowded { "⚙" } else { "⚙ View" }, |m| {
-                        panels_menu(m, &mut captures.dock);
+                        panels_menu(m, &mut captures.dock, &detached, &mut captures.commands);
                         m.separator();
                         appearance_controls(m, theme.choice, theme.scale, &mut ui.scale_drag)
                     });
@@ -1430,6 +1416,7 @@ fn panels(
         paths: &captures.paths,
         palette,
     };
+    let mut actions = Vec::new();
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |area| {
@@ -1438,6 +1425,7 @@ fn panels(
             let mut viewer = Viewer {
                 draw: |pane_ui, pane| draw_pane(pane_ui, pane, &mut cx),
                 viewport: &mut captures.viewport,
+                actions: &mut actions,
             };
             if let Some(focus) = captures.dock.focus.as_mut() {
                 egui_dock::DockArea::new(focus)
@@ -1458,6 +1446,107 @@ fn panels(
                     .show_inside(area, &mut viewer);
             }
         });
+
+    // Applied after the dock is drawn: the tab's menu can't edit the layout
+    // it is being drawn from.
+    for (pane, action) in actions {
+        match action {
+            PaneAction::Detach => {
+                if let Some(at) = captures.dock.state.find_tab(&pane) {
+                    captures.dock.state.remove_tab(at);
+                    dock::spawn_detached(
+                        &mut captures.commands,
+                        pane,
+                        &DetachedPlace::new(scale),
+                        to_color(palette.panel),
+                    );
+                }
+            }
+        }
+    }
+
+    for (entity, mut window) in &mut captures.detached {
+        // The window's context appears a frame after it is spawned.
+        let Some(wctx) = contexts
+            .try_ctx_for_entity_mut(entity)
+            .map(|c| egui::Context::clone(c))
+        else {
+            continue;
+        };
+        let pane = window.pane;
+        for cmd in read_cmds(&wctx, help_open) {
+            match cmd {
+                // A detached window has no focus mode; its scale is its own.
+                Cmd::Focus => {}
+                Cmd::ScaleUp => window.scale = theme::step_scale(window.scale, 1),
+                Cmd::ScaleDown => window.scale = theme::step_scale(window.scale, -1),
+                Cmd::ScaleReset => window.scale = 1.0,
+                other => run_cmd(
+                    other,
+                    &mut host,
+                    &mut captures.dock,
+                    &detached,
+                    &mut captures.commands,
+                ),
+            }
+        }
+        let mut dock_back = false;
+        egui::TopBottomPanel::top("detached_bar").show(&wctx, |bar| {
+            bar.horizontal(|row| {
+                row.strong(pane.title());
+                row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |r| {
+                    dock_back = tip(
+                        r.button("Dock back"),
+                        "Put this panel back in the main window",
+                        None,
+                    )
+                    .clicked();
+                    r.separator();
+                    // Laid out right to left, so + comes first.
+                    if tip(
+                        r.small_button("+"),
+                        "Larger UI in this window",
+                        Some(Cmd::ScaleUp),
+                    )
+                    .clicked()
+                    {
+                        window.scale = theme::step_scale(window.scale, 1);
+                    }
+                    if tip(
+                        r.small_button(format!("{:.0}%", window.scale * 100.0)),
+                        "This window's UI scale; click to reset to 100%",
+                        Some(Cmd::ScaleReset),
+                    )
+                    .clicked()
+                    {
+                        window.scale = 1.0;
+                    }
+                    if tip(
+                        r.small_button("−"),
+                        "Smaller UI in this window",
+                        Some(Cmd::ScaleDown),
+                    )
+                    .clicked()
+                    {
+                        window.scale = theme::step_scale(window.scale, -1);
+                    }
+                });
+            });
+        });
+        egui::CentralPanel::default().show(&wctx, |body| {
+            // The log and plot scroll and zoom themselves.
+            if matches!(pane, Pane::Log | Pane::Plot) {
+                draw_pane(body, pane, &mut cx);
+            } else {
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(body, |scroll| draw_pane(scroll, pane, &mut cx));
+            }
+        });
+        if dock_back {
+            dock::redock(&mut captures.dock, &mut captures.commands, entity, pane);
+        }
+    }
 
     let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
     deploy_window(ctx, &mut ui.deploy, fw_dir);
@@ -1879,9 +1968,89 @@ fn shortcuts_window(win: &mut egui::Ui) {
     );
 }
 
-fn toggle_pane(state: &mut egui_dock::DockState<Pane>, pane: Pane) {
-    let show = !dock::is_shown(state, pane);
-    dock::set_shown(state, pane, show);
+/// Whether `pane` is open, docked or in a window of its own.
+fn pane_shown(dock: &Dock, detached: &[(Entity, Pane)], pane: Pane) -> bool {
+    detached.iter().any(|&(_, p)| p == pane) || dock::is_shown(&dock.state, pane)
+}
+
+/// Opens or closes `pane` wherever it lives. Closing a detached pane closes
+/// its window rather than docking it back; a pane never exists in both places.
+fn set_pane_shown(
+    dock: &mut Dock,
+    detached: &[(Entity, Pane)],
+    commands: &mut Commands,
+    pane: Pane,
+    show: bool,
+) {
+    if let Some(&(window, _)) = detached.iter().find(|&&(_, p)| p == pane) {
+        if !show {
+            commands.entity(window).despawn();
+        }
+        return;
+    }
+    dock::set_shown(&mut dock.state, pane, show);
+}
+
+fn toggle_pane(dock: &mut Dock, detached: &[(Entity, Pane)], commands: &mut Commands, pane: Pane) {
+    let show = !pane_shown(dock, detached, pane);
+    set_pane_shown(dock, detached, commands, pane, show);
+}
+
+/// The shortcuts pressed in one window. Consumed (not just read) so a button
+/// that kept focus after a click doesn't also activate on Space. None while a
+/// text field has focus.
+fn read_cmds(ctx: &egui::Context, help_open: bool) -> Vec<Cmd> {
+    if ctx.wants_keyboard_input() {
+        return Vec::new();
+    }
+    ctx.input_mut(|inp| {
+        let mut cmds = Vec::new();
+        for row in SHORTCUTS {
+            let Some(cmd) = row.cmd else { continue };
+            // Esc is only ours while the window is open, else it is left alone.
+            if cmd == Cmd::CloseHelp && !help_open {
+                continue;
+            }
+            // Every bind is consumed (no short-circuit) so none is left behind.
+            let hit = row
+                .binds
+                .iter()
+                .fold(false, |hit, &(mods, key)| inp.consume_key(mods, key) | hit);
+            if hit {
+                cmds.push(cmd);
+            }
+        }
+        cmds
+    })
+}
+
+/// Runs a shortcut that means the same in every window. Focus mode and the UI
+/// scale are per window, so the callers handle those.
+fn run_cmd(
+    cmd: Cmd,
+    host: &mut Host,
+    dock: &mut Dock,
+    detached: &[(Entity, Pane)],
+    commands: &mut Commands,
+) {
+    match cmd {
+        Cmd::Pause => toggle_pause(),
+        Cmd::Step => step_clock(STEP_LONG_S),
+        Cmd::Skip => toggle_skip(),
+        Cmd::Restart => host.0.start(),
+        Cmd::Idle => hw().trigger_idle(),
+        Cmd::Nudge => {
+            let dir = hw().nudge_dir;
+            nudge(dir);
+        }
+        Cmd::Shake => {
+            let dir = hw().nudge_dir;
+            shake(dir);
+        }
+        Cmd::ToggleHelp => toggle_pane(dock, detached, commands, Pane::Shortcuts),
+        Cmd::CloseHelp => set_pane_shown(dock, detached, commands, Pane::Shortcuts, false),
+        Cmd::Focus | Cmd::ScaleUp | Cmd::ScaleDown | Cmd::ScaleReset => {}
+    }
 }
 
 /// Shows only the focused panel, or the 3D view if none is focused; the main
@@ -1900,17 +2069,22 @@ fn toggle_focus(dock: &mut Dock) {
 }
 
 /// The View menu's panel checkboxes and focus toggle.
-fn panels_menu(m: &mut egui::Ui, dock: &mut Dock) {
+fn panels_menu(
+    m: &mut egui::Ui,
+    dock: &mut Dock,
+    detached: &[(Entity, Pane)],
+    commands: &mut Commands,
+) {
     m.label("Panels");
     for pane in Pane::ALL {
-        let mut shown = dock::is_shown(&dock.state, pane);
+        let mut shown = pane_shown(dock, detached, pane);
         let check = egui::Checkbox::new(&mut shown, pane.title());
         if pane == Pane::Viewport {
             m.add_enabled(false, check).on_disabled_hover_text(
                 "The 3D view is always there (use focus mode to hide everything else)",
             );
         } else if m.add(check).changed() {
-            dock::set_shown(&mut dock.state, pane, shown);
+            set_pane_shown(dock, detached, commands, pane, shown);
         }
     }
     let mut focused = dock.focus.is_some();
