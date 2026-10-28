@@ -1616,9 +1616,14 @@ fn panels(
             });
         });
         egui::CentralPanel::default().show(&wctx, |body| {
-            // The log, plot and settings scroll (and the plot zooms) themselves.
-            if matches!(pane, Pane::Log | Pane::Plot | Pane::Settings) {
+            // The log and settings scroll themselves; the plot only up and down,
+            // as it fits its width and pans sideways by dragging.
+            if matches!(pane, Pane::Log | Pane::Settings) {
                 draw_pane(body, pane, &mut cx);
+            } else if pane == Pane::Plot {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(body, |scroll| draw_pane(scroll, pane, &mut cx));
             } else {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
