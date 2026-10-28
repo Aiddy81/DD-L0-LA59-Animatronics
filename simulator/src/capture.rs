@@ -9,6 +9,7 @@ use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 
 use crate::hw::hw;
 use crate::scene::CameraView;
+use crate::toast::{ToastKind, Toasts};
 use crate::Paths;
 
 /// Seconds between recorded frames: 10 fps is plenty for a GIF.
@@ -81,15 +82,25 @@ fn start_recording(captures: &Path) -> Result<Recording, std::io::Error> {
     })
 }
 
-fn capture(mut commands: Commands, mut controls: ResMut<ViewControls>, paths: Res<Paths>) {
+fn capture(
+    mut commands: Commands,
+    mut controls: ResMut<ViewControls>,
+    paths: Res<Paths>,
+    mut toasts: ResMut<Toasts>,
+) {
     if std::mem::take(&mut controls.screenshot) {
         let path = paths.captures.join(format!("shot-{}.png", unix_secs()));
         let note = match std::fs::create_dir_all(&paths.captures) {
             Ok(()) => {
                 save_png(&mut commands, path.clone());
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                toasts.push(ToastKind::Ok, format!("Screenshot saved: {name}"), None);
                 format!("[sim] screenshot saved to {}", path.display())
             }
-            Err(e) => format!("[sim] could not save the screenshot: {e}"),
+            Err(e) => {
+                toasts.push(ToastKind::Error, "Could not save the screenshot", None);
+                format!("[sim] could not save the screenshot: {e}")
+            }
         };
         hw().push_line(note);
     }

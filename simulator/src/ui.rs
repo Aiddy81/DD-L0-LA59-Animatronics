@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Stroke};
@@ -16,12 +17,13 @@ use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::deploy;
 use crate::editor;
-use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind};
+use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
 use crate::prefs::Prefs;
 use crate::pyhost::{PyHost, ScenarioRun};
 use crate::scene::{glow_rgb, CameraView, GlowSource, ModelChoice, RoomLight};
 use crate::settings::SettingsState;
 use crate::theme::{self, ActiveTheme, Palette, ThemeChoice};
+use crate::toast::{ToastKind, Toasts};
 
 /// A gentle bump, added to the held reading along the chosen direction. From
 /// rest it clears the firmware's NUDGE_Z_MG (250 mg) threshold.
@@ -384,6 +386,12 @@ pub struct UiState {
     /// Log text -> traceback location; canonicalize hits the disk, so not per frame.
     traceback_cache: HashMap<String, Option<(PathBuf, u32)>>,
     log_tab: LogTab,
+    /// Seq of the newest traceback already announced with a toast.
+    seen_traceback: Option<u64>,
+    /// Log line a toast click asked to scroll to; cleared once the log has drawn.
+    log_jump: Option<u64>,
+    /// The line last jumped to and when, so it stays marked for a moment.
+    log_highlight: Option<(u64, Instant)>,
     drive_file: DriveFile,
     /// The Shortcuts window; not saved to prefs.
     show_shortcuts: bool,
@@ -392,6 +400,11 @@ pub struct UiState {
     /// under the cursor mid-drag would move the slider away from it, so the
     /// scale is applied on release.
     scale_drag: Option<f32>,
+    /// Inline widths of the toolbar groups when last drawn inline, to decide which collapse.
+    group_widths: [f32; TOOLBAR_GROUPS],
+    /// Widths of the collapsed groups' menu buttons, and of the right-aligned toolbar area.
+    menu_widths: [f32; TOOLBAR_GROUPS],
+    right_width: f32,
 }
 
 /// What the bottom panel shows: the console log, or a file on the simulated drive.
@@ -400,6 +413,9 @@ enum LogTab {
     Console,
     File(&'static str),
 }
+
+/// How long a log line stays marked after a toast took the user to it.
+const LOG_HIGHLIGHT: Duration = Duration::from_secs(2);
 
 /// What PropMaker_Feather/log.py writes, and what it rolls over to.
 const LOG_FILES: [&str; 2] = ["log.txt", "log.old.txt"];
@@ -500,10 +516,16 @@ impl UiState {
             scenario_choice: String::new(),
             traceback_cache: HashMap::new(),
             log_tab: LogTab::Console,
+            seen_traceback: None,
+            log_jump: None,
+            log_highlight: None,
             drive_file: DriveFile::default(),
             show_shortcuts: false,
             deploy: DeployDlg::Closed,
             scale_drag: None,
+            group_widths: [0.0; TOOLBAR_GROUPS],
+            menu_widths: [DEFAULT_MENU_WIDTH; TOOLBAR_GROUPS],
+            right_width: 0.0,
         }
     }
 }
@@ -771,6 +793,7 @@ fn hot_reload(
     mut host: ResMut<Host>,
     mut cfg: ResMut<SimConfig>,
     paths: Res<crate::Paths>,
+    mut toasts: ResMut<Toasts>,
 ) {
     if ui.last_check.elapsed().as_millis() < 500 {
         return;
@@ -796,6 +819,8 @@ fn hot_reload(
         if ui.auto_reload {
             hw().push_line(format!("[sim] {what} changed - restarting"));
             host.0.start();
+            let name = if what == "shims" { "Shims" } else { "Firmware" };
+            toasts.push(ToastKind::Info, format!("{name} reloaded"), None);
         }
     }
 }
@@ -833,13 +858,381 @@ fn stop_on_exit(mut exits: EventReader<AppExit>, mut host: ResMut<Host>) {
 struct Captures<'w> {
     paths: Res<'w, crate::Paths>,
     controls: ResMut<'w, ViewControls>,
+    diagnostics: Res<'w, DiagnosticsStore>,
+    toasts: ResMut<'w, Toasts>,
+}
+
+const TOOLBAR_GROUPS: usize = 5;
+const GROUP_RUN: usize = 0;
+const GROUP_SPEED: usize = 1;
+const GROUP_CAMERA: usize = 2;
+const GROUP_CAPTURE: usize = 3;
+const GROUP_OPTIONS: usize = 4;
+/// Which toolbar group collapses into a menu first when the window is narrow.
+/// Run is never listed, so it always stays inline.
+const COLLAPSE_ORDER: [usize; 4] = [GROUP_OPTIONS, GROUP_CAPTURE, GROUP_CAMERA, GROUP_SPEED];
+/// Menu-button width assumed until a collapsed group has been drawn once.
+const DEFAULT_MENU_WIDTH: f32 = 80.0;
+/// Room kept for the More button.
+const MORE_WIDTH: f32 = 70.0;
+
+/// Decides, from last frame's measured widths, which toolbar groups are drawn
+/// as a menu button instead of inline, and records the widths drawn this frame.
+struct GroupLayout {
+    inline: [f32; TOOLBAR_GROUPS],
+    menu: [f32; TOOLBAR_GROUPS],
+    collapsed: [bool; TOOLBAR_GROUPS],
+    /// Folded groups that still don't fit, moved into one "More" menu.
+    in_more: [bool; TOOLBAR_GROUPS],
+    /// Set while the More menu's contents are being drawn.
+    more_pass: bool,
+}
+
+impl GroupLayout {
+    fn new(
+        inline: [f32; TOOLBAR_GROUPS],
+        menu: [f32; TOOLBAR_GROUPS],
+        avail: f32,
+        gap: f32,
+    ) -> Self {
+        let mut collapsed = [false; TOOLBAR_GROUPS];
+        let mut in_more = [false; TOOLBAR_GROUPS];
+        let need = |collapsed: &[bool; TOOLBAR_GROUPS], in_more: &[bool; TOOLBAR_GROUPS]| {
+            let groups: f32 = (0..TOOLBAR_GROUPS)
+                .filter(|g| !in_more[*g])
+                .map(|g| if collapsed[g] { menu[g] } else { inline[g] })
+                .sum();
+            let more = if in_more.contains(&true) {
+                MORE_WIDTH
+            } else {
+                0.0
+            };
+            groups + more + gap * TOOLBAR_GROUPS as f32
+        };
+        // Until every group has been measured inline there is nothing to compare, so draw them all.
+        if inline.iter().all(|w| *w > 0.0) {
+            for group in COLLAPSE_ORDER {
+                if need(&collapsed, &in_more) <= avail {
+                    break;
+                }
+                collapsed[group] = true;
+            }
+            for group in COLLAPSE_ORDER {
+                if need(&collapsed, &in_more) <= avail {
+                    break;
+                }
+                in_more[group] = true;
+            }
+        }
+        Self {
+            inline,
+            menu,
+            collapsed,
+            in_more,
+            more_pass: false,
+        }
+    }
+
+    fn crowded(&self) -> bool {
+        self.in_more.contains(&true)
+    }
+
+    /// Draws one group inline, or as a menu button holding the same controls.
+    /// Each pass (toolbar row, More menu) draws only its own groups.
+    fn show(
+        &mut self,
+        row: &mut egui::Ui,
+        group: usize,
+        label: &str,
+        hint: &str,
+        body: impl FnOnce(&mut egui::Ui),
+    ) {
+        if self.in_more[group] != self.more_pass {
+            return;
+        }
+        if group != GROUP_RUN && !self.more_pass {
+            row.separator();
+        }
+        if self.collapsed[group] {
+            let button = tip(row.menu_button(label, body).response, hint, None);
+            // Inside the More menu the button is menu-wide, not its toolbar width.
+            if !self.more_pass {
+                self.menu[group] = button.rect.width();
+            }
+        } else {
+            // Only measured while inline, so the collapse decision doesn't flicker.
+            self.inline[group] = row.scope(body).response.rect.width();
+        }
+    }
+}
+
+fn run_group(row: &mut egui::Ui, host: &mut PyHost) {
+    let running = host.is_running();
+    if tip(
+        row.button(if running { "🔄 Restart" } else { "▶ Run" }),
+        "Run code.py from the start",
+        Some(Cmd::Restart),
+    )
+    .clicked()
+    {
+        host.start();
+    }
+    if tip(
+        row.add_enabled(running, egui::Button::new("⏹ Stop")),
+        "Stop code.py",
+        None,
+    )
+    .clicked()
+    {
+        host.stop();
+    }
+    let paused = hw().clock.is_paused();
+    if tip(
+        row.button(if paused { "▶ Resume" } else { "⏸ Pause" }),
+        "Freeze code.py's clock",
+        Some(Cmd::Pause),
+    )
+    .clicked()
+    {
+        toggle_pause();
+    }
+    if tip(
+        row.add_enabled(paused, egui::Button::new("+10 ms")),
+        "Run the paused clock for 10 ms",
+        None,
+    )
+    .clicked()
+    {
+        step_clock(STEP_SHORT_S);
+    }
+    if tip(
+        row.add_enabled(paused, egui::Button::new("+100 ms")),
+        "Run the paused clock for 100 ms",
+        Some(Cmd::Step),
+    )
+    .clicked()
+    {
+        step_clock(STEP_LONG_S);
+    }
+    let skipping = hw().skipping;
+    if tip(
+        row.button(if skipping { "⏹ Stop skip" } else { "⏩ Skip" }),
+        "Run flat out until a behaviour starts (a sound plays or a hardware.py event changes), then drop back to 1x",
+        Some(Cmd::Skip),
+    )
+    .clicked()
+    {
+        toggle_skip();
+    }
+    if tip(
+        row.button("Trigger idle"),
+        "Ends the idle wait so attention_animation or trench_run runs",
+        Some(Cmd::Idle),
+    )
+    .clicked()
+    {
+        hw().trigger_idle();
+    }
+}
+
+fn speed_group(row: &mut egui::Ui) {
+    row.label("Speed");
+    let (mut speed, skipping) = {
+        let s = hw();
+        (s.clock.speed, s.skipping)
+    };
+    // Read back every frame so the slider follows presets and the end of a skip.
+    let slider = row.add_enabled(
+        !skipping,
+        egui::Slider::new(&mut speed, 1.0..=200.0)
+            .logarithmic(true)
+            .suffix("x"),
+    );
+    if tip(
+        slider,
+        "How fast code.py's clock runs against real time (1x to 200x)",
+        None,
+    )
+    .changed()
+        && !skipping
+    {
+        hw().set_speed(speed);
+    }
+    row.horizontal(|presets| {
+        for preset in SPEED_PRESETS {
+            if tip(
+                presets.button(format!("{preset}x")),
+                &format!("Run at {preset}x"),
+                None,
+            )
+            .clicked()
+            {
+                hw().set_speed(preset);
+            }
+        }
+    });
+}
+
+fn camera_group(
+    row: &mut egui::Ui,
+    controls: &mut ResMut<ViewControls>,
+    room: &mut ResMut<RoomLight>,
+) {
+    row.horizontal(|views| {
+        views.label("View");
+        for (label, view) in [
+            ("Front", CameraView::Front),
+            ("Side", CameraView::Side),
+            ("Top", CameraView::Top),
+        ] {
+            if tip(
+                views.button(label),
+                &format!("Look at the droid from the {}", label.to_lowercase()),
+                None,
+            )
+            .clicked()
+            {
+                controls.camera = Some(view);
+            }
+        }
+        if tip(views.button("Eyes"), "Close-up of the eyes", None).clicked() {
+            controls.camera = Some(CameraView::Eyes);
+        }
+        if tip(views.button("Reset"), "Back to the starting view", None).clicked() {
+            controls.camera = Some(CameraView::Reset);
+        }
+    });
+    row.separator();
+    row.horizontal(|lights| {
+        lights.label("Light").on_hover_text(
+            "Room lighting, to judge how bright the eyes and white LED look in a dim room",
+        );
+        let mut light = **room;
+        for choice in RoomLight::ALL {
+            tip(
+                lights.selectable_value(&mut light, choice, choice.label()),
+                &format!("{} room lighting", choice.label()),
+                None,
+            );
+        }
+        // Only touch the resource on a real change, so the lights aren't reset every frame.
+        if light != **room {
+            **room = light;
+        }
+    });
+}
+
+fn capture_group(row: &mut egui::Ui, controls: &mut ResMut<ViewControls>) {
+    if tip(
+        row.button("📷 Screenshot"),
+        "Save a PNG of the window to the captures folder next to the exe",
+        None,
+    )
+    .clicked()
+    {
+        controls.screenshot = true;
+    }
+    let record_label = if controls.is_recording() {
+        "⏹ Stop recording"
+    } else {
+        "⏺ Record"
+    };
+    if tip(
+        row.button(record_label),
+        "Save a PNG every 0.1 s, up to 30 s, for making a GIF",
+        None,
+    )
+    .clicked()
+    {
+        controls.toggle_record = true;
+    }
+}
+
+fn options_group(
+    row: &mut egui::Ui,
+    state: &mut UiState,
+    model: Option<&mut ResMut<ModelChoice>>,
+    paths: &crate::Paths,
+) {
+    let mut strict = hw().strict;
+    if tip(
+        row.checkbox(&mut strict, "CircuitPython strict"),
+        "Only CircuitPython 9 modules and APIs, and its float precision for time.monotonic(). Applies on restart.",
+        None,
+    )
+    .changed()
+    {
+        hw().strict = strict;
+    }
+    let mut board_speed = hw().board_speed;
+    if tip(
+        row.checkbox(&mut board_speed, "Board speed"),
+        "Each servo/LED write, accelerometer read and scheduler pass takes as long as on the robot ([board] in sim.toml).",
+        None,
+    )
+    .changed()
+    {
+        hw().board_speed = board_speed;
+    }
+    let mut servo_speed = hw().servo_speed;
+    if tip(
+        row.checkbox(&mut servo_speed, "Servo speed limit"),
+        "The 3D wings turn no faster than the real servo (sec_per_60deg in sim.toml [servo]). The log warns about moves it can't follow either way.",
+        None,
+    )
+    .changed()
+    {
+        hw().servo_speed = servo_speed;
+    }
+    log_mode_checkbox(row, &paths.fs);
+    tip(
+        row.checkbox(&mut state.auto_reload, "Restart when firmware is saved"),
+        "Also when a shim in dist\\shims\\ is added, saved or deleted.",
+        None,
+    );
+    if let Some(model) = model {
+        row.separator();
+        row.horizontal(|picker| {
+            picker.label("Model");
+            let mut use_gltf = model.use_gltf;
+            let gltf_available = model.gltf_available;
+            picker.add_enabled_ui(gltf_available, |r| {
+                let lola = r.selectable_value(&mut use_gltf, true, "Lola");
+                if gltf_available {
+                    lola.on_hover_text("The droid model from assets/droid.glb");
+                } else {
+                    lola.on_disabled_hover_text(
+                        "Build simulator/assets/droid.glb first (see README)",
+                    );
+                }
+            });
+            picker
+                .selectable_value(&mut use_gltf, false, "Primitive")
+                .on_hover_text("The simple built-in shapes");
+            // Only touch the resource on a real change, so the model isn't rebuilt every frame.
+            if use_gltf != model.use_gltf {
+                model.use_gltf = use_gltf;
+            }
+        });
+    }
+    let deploying = matches!(state.deploy, DeployDlg::Running(_));
+    if tip(
+        row.add_enabled(!deploying, egui::Button::new("Deploy to CIRCUITPY")),
+        "Copy the changed firmware files to the board (never lib/ or boot_out.txt)",
+        None,
+    )
+    .clicked()
+    {
+        let fw_dir = paths.code.parent().unwrap_or(Path::new("."));
+        state.deploy = open_deploy(fw_dir);
+    }
 }
 
 fn panels(
     mut contexts: EguiContexts,
     mut ui: ResMut<UiState>,
     mut host: ResMut<Host>,
-    model: Option<ResMut<ModelChoice>>,
+    mut model: Option<ResMut<ModelChoice>>,
     mut room: ResMut<RoomLight>,
     (cfg, mut audio, mut theme): (Res<SimConfig>, AudioUi, ResMut<ActiveTheme>),
     mut captures: Captures,
@@ -849,6 +1242,17 @@ fn panels(
     };
     let palette = theme.palette;
     let scale = theme.scale;
+
+    // Cloned so the lock is gone before anything else locks it.
+    let traceback = hw().last_traceback.clone();
+    if let Some((seq, msg)) = traceback {
+        if ui.seen_traceback != Some(seq) {
+            ui.seen_traceback = Some(seq);
+            captures
+                .toasts
+                .push(ToastKind::Error, format!("Traceback: {msg}"), Some(seq));
+        }
+    }
 
     // Consumed (not just read) so a button that kept focus after a click
     // doesn't also activate on Space. Skipped while a text field has focus.
@@ -898,257 +1302,83 @@ fn panels(
     }
 
     egui::TopBottomPanel::top("toolbar").show(ctx, |bar| {
-        bar.horizontal_wrapped(|row| {
-            let running = host.0.is_running();
-            if tip(
-                row.button(if running { "Restart" } else { "Run" }),
-                "Run code.py from the start",
-                Some(Cmd::Restart),
-            )
-            .clicked()
-            {
-                host.0.start();
-            }
-            if tip(
-                row.add_enabled(running, egui::Button::new("Stop")),
-                "Stop code.py",
-                None,
-            )
-            .clicked()
-            {
-                host.0.stop();
-            }
-            let paused = hw().clock.is_paused();
-            if tip(
-                row.button(if paused { "Resume" } else { "Pause" }),
-                "Freeze code.py's clock",
-                Some(Cmd::Pause),
-            )
-            .clicked()
-            {
-                toggle_pause();
-            }
-            if tip(
-                row.add_enabled(paused, egui::Button::new("+10 ms")),
-                "Run the paused clock for 10 ms",
-                None,
-            )
-            .clicked()
-            {
-                step_clock(STEP_SHORT_S);
-            }
-            if tip(
-                row.add_enabled(paused, egui::Button::new("+100 ms")),
-                "Run the paused clock for 100 ms",
-                Some(Cmd::Step),
-            )
-            .clicked()
-            {
-                step_clock(STEP_LONG_S);
-            }
-            row.label(if running { "running" } else { "stopped" });
-            row.separator();
-            row.label("Speed");
-            let (mut speed, skipping) = {
-                let s = hw();
-                (s.clock.speed, s.skipping)
-            };
-            // Read back every frame so the slider follows presets and the end of a skip.
-            let slider = row.add_enabled(
-                !skipping,
-                egui::Slider::new(&mut speed, 1.0..=200.0)
-                    .logarithmic(true)
-                    .suffix("x"),
-            );
-            if tip(
-                slider,
-                "How fast code.py's clock runs against real time (1x to 200x)",
-                None,
-            )
-            .changed()
-                && !skipping
-            {
-                hw().set_speed(speed);
-            }
-            for preset in SPEED_PRESETS {
-                if tip(
-                    row.button(format!("{preset}x")),
-                    &format!("Run at {preset}x"),
-                    None,
-                )
-                .clicked()
-                {
-                    hw().set_speed(preset);
-                }
-            }
-            if tip(
-                row.button(if skipping { "Stop skip" } else { "Skip to next event" }),
-                "Run flat out until a behaviour starts (a sound plays or a hardware.py event changes), then drop back to 1x",
-                Some(Cmd::Skip),
-            )
-            .clicked()
-            {
-                toggle_skip();
-            }
-            if tip(
-                row.button("Trigger idle now"),
-                "Ends the idle wait so attention_animation or trench_run runs",
-                Some(Cmd::Idle),
-            )
-            .clicked()
-            {
-                hw().trigger_idle();
-            }
-            row.separator();
-            let mut strict = hw().strict;
-            if tip(
-                row.checkbox(&mut strict, "CircuitPython strict"),
-                "Only CircuitPython 9 modules and APIs, and its float precision for time.monotonic(). Applies on restart.",
-                None,
-            )
-            .changed()
-            {
-                hw().strict = strict;
-            }
-            let mut board_speed = hw().board_speed;
-            if tip(
-                row.checkbox(&mut board_speed, "Board speed"),
-                "Each servo/LED write, accelerometer read and scheduler pass takes as long as on the robot ([board] in sim.toml).",
-                None,
-            )
-            .changed()
-            {
-                hw().board_speed = board_speed;
-            }
-            let mut servo_speed = hw().servo_speed;
-            if tip(
-                row.checkbox(&mut servo_speed, "Servo speed limit"),
-                "The 3D wings turn no faster than the real servo (sec_per_60deg in sim.toml [servo]). The log warns about moves it can't follow either way.",
-                None,
-            )
-            .changed()
-            {
-                hw().servo_speed = servo_speed;
-            }
-            log_mode_checkbox(row, &captures.paths.fs);
-            tip(
-                row.checkbox(&mut ui.auto_reload, "Restart when firmware is saved"),
-                "Also when a shim in dist\\shims\\ is added, saved or deleted.",
-                None,
-            );
-            if let Some(mut model) = model {
-                row.separator();
-                row.label("Model");
-                let mut use_gltf = model.use_gltf;
-                row.add_enabled_ui(model.gltf_available, |r| {
-                    let lola = r.selectable_value(&mut use_gltf, true, "Lola");
-                    if model.gltf_available {
-                        lola.on_hover_text("The droid model from assets/droid.glb");
-                    } else {
-                        lola.on_disabled_hover_text("Build simulator/assets/droid.glb first (see README)");
-                    }
-                });
-                row.selectable_value(&mut use_gltf, false, "Primitive")
-                    .on_hover_text("The simple built-in shapes");
-                // Only touch the resource on a real change, so the model isn't rebuilt every frame.
-                if use_gltf != model.use_gltf {
-                    model.use_gltf = use_gltf;
-                }
-            }
-            let deploying = matches!(ui.deploy, DeployDlg::Running(_));
-            if tip(
-                row.add_enabled(!deploying, egui::Button::new("Deploy to CIRCUITPY")),
-                "Copy the changed firmware files to the board (never lib/ or boot_out.txt)",
-                None,
-            )
-            .clicked()
-            {
-                let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
-                ui.deploy = open_deploy(fw_dir);
-            }
-            if tip(
-                row.button("Shortcuts"),
-                "List every key and mouse control",
-                Some(Cmd::ToggleHelp),
-            )
-            .clicked()
-            {
-                ui.show_shortcuts = !ui.show_shortcuts;
-            }
-            row.label(format!("sim time {:.1} s", hw().clock.now()));
-        });
-        bar.horizontal_wrapped(|row| {
-            let controls = &mut captures.controls;
-            row.label("View");
-            for (label, view) in [
-                ("Front", CameraView::Front),
-                ("Side", CameraView::Side),
-                ("Top", CameraView::Top),
-            ] {
-                if tip(
-                    row.button(label),
-                    &format!("Look at the droid from the {}", label.to_lowercase()),
-                    None,
-                )
-                .clicked()
-                {
-                    controls.camera = Some(view);
-                }
-            }
-            if tip(row.button("Eyes"), "Close-up of the eyes", None).clicked() {
-                controls.camera = Some(CameraView::Eyes);
-            }
-            if tip(row.button("Reset"), "Back to the starting view", None).clicked() {
-                controls.camera = Some(CameraView::Reset);
-            }
-            row.separator();
-            if tip(
-                row.button("Screenshot"),
-                "Save a PNG of the window to the captures folder next to the exe",
-                None,
-            )
-            .clicked()
-            {
-                controls.screenshot = true;
-            }
-            let record_label = if controls.is_recording() {
-                "Stop recording"
-            } else {
-                "Record"
-            };
-            if tip(
-                row.button(record_label),
-                "Save a PNG every 0.1 s, up to 30 s, for making a GIF",
-                None,
-            )
-            .clicked()
-            {
-                controls.toggle_record = true;
-            }
-            row.separator();
-            row.label("Light")
-                .on_hover_text("Room lighting, to judge how bright the eyes and white LED look in a dim room");
-            let mut light = *room;
-            for choice in RoomLight::ALL {
-                tip(
-                    row.selectable_value(&mut light, choice, choice.label()),
-                    &format!("{} room lighting", choice.label()),
-                    None,
+        bar.horizontal(|row| {
+            let gap = row.spacing().item_spacing.x * 3.0;
+            let avail = row.available_width() - ui.right_width - gap;
+            let mut groups = GroupLayout::new(ui.group_widths, ui.menu_widths, avail, gap);
+            groups.show(row, GROUP_RUN, "▶ Run", "Run, stop, pause and step code.py", |g| {
+                run_group(g, &mut host.0)
+            });
+            let crowded = groups.crowded();
+            let mut rest = |row: &mut egui::Ui, groups: &mut GroupLayout| {
+                groups.show(row, GROUP_SPEED, "⏩ Speed", "How fast code.py's clock runs", speed_group);
+                groups.show(
+                    row,
+                    GROUP_CAMERA,
+                    "🎥 Camera",
+                    "Camera views and room light",
+                    |g| camera_group(g, &mut captures.controls, &mut room),
                 );
+                groups.show(
+                    row,
+                    GROUP_CAPTURE,
+                    "📷 Capture",
+                    "Save a screenshot or record frames",
+                    |g| capture_group(g, &mut captures.controls),
+                );
+                groups.show(
+                    row,
+                    GROUP_OPTIONS,
+                    "Options",
+                    "How faithfully the simulator copies the board, model choice and deploy",
+                    |g| options_group(g, &mut ui, model.as_mut(), &captures.paths),
+                );
+            };
+            rest(row, &mut groups);
+            if crowded {
+                row.separator();
+                let more = row.menu_button("More", |m| {
+                    groups.more_pass = true;
+                    rest(m, &mut groups);
+                    groups.more_pass = false;
+                });
+                tip(more.response, "The groups that don't fit this window", None);
             }
-            // Only touch the resource on a real change, so the lights aren't reset every frame.
-            if light != *room {
-                *room = light;
-            }
-            row.separator();
-            let (picked, new_scale) =
-                appearance_controls(row, theme.choice, theme.scale, &mut ui.scale_drag);
-            // Written only on a real change so the apply system's change check stays quiet.
-            if let Some(choice) = picked.filter(|c| *c != theme.choice) {
-                theme.set_choice(choice);
-            }
-            if let Some(s) = new_scale {
-                theme.set_scale(s);
+            ui.group_widths = groups.inline;
+            ui.menu_widths = groups.menu;
+
+            let right = row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |r| {
+                r.scope(|r| {
+                    if tip(
+                        r.button(if crowded { "⌨" } else { "⌨ Shortcuts" }),
+                        "List every key and mouse control",
+                        Some(Cmd::ToggleHelp),
+                    )
+                    .clicked()
+                    {
+                        ui.show_shortcuts = !ui.show_shortcuts;
+                    }
+                    let menu = r.menu_button(if crowded { "⚙" } else { "⚙ View" }, |m| {
+                        appearance_controls(m, theme.choice, theme.scale, &mut ui.scale_drag)
+                    });
+                    tip(menu.response, "Theme and UI scale", None);
+                    // Written only on a real change so the apply system's change check stays quiet.
+                    if let Some((picked, new_scale)) = menu.inner {
+                        if let Some(choice) = picked.filter(|c| *c != theme.choice) {
+                            theme.set_choice(choice);
+                        }
+                        if let Some(s) = new_scale {
+                            theme.set_scale(s);
+                        }
+                    }
+                })
+                .response
+                .rect
+                .width()
+            });
+            // Kept at its full width, so dropping the text can't flip the layout back.
+            if !crowded {
+                ui.right_width = right.inner;
             }
         });
         // Cloned out so the lock isn't held while a click writes the request.
@@ -1181,6 +1411,19 @@ fn panels(
             });
         }
     });
+
+    // Declared before the side panel and log so it spans the whole window's
+    // bottom edge; egui places earlier panels outermost.
+    let fps = captures
+        .diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed());
+    let status = egui::TopBottomPanel::bottom("status")
+        .resizable(false)
+        .show(ctx, |bar| {
+            bar.horizontal(|row| status_bar(row, host.0.is_running(), fps, palette));
+        });
+    let status_height = status.response.rect.height();
 
     let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
     let side_panel = egui::SidePanel::right("hardware")
@@ -1467,12 +1710,19 @@ fn panels(
             }
             let filter = ui.log_filter.to_lowercase();
             let (show_firmware, show_sim) = (ui.show_firmware, ui.show_sim);
+            let jump = ui.log_jump;
+            // A fresh jump marks its line straight away.
+            let marked = jump.or(ui
+                .log_highlight
+                .filter(|(_, at)| at.elapsed() < LOG_HIGHLIGHT)
+                .map(|(seq, _)| seq));
             let cache = &mut ui.traceback_cache;
             if cache.len() > 512 {
                 cache.clear();
             }
             let log_scroll = egui::ScrollArea::vertical()
-                .stick_to_bottom(true)
+                // Following the end would undo the jump.
+                .stick_to_bottom(jump.is_none())
                 .auto_shrink([false, false])
                 .show(bottom, |area| {
                     let mut clicked = None;
@@ -1491,7 +1741,7 @@ fn panels(
                         } else {
                             None
                         };
-                        if let Some((path, number)) = location {
+                        let shown = if let Some((path, number)) = location {
                             let name = path.file_name().unwrap_or_default().to_string_lossy();
                             let link = area
                                 .add(
@@ -1507,18 +1757,39 @@ fn panels(
                             if link.clicked() {
                                 clicked = Some((path, number));
                             }
+                            link
                         } else if line.kind == LogKind::Error {
                             area.label(
                                 egui::RichText::new(&line.text)
                                     .monospace()
                                     .color(palette.error),
-                            );
+                            )
                         } else {
-                            area.monospace(&line.text);
+                            area.monospace(&line.text)
+                        };
+                        if jump == Some(line.seq) {
+                            shown.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if marked == Some(line.seq) {
+                            area.painter().rect_filled(
+                                shown.rect.expand(1.0),
+                                2.0,
+                                palette.accent.gamma_multiply(0.25),
+                            );
                         }
                     }
                     clicked
                 });
+            if let Some(seq) = jump {
+                // One frame is enough to scroll; the mark fades on its own timer.
+                ui.log_jump = None;
+                ui.log_highlight = Some((seq, Instant::now()));
+            }
+            if marked.is_some() {
+                bottom
+                    .ctx()
+                    .request_repaint_after(Duration::from_millis(200));
+            }
             // After the log lock is dropped: push_line takes it too.
             if let Some((path, number)) = log_scroll.inner {
                 if let Err(e) = editor::open_in_editor(&cfg.editor.command, &path, number) {
@@ -1538,6 +1809,22 @@ fn panels(
 
     let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
     deploy_window(ctx, &mut ui.deploy, fw_dir);
+
+    if let Some(seq) = captures.toasts.show(ctx, palette, status_height) {
+        let filter = ui.log_filter.to_lowercase();
+        // Looked up first: the lock must not be held while the filter is edited.
+        let hidden = hw()
+            .log
+            .iter()
+            .find(|l| l.seq == seq)
+            .is_some_and(|l| !line_visible(l, true, ui.show_sim, &filter));
+        ui.log_tab = LogTab::Console;
+        ui.show_firmware = true;
+        if hidden {
+            ui.log_filter.clear();
+        }
+        ui.log_jump = Some(seq);
+    }
 }
 
 /// The window body, read from the same table the key handling uses.
@@ -2534,6 +2821,136 @@ fn state_panel(ui: &mut egui::Ui, palette: &Palette) {
     }
 }
 
+/// Heap bar/readout colour; shared so the Board panel and status bar agree.
+fn heap_colour(palette: &Palette, used: f32) -> Color32 {
+    if used >= 1.0 {
+        palette.heap_over
+    } else if used >= 0.8 {
+        palette.heap_high
+    } else {
+        palette.heap_ok
+    }
+}
+
+/// Separator `sim_runtime.py` puts between the links of a task chain.
+const CHAIN_SEP: &str = " → ";
+
+/// What code.py is doing now: the button-started behaviour if any, else the
+/// function the deepest task's top-level coroutine called (chain
+/// `motion_sense → nose_boops → sleep` gives `nose_boops`). Tasks that are all
+/// just waiting (`name → sleep`) mean idle breathing.
+fn current_behaviour(running: Option<&str>, tasks: &[TaskState]) -> String {
+    if let Some(name) = running {
+        return name.to_owned();
+    }
+    let links = |t: &TaskState| t.chain.split(CHAIN_SEP).count();
+    // The LED scheduler runs alongside the wing behaviours; it would otherwise
+    // tie with them and hide what the droid is doing.
+    let behaviours = tasks
+        .iter()
+        .filter(|t| !t.chain.starts_with("random_led_scheduler"));
+    let deepest = behaviours.fold(None::<&TaskState>, |best, t| match best {
+        Some(b) if links(b) >= links(t) => Some(b),
+        _ => Some(t),
+    });
+    if let Some(name) = deepest
+        .filter(|t| links(t) >= 3)
+        .and_then(|t| t.chain.split(CHAIN_SEP).nth(1))
+    {
+        return name.to_owned();
+    }
+    if tasks
+        .iter()
+        .any(|t| t.chain.starts_with("ambient_breathing"))
+    {
+        "breathing".to_owned()
+    } else {
+        "\u{2014}".to_owned()
+    }
+}
+
+/// `1`, `2.5`, `100`: up to one decimal, no trailing ".0".
+fn trim_speed(speed: f64) -> String {
+    let text = format!("{speed:.1}");
+    text.strip_suffix(".0").unwrap_or(&text).to_owned()
+}
+
+/// One-row footer of live readouts, from the same sources as the panels.
+/// `hw()` is locked once and released before drawing.
+fn status_bar(ui: &mut egui::Ui, running: bool, fps: Option<f64>, palette: &Palette) {
+    let (paused, skipping, scenario, now, speed, behaviour, heap_bytes, budget_kb, used) = {
+        let s = hw();
+        let budget = s.heap_budget();
+        (
+            s.clock.is_paused(),
+            s.skipping,
+            s.scenario.as_ref().map(|sc| sc.name.clone()),
+            s.clock.now(),
+            s.clock.speed,
+            current_behaviour(s.behaviour_running.as_deref(), &s.fw_state.tasks),
+            s.heap_bytes,
+            s.board.heap_budget_kb,
+            (s.heap_bytes / budget) as f32,
+        )
+    };
+
+    let (state, colour) = if !running {
+        ("stopped", None)
+    } else if skipping {
+        ("skipping", Some(palette.warn))
+    } else if paused {
+        ("paused", Some(palette.warn))
+    } else {
+        ("running", Some(palette.ok))
+    };
+    let text = match &scenario {
+        Some(name) => format!("{state} · scenario {name}"),
+        None => state.to_owned(),
+    };
+    let text = match colour {
+        Some(c) => egui::RichText::new(text).color(c),
+        None => egui::RichText::new(text).weak(),
+    };
+    tip(
+        ui.label(text),
+        "Whether code.py is running, and whether its clock is paused",
+        None,
+    );
+    ui.separator();
+    tip(
+        ui.label(format!("sim time {now:.1} s")),
+        "code.py's clock (time.monotonic), in virtual seconds",
+        None,
+    );
+    ui.separator();
+    tip(
+        ui.label(format!("{}x", trim_speed(speed))),
+        "How fast code.py's clock runs against real time",
+        None,
+    );
+    ui.separator();
+    tip(
+        ui.label(behaviour),
+        "What code.py is doing now, from the task chains in the State panel",
+        None,
+    );
+    ui.separator();
+    tip(
+        ui.label(
+            egui::RichText::new(format!(
+                "heap ~{:.0} / {budget_kb:.0} KB",
+                heap_bytes / 1024.0
+            ))
+            .color(heap_colour(palette, used)),
+        ),
+        "Estimated heap use; see the Board panel for the peak and how it is estimated",
+        None,
+    );
+    ui.separator();
+    let fps_text = fps.map_or_else(|| "— FPS".to_owned(), |f| format!("{f:.0} FPS"));
+    tip(ui.label(fps_text), "Frames drawn per second", None);
+}
+
 fn board_panel(ui: &mut egui::Ui, palette: &Palette) {
     let s = hw();
     let b = &s.board;
@@ -2554,13 +2971,7 @@ fn board_panel(ui: &mut egui::Ui, palette: &Palette) {
 
     let budget = s.heap_budget();
     let used = (s.heap_bytes / budget) as f32;
-    let colour = if used >= 1.0 {
-        palette.heap_over
-    } else if used >= 0.8 {
-        palette.heap_high
-    } else {
-        palette.heap_ok
-    };
+    let colour = heap_colour(palette, used);
     ui.add(
         egui::ProgressBar::new(used.min(1.0))
             .fill(colour)
@@ -2864,5 +3275,44 @@ fn deploy_window(ctx: &egui::Context, dlg: &mut DeployDlg, fw_dir: &Path) {
         *dlg = next;
     } else if !open {
         *dlg = DeployDlg::Closed;
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn task(chain: &str) -> TaskState {
+        TaskState {
+            chain: chain.to_owned(),
+            numbers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn behaviour_from_deepest_chain() {
+        let tasks = [
+            task("ambient_breathing → sleep"),
+            task("motion_sense → nose_boops → sine_flaps → sleep"),
+        ];
+        assert_eq!(current_behaviour(None, &tasks), "nose_boops");
+    }
+
+    #[test]
+    fn behaviour_idle_and_button() {
+        let waiting = [
+            task("ambient_breathing → sleep"),
+            task("motion_sense → sleep"),
+        ];
+        assert_eq!(current_behaviour(None, &waiting), "breathing");
+        assert_eq!(current_behaviour(None, &[]), "\u{2014}");
+        assert_eq!(current_behaviour(Some("angry"), &waiting), "angry");
+    }
+
+    #[test]
+    fn speed_trims_trailing_zero() {
+        assert_eq!(trim_speed(1.0), "1");
+        assert_eq!(trim_speed(2.5), "2.5");
+        assert_eq!(trim_speed(100.0), "100");
     }
 }

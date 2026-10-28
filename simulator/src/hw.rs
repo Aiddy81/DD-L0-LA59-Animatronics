@@ -45,6 +45,9 @@ pub enum LogKind {
 }
 
 pub struct LogLine {
+    /// Unique and increasing for the life of the process, so a line can be
+    /// found again after older ones are dropped.
+    pub seq: u64,
     pub kind: LogKind,
     pub text: String,
 }
@@ -116,6 +119,11 @@ pub struct HwState {
     /// Between a "Traceback" header and its exception message, so the whole
     /// traceback can be coloured as an error.
     in_traceback: bool,
+    next_seq: u64,
+    /// `seq` of the open traceback's header line.
+    traceback_start: u64,
+    /// The latest finished traceback: its header's `seq` and exception message.
+    pub last_traceback: Option<(u64, String)>,
     /// Audio commands from `code.py`, drained by the audio system.
     pub audio: Vec<AudioCmd>,
     /// What code.py created its `audiomixer.Mixer` with; None until it does.
@@ -175,6 +183,9 @@ impl HwState {
             log: VecDeque::new(),
             partial_line: String::new(),
             in_traceback: false,
+            next_seq: 0,
+            traceback_start: 0,
+            last_traceback: None,
             audio: Vec::new(),
             mixer: None,
             clock: SimClock::new(),
@@ -214,6 +225,8 @@ impl HwState {
         let servo_speed = self.servo_speed;
         let board = self.board.clone();
         let log = std::mem::take(&mut self.log);
+        // Kept with the log: seqs must stay unique across runs.
+        let (next_seq, last_traceback) = (self.next_seq, self.last_traceback.take());
         *self = Self::new();
         self.accel_g = accel;
         self.nudge_dir = nudge_dir;
@@ -223,6 +236,8 @@ impl HwState {
         self.servo_speed = servo_speed;
         self.board = board;
         self.log = log;
+        self.next_seq = next_seq;
+        self.last_traceback = last_traceback;
     }
 
     /// Fast-forwards until a behaviour starts (see `end_skip`).
@@ -352,6 +367,8 @@ impl HwState {
     }
 
     pub fn push_line(&mut self, line: String) {
+        let seq = self.next_seq;
+        self.next_seq += 1;
         let kind = if line.starts_with("[sim]") {
             if line.to_lowercase().contains("error") {
                 LogKind::Error
@@ -360,14 +377,19 @@ impl HwState {
             }
         } else if line.starts_with("Traceback (most recent call last)") {
             self.in_traceback = true;
+            self.traceback_start = seq;
             LogKind::Error
         } else if self.in_traceback {
             if line.is_empty() {
                 self.in_traceback = false;
+                self.last_traceback = Some((self.traceback_start, "Traceback".to_owned()));
                 LogKind::Firmware
             } else {
                 // The first unindented line is the exception message, which ends it.
                 self.in_traceback = line.starts_with(char::is_whitespace);
+                if !self.in_traceback {
+                    self.last_traceback = Some((self.traceback_start, line.clone()));
+                }
                 LogKind::Error
             }
         } else {
@@ -376,7 +398,11 @@ impl HwState {
         if self.log.len() >= LOG_CAP {
             self.log.pop_front();
         }
-        self.log.push_back(LogLine { kind, text: line });
+        self.log.push_back(LogLine {
+            seq,
+            kind,
+            text: line,
+        });
     }
 
     pub fn clear_log(&mut self) {
@@ -536,6 +562,17 @@ mod tests {
             .filter(|l| l.text.starts_with("[sim] skip stopped"))
             .count();
         assert_eq!(stops, 1);
+    }
+
+    #[test]
+    fn traceback_records_header_seq_and_message() {
+        let mut s = HwState::new();
+        s.push_line("hello".to_owned());
+        s.push_line("Traceback (most recent call last):".to_owned());
+        s.push_line("  File \"code.py\", line 3, in <module>".to_owned());
+        s.push_line("ValueError: foo".to_owned());
+        assert_eq!(s.last_traceback, Some((1, "ValueError: foo".to_owned())));
+        assert_eq!(s.log[1].seq, 1);
     }
 
     #[test]

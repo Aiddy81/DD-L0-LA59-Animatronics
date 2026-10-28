@@ -1,3 +1,26 @@
+# Simulator: UI refresh part 2 — grouped toolbar, status bar, toasts (#80)
+
+Branch: `feature/sim-ui-toolbar`, stacked on `feature/sim-ui-theme` (PR #82, not yet merged). PR 2 of 5; no docking, command palette or overlays.
+
+- [x] `ui.rs`: toolbar as five groups (Run, Speed, Options, Camera, Capture) + ⚙ View menu (theme, UI scale) and Shortcuts; groups fold into menus (Options, Capture, Camera, Speed) when narrow, then into one More menu; icon glyphs from egui's bundled fonts; every control keeps its `tip` text and `SHORTCUTS` key
+- [x] `ui.rs` / `main.rs`: status bar (run state, sim time, speed, behaviour, heap, FPS) from the same sources as the panels; shared `heap_colour`; `FrameTimeDiagnosticsPlugin`
+- [x] `toast.rs` (new), `capture.rs`, `hw.rs`, `ui.rs`: toasts for screenshot saved, firmware/shims reloaded, traceback (click shows it in the log); palette tokens only
+- [x] README: toolbar groups, status bar, notifications; renamed buttons
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` (also `--tests`) clean; 7 scenarios + headless checks pass
+- [x] Captures (window capture + posted input): toolbar at 1800/1300/1000/820 px; More > Capture > Screenshot works; status bar vs panels; all three toasts in Light, Dark, High contrast; traceback click switches to Log, scrolls and highlights
+- [x] Commit, push, PR (stacked on #82)
+- [ ] Interactive with a real mouse: hover tooltips in folded menus, theme picker inside the ⚙ View menu, a real traceback scrolled far up the log — user
+
+## Review
+- Run alone is ~550 px, so at ~800 px even four folded menus didn't fit and the row pushed View/Shortcuts off-screen (and stopped the Behaviours row wrapping). Groups that still don't fit now go into one More menu, and the right-hand buttons drop their text. Layout decisions use widths measured in the full form, so dropping text can't make it flip back and forth.
+- The status bar was first declared after the side panel, so it only spanned the left part and FPS was cut off on narrow windows. It is declared before the side panel now.
+- `●` isn't in egui's bundled fonts (rendered as a box); the toast marker is painted instead. The State panel's `→` chain separator has the same problem (pre-existing, not changed here).
+- Current behaviour skips the LED scheduler's chain, which otherwise ties with the wing behaviours.
+- Saved screenshots are the 3D view only, so an open menu doesn't spoil them.
+- Unit tests in `hw.rs`/`ui.rs` compile under `clippy --tests` but can't run: the crate's tests need the Windows target (and a Linux build stops at `alsa-sys`).
+- A window size saved far off-screen (65k px tall) crashes the app at start; found by accident while testing, out of scope here (PR 3 handles off-screen windows).
+
+
 # Simulator: UI refresh part 1 — style, themes, UI scale, tooltips (#80)
 
 Branch: `feature/sim-ui-theme` (off `Documentation`). PR 1 of 5 from the issue; toolbar/status bar/toasts, docking, palette and overlays follow in later PRs.
