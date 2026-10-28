@@ -6,10 +6,10 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
-use bevy_egui::EguiContexts;
 use serde::{Deserialize, Serialize};
 
 use crate::config::SimConfig;
+use crate::dock::ViewportRect;
 use crate::hw::hw;
 use crate::theme::ActiveTheme;
 use crate::Paths;
@@ -256,7 +256,8 @@ impl Plugin for ScenePlugin {
                     drive_glow,
                     apply_room_light
                         .run_if(resource_changed::<RoomLight>.or(resource_changed::<ActiveTheme>)),
-                    orbit_camera,
+                    orbit_camera.after(crate::ui::UiSet),
+                    apply_viewport.after(crate::ui::UiSet),
                 ),
             );
     }
@@ -366,8 +367,9 @@ fn sensor_dir(normal: Option<Vec3>) -> Option<[f32; 3]> {
 /// normal where you clicked, harder the longer you hold. A drag to orbit the
 /// camera that happens to start on it doesn't count. Clicks on any part
 /// bubble up to the model's root, which has this observer.
-fn boop(click: Trigger<Pointer<Click>>, drag: Res<DragDistance>) {
-    if drag.0 >= 4.0 {
+fn boop(click: Trigger<Pointer<Click>>, drag: Res<DragDistance>, viewport: Res<ViewportRect>) {
+    // A click on a panel or window drawn over the droid is not a boop.
+    if !viewport.hovered || drag.0 >= 4.0 {
         return;
     }
     let dir = sensor_dir(click.hit.normal).unwrap_or_else(|| crate::hw::hw().nudge_dir);
@@ -602,7 +604,7 @@ fn apply_room_light(
 }
 
 fn orbit_camera(
-    mut contexts: EguiContexts,
+    viewport: Res<ViewportRect>,
     input: MouseInput,
     mut cams: Query<(&mut OrbitCam, &mut Transform)>,
     mut drag: ResMut<DragDistance>,
@@ -624,14 +626,11 @@ fn orbit_camera(
         .iter()
         .find(|(glow, _)| glow.source() == GlowSource::MainEye)
         .map_or(HOME_FOCUS, |(_, at)| at.translation());
-    let over_ui = contexts
-        .try_ctx_mut()
-        .is_some_and(|ctx| ctx.wants_pointer_input() || ctx.is_pointer_over_area());
     for (mut cam, mut transform) in &mut cams {
         if let Some(view) = preset {
             apply_view(&mut cam, view, eye_focus);
         }
-        if !over_ui {
+        if viewport.hovered {
             if buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right) {
                 cam.yaw -= motion.delta.x * 0.006;
                 cam.pitch = (cam.pitch + motion.delta.y * 0.006).clamp(-0.2, 1.45);
@@ -674,6 +673,50 @@ fn apply_view(cam: &mut OrbitCam, view: CameraView, eye_focus: Vec3) {
         },
         CameraView::Reset => OrbitCam::home(),
     };
+}
+
+/// Points the 3D camera at the dock's 3D-view rectangle, so the scene renders
+/// only there and egui's panels never sit on top of it. With the tab hidden
+/// there is nothing to draw into, so the camera is switched off.
+fn apply_viewport(
+    rect: Res<ViewportRect>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut cameras: Query<&mut Camera, With<Camera3d>>,
+) {
+    let wanted = rect.rect.and_then(|r| {
+        let window = windows.single().ok()?;
+        let (max_w, max_h) = (window.physical_width(), window.physical_height());
+        if max_w == 0 || max_h == 0 {
+            return None;
+        }
+        let ppp = rect.ppp;
+        // Clamped inside the window: wgpu rejects a viewport that overhangs the target.
+        let x = ((r.min.x * ppp).round().max(0.0) as u32).min(max_w - 1);
+        let y = ((r.min.y * ppp).round().max(0.0) as u32).min(max_h - 1);
+        let w = ((r.width() * ppp).round().max(1.0) as u32).min(max_w - x);
+        let h = ((r.height() * ppp).round().max(1.0) as u32).min(max_h - y);
+        Some(bevy::render::camera::Viewport {
+            physical_position: UVec2::new(x, y),
+            physical_size: UVec2::new(w, h),
+            ..default()
+        })
+    });
+    for mut camera in &mut cameras {
+        let active = wanted.is_some();
+        let same_viewport = match (&camera.viewport, &wanted) {
+            (Some(a), Some(b)) => {
+                a.physical_position == b.physical_position && a.physical_size == b.physical_size
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_viewport {
+            camera.viewport = wanted.clone();
+        }
+        if camera.is_active != active {
+            camera.is_active = active;
+        }
+    }
 }
 
 #[cfg(test)]

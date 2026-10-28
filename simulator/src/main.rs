@@ -6,6 +6,7 @@ mod audio;
 mod capture;
 mod config;
 mod deploy;
+mod dock;
 mod droid;
 mod editor;
 mod hw;
@@ -172,6 +173,7 @@ fn main() {
             capture::CapturePlugin,
             toast::ToastPlugin,
             ui::UiPlugin,
+            dock::DockPlugin,
         ))
         .run();
 }

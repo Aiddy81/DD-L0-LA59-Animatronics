@@ -1,6 +1,5 @@
 //! User preferences kept between runs in `ddl0-sim.prefs.toml` next to the exe:
-//! window and panel sizes, the toolbar toggles, section open/closed state and
-//! the model and room-light choices.
+//! window size, the toolbar toggles and the model and room-light choices.
 
 use std::path::Path;
 
@@ -20,8 +19,6 @@ use crate::theme::{self, ThemeChoice};
 pub struct Prefs {
     pub window_width: f32,
     pub window_height: f32,
-    pub panel_width: f32,
-    pub log_height: f32,
     /// `None` follows `[model] kind` in sim.toml; `Some` is the user's choice.
     pub model_gltf: Option<bool>,
     pub room_light: RoomLight,
@@ -32,13 +29,6 @@ pub struct Prefs {
     pub board_speed: bool,
     pub servo_speed: bool,
     pub auto_reload: bool,
-    pub open_motion: bool,
-    pub open_pca: bool,
-    pub open_board: bool,
-    pub open_plot: bool,
-    pub open_settings: bool,
-    pub open_state: bool,
-    pub open_audio: bool,
     /// The simulator's output volume (0..1) and mute; the firmware's own
     /// mixer level still applies on top.
     pub volume: f32,
@@ -57,8 +47,6 @@ impl Default for Prefs {
         Self {
             window_width: 1500.0,
             window_height: 920.0,
-            panel_width: 300.0,
-            log_height: 170.0,
             model_gltf: None,
             room_light: RoomLight::default(),
             theme: ThemeChoice::default(),
@@ -67,13 +55,6 @@ impl Default for Prefs {
             board_speed: true,
             servo_speed: true,
             auto_reload: true,
-            open_motion: true,
-            open_pca: true,
-            open_board: true,
-            open_plot: true,
-            open_settings: true,
-            open_state: true,
-            open_audio: false,
             volume: 1.0,
             muted: false,
             show_firmware: true,

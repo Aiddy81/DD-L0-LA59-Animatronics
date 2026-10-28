@@ -1,3 +1,17 @@
+# Simulator: UI refresh part 3 — dockable, detachable panels and layouts (#80)
+
+Branch: `feature/sim-ui-docking`, stacked on `feature/sim-ui-toolbar` (PR #83, not yet merged). PR 3 of 5; no command palette, keyboard navigation, overlays or transitions. Crate: `egui_dock =0.16.0` (egui 0.31 release; confirmed with the user over `egui_tiles =0.12.0` because it has floating windows, close buttons and tab menus built in).
+
+- [ ] Step 1 — `Cargo.toml`: `egui_dock =0.16.0` (serde), `serde_json =1.0.154`; `dock.rs` (new): `Pane`, `PaneCx`, `draw_pane`; Motion/PCA/Log bodies extracted from `ui.rs`; dock replaces the side and log panels; Viewport pane sets the camera viewport and gates orbit/boop
+- [ ] Step 2 — floating, tab context menu (Float / Detach / Close), View menu panel ticks, focus mode (F11), dock style from palette tokens
+- [ ] Step 3 — detached OS windows (Bevy secondary `Window` + own egui context), close/Dock back re-docks, theme and UI scale per window
+- [ ] Step 4 — `layout.rs` (new): layout in prefs (dock, floating rects, detached windows, main window position), named layouts (Default/Debug/Demo + user), Reset, export/import (`dist\layouts\`), validation, off-screen recovery
+- [ ] README: docking, View menu, focus mode, layouts, export/import, per-window UI scale
+- [ ] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` (also `--tests`) clean; 7 scenarios + headless checks pass
+- [ ] Captures: dock/float/detach/re-dock/hide/show every pane; focus mode; restart restores layout, floating and detached windows, scale; layouts switch; export/import round-trip; Reset; off-screen pulled back; Light/Dark/High contrast readable; boop only through the viewport
+- [ ] Commit, push, PR (stacked on #83)
+
+
 # Simulator: UI refresh part 2 — grouped toolbar, status bar, toasts (#80)
 
 Branch: `feature/sim-ui-toolbar`, stacked on `feature/sim-ui-theme` (PR #82, not yet merged). PR 2 of 5; no docking, command palette or overlays.

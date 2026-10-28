@@ -16,6 +16,7 @@ use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::SimConfig;
 use crate::deploy;
+use crate::dock::{Dock, Pane, Viewer, ViewportRect};
 use crate::editor;
 use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, TaskState};
 use crate::prefs::Prefs;
@@ -341,17 +342,6 @@ fn tip(resp: egui::Response, text: &str, cmd: Option<Cmd>) -> egui::Response {
         .on_disabled_hover_text(text)
 }
 
-/// A collapsible right-panel section with the shared heading style. Returns
-/// whether it is open, for the caller to remember.
-fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) -> bool {
-    let heading = egui::RichText::new(title).text_style(egui::TextStyle::Heading);
-    let shown = egui::CollapsingHeader::new(heading)
-        .id_salt(title)
-        .default_open(open)
-        .show(ui, body);
-    shown.openness > 0.5
-}
-
 #[derive(Resource)]
 pub struct Host(pub PyHost);
 
@@ -370,16 +360,7 @@ pub struct UiState {
     log_filter: String,
     show_firmware: bool,
     show_sim: bool,
-    open_motion: bool,
-    open_pca: bool,
-    open_board: bool,
-    open_audio: bool,
-    open_plot: bool,
-    open_settings: bool,
-    open_state: bool,
     settings: SettingsState,
-    panel_width: f32,
-    log_height: f32,
     /// Names (file stems) of simulator/scenarios/*.toml, re-listed with hot_reload.
     scenarios: Vec<String>,
     scenario_choice: String,
@@ -502,16 +483,7 @@ impl UiState {
             log_filter: String::new(),
             show_firmware: prefs.show_firmware,
             show_sim: prefs.show_sim,
-            open_motion: prefs.open_motion,
-            open_pca: prefs.open_pca,
-            open_board: prefs.open_board,
-            open_audio: prefs.open_audio,
-            open_plot: prefs.open_plot,
-            open_settings: prefs.open_settings,
-            open_state: prefs.open_state,
             settings: SettingsState::default(),
-            panel_width: prefs.panel_width,
-            log_height: prefs.log_height,
             scenarios: Vec::new(),
             scenario_choice: String::new(),
             traceback_cache: HashMap::new(),
@@ -530,12 +502,19 @@ impl UiState {
     }
 }
 
+/// The control panels, for systems that need the dock's rectangle up to date.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct UiSet;
+
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (record_history, hot_reload, panels).chain())
-            .add_systems(Last, (stop_on_exit, save_prefs));
+        app.add_systems(
+            Update,
+            (record_history, hot_reload, panels.in_set(UiSet)).chain(),
+        )
+        .add_systems(Last, (stop_on_exit, save_prefs));
     }
 }
 
@@ -582,8 +561,6 @@ fn save_prefs(
     let current = Prefs {
         window_width: width,
         window_height: height,
-        panel_width: ui.panel_width,
-        log_height: ui.log_height,
         model_gltf: model.map(|m| m.use_gltf).or(saved.model_gltf),
         room_light: *room,
         theme: theme.choice,
@@ -592,13 +569,6 @@ fn save_prefs(
         board_speed,
         servo_speed,
         auto_reload: ui.auto_reload,
-        open_motion: ui.open_motion,
-        open_pca: ui.open_pca,
-        open_board: ui.open_board,
-        open_audio: ui.open_audio,
-        open_plot: ui.open_plot,
-        open_settings: ui.open_settings,
-        open_state: ui.open_state,
         volume: mix.volume,
         muted: mix.muted,
         show_firmware: ui.show_firmware,
@@ -860,6 +830,8 @@ struct Captures<'w> {
     controls: ResMut<'w, ViewControls>,
     diagnostics: Res<'w, DiagnosticsStore>,
     toasts: ResMut<'w, Toasts>,
+    dock: ResMut<'w, Dock>,
+    viewport: ResMut<'w, ViewportRect>,
 }
 
 const TOOLBAR_GROUPS: usize = 5;
@@ -1412,7 +1384,7 @@ fn panels(
         }
     });
 
-    // Declared before the side panel and log so it spans the whole window's
+    // Declared before the dock so it spans the whole window's
     // bottom edge; egui places earlier panels outermost.
     let fps = captures
         .diagnostics
@@ -1425,379 +1397,32 @@ fn panels(
         });
     let status_height = status.response.rect.height();
 
-    let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
-    let side_panel = egui::SidePanel::right("hardware")
-        .default_width(ui.panel_width)
-        .show(ctx, |side| {
-            let motion_open = section(side, "Motion (LIS3DH)", ui.open_motion, |side| {
-                    side.horizontal_wrapped(|row| {
-                        let dir = hw().nudge_dir;
-                        if tip(
-                            row.button("Nudge"),
-                            "One reading 0.3 g past the held value, in the chosen direction. Clicking the droid also boops, harder the longer you hold, from the side you click",
-                            Some(Cmd::Nudge),
-                        )
-                        .clicked()
-                        {
-                            nudge(dir);
-                        }
-                        if tip(
-                            row.button("Hard shake"),
-                            "One reading 2 g past the held value, in the chosen direction",
-                            Some(Cmd::Shake),
-                        )
-                        .clicked()
-                        {
-                            shake(dir);
-                        }
-                        if tip(
-                            row.checkbox(&mut ui.tipped, "Tipped over"),
-                            "Hold the sensor upside down (z reads -1 g)",
-                            None,
-                        )
-                        .changed()
-                        {
-                            hw().accel_g = [0.0, 0.0, if ui.tipped { -1.0 } else { 1.0 }];
-                        }
-                        if tip(row.button("Rest"), "Back to lying flat (z reads +1 g)", None).clicked() {
-                            hw().accel_g = [0.0, 0.0, 1.0];
-                            ui.tipped = false;
-                        }
-                    });
-                    let current = hw().nudge_dir;
-                    let selected = DIRECTIONS
-                        .iter()
-                        .find(|(_, d)| *d == current)
-                        .map_or("", |(name, _)| *name);
-                    egui::ComboBox::from_label("Direction")
-                        .selected_text(selected)
-                        .show_ui(side, |menu| {
-                            for (name, d) in DIRECTIONS {
-                                if menu.selectable_label(current == d, name).clicked() {
-                                    hw().nudge_dir = d;
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text(
-                            "The firmware reads only z, so \u{b1}X/\u{b1}Y nudges are ignored, as on the robot",
-                        );
-                    let mut held = hw().accel_g;
-                    let mut changed = false;
-                    for (value, label) in held
-                        .iter_mut()
-                        .zip(["held x (g)", "held y (g)", "held z (g)"])
-                    {
-                        changed |= tip(
-                            side.add(egui::Slider::new(value, -3.0..=3.0).text(label)),
-                            "The accelerometer reading held between nudges",
-                            None,
-                        )
-                        .changed();
-                    }
-                    if changed {
-                        hw().accel_g = held;
-                    }
-                });
-            ui.open_motion = motion_open;
-
-            side.separator();
-            let state_open = section(side, "State", ui.open_state, |side| {
-                state_panel(side, palette)
-            });
-            ui.open_state = state_open;
-
-            side.separator();
-            let pca_open = section(side, "PCA9685", ui.open_pca, |side| {
-                    egui::Grid::new("channels")
-                        .striped(true)
-                        .show(side, |grid| {
-                            grid.label("ch");
-                            grid.label("part");
-                            grid.label("duty");
-                            grid.label("pulse");
-                            grid.label("view");
-                            grid.end_row();
-                            let names = [
-                                "R wing", "L wing", "main R", "main G", "main B", "small R",
-                                "small G", "small B",
-                            ];
-                            for ch in 0..16 {
-                                // Spare channels appear once a custom shim writes to them.
-                                let name = names.get(ch).copied().unwrap_or("spare");
-                                if ch >= names.len() && hw().pca_duty[ch].is_none() {
-                                    continue;
-                                }
-                                // Before hw() is locked below: these helpers lock it too.
-                                let view = channel_view(&cfg, ch);
-                                let s = hw();
-                                grid.label(ch.to_string());
-                                grid.label(name);
-                                match (s.duty_fraction(ch), s.pulse_us(ch)) {
-                                    (Some(d), Some(p)) => {
-                                        grid.label(format!("{:5.1}%", d * 100.0));
-                                        grid.label(format!("{p:6.0} us"));
-                                    }
-                                    _ => {
-                                        grid.label("-");
-                                        grid.label("-");
-                                    }
-                                }
-                                match view {
-                                    ChannelView::Angle(Some(a)) => grid.label(format!("{a:5.1}°")),
-                                    ChannelView::Angle(None) => grid.label("-"),
-                                    ChannelView::Eye(rgb) => eye_swatch(grid, rgb, palette.muted),
-                                    ChannelView::Blank => grid.label(""),
-                                };
-                                grid.end_row();
-                            }
-                        });
-                    {
-                        let s = hw();
-                        side.label(format!(
-                            "White LED duty {:.1}%",
-                            s.white_duty as f32 / 655.35
-                        ));
-                        side.label(format!(
-                            "Onboard LED {}   External power {}",
-                            if s.onboard_led { "on" } else { "off" },
-                            if s.external_power { "on" } else { "off" }
-                        ));
-                    }
-                    side.label(
-                        egui::RichText::new(
-                            "Eye channels peak at 32.8% duty: set_pulse_width_range(0, 6550) at 50 Hz.",
-                        )
-                        .small()
-                        .weak(),
-                    );
-                });
-            ui.open_pca = pca_open;
-
-            side.separator();
-            let board_open = section(side, "Board", ui.open_board, |side| {
-                board_panel(side, palette)
-            });
-            ui.open_board = board_open;
-
-            side.separator();
-            let audio_open = section(side, "Audio", ui.open_audio, |side| {
-                audio_panel(side, &mut audio, fw_dir, palette)
-            });
-            ui.open_audio = audio_open;
-            // The panel's sound list is only re-scanned while it is showing.
-            audio.sounds.wanted = ui.open_audio;
-
-            side.separator();
-            let plot_open = section(side, "Plot", ui.open_plot, |side| {
-                    let limits = AccelLimits::read(&ui.settings);
-                    let heap_budget_kb = hw().board.heap_budget_kb as f32;
-                    let state: &mut UiState = &mut ui;
-                    plot_panel(
-                        side,
-                        &mut state.plot,
-                        &state.history,
-                        &state.markers,
-                        &limits,
-                        heap_budget_kb,
-                        palette,
-                    )
-                });
-            ui.open_plot = plot_open;
-
-            side.separator();
-            let auto_reload = ui.auto_reload;
-            let settings_open = section(side, "Settings (settings.toml)", ui.open_settings, |side| {
-                settings_panel(side, &mut ui.settings, fw_dir, auto_reload, palette);
-            });
-            ui.open_settings = settings_open;
+    // Cleared first: the dock sets them only if the 3D view's tab is showing.
+    captures.viewport.rect = None;
+    captures.viewport.hovered = false;
+    // The sound list is only re-scanned while the Audio tab is showing.
+    audio.sounds.wanted = false;
+    let mut cx = PaneCx {
+        ui: &mut ui,
+        audio: &mut audio,
+        cfg: &cfg,
+        paths: &captures.paths,
+        palette,
+    };
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show(ctx, |area| {
+            let style = egui_dock::Style::from_egui(area.style().as_ref());
+            egui_dock::DockArea::new(&mut captures.dock.state)
+                .style(style)
+                .show_inside(
+                    area,
+                    &mut Viewer {
+                        draw: |pane_ui, pane| draw_pane(pane_ui, pane, &mut cx),
+                        viewport: &mut captures.viewport,
+                    },
+                );
         });
-    ui.panel_width = side_panel.response.rect.width();
-
-    let log_panel = egui::TopBottomPanel::bottom("log")
-        .resizable(true)
-        .default_height(ui.log_height)
-        .show(ctx, |bottom| {
-            let fs_dir = &captures.paths.fs;
-            bottom.horizontal(|row| {
-                for (tab, label) in [
-                    (LogTab::Console, "Log"),
-                    (LogTab::File(LOG_FILES[0]), LOG_FILES[0]),
-                    (LogTab::File(LOG_FILES[1]), LOG_FILES[1]),
-                ] {
-                    let hint = match tab {
-                        LogTab::Console => {
-                            "The console output of code.py and the simulator".to_owned()
-                        }
-                        LogTab::File(name) => format!("{name} on the simulated drive"),
-                    };
-                    tip(
-                        row.selectable_value(&mut ui.log_tab, tab, label),
-                        &hint,
-                        None,
-                    );
-                }
-                row.separator();
-                if let LogTab::File(name) = ui.log_tab {
-                    drive_file_header(row, &ui.drive_file, fs_dir, name);
-                    return;
-                }
-                tip(
-                    row.add(
-                        egui::TextEdit::singleline(&mut ui.log_filter)
-                            .hint_text("search")
-                            .desired_width(180.0),
-                    ),
-                    "Show only the log lines containing this text",
-                    None,
-                );
-                tip(
-                    row.checkbox(&mut ui.show_firmware, "Firmware"),
-                    "Show lines printed by code.py",
-                    None,
-                );
-                tip(
-                    row.checkbox(&mut ui.show_sim, "[sim]"),
-                    "Show the simulator's own messages",
-                    None,
-                );
-                if tip(row.button("Clear"), "Empty the log", None).clicked() {
-                    hw().clear_log();
-                }
-                if tip(
-                    row.button("Copy"),
-                    "Copy the lines shown to the clipboard",
-                    None,
-                )
-                .clicked()
-                {
-                    let filter = ui.log_filter.to_lowercase();
-                    // Released before copy_text so the lock is never held across egui calls.
-                    let text = hw()
-                        .log
-                        .iter()
-                        .filter(|l| line_visible(l, ui.show_firmware, ui.show_sim, &filter))
-                        .map(|l| l.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    row.ctx().copy_text(text);
-                }
-                if tip(
-                    row.button("Save"),
-                    "Save the whole log to the captures folder next to the exe",
-                    None,
-                )
-                .clicked()
-                {
-                    // Snapshot first: file IO must not run under the shared lock.
-                    let text = hw()
-                        .log
-                        .iter()
-                        .map(|l| l.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let note = match save_log(&captures.paths.captures, &text) {
-                        Ok(path) => format!("[sim] log saved to {}", path.display()),
-                        Err(e) => format!("[sim] could not save the log: {e}"),
-                    };
-                    hw().push_line(note);
-                }
-            });
-            if let LogTab::File(name) = ui.log_tab {
-                ui.drive_file.refresh(fs_dir, name);
-                drive_file_body(bottom, &ui.drive_file);
-                return;
-            }
-            let filter = ui.log_filter.to_lowercase();
-            let (show_firmware, show_sim) = (ui.show_firmware, ui.show_sim);
-            let jump = ui.log_jump;
-            // A fresh jump marks its line straight away.
-            let marked = jump.or(ui
-                .log_highlight
-                .filter(|(_, at)| at.elapsed() < LOG_HIGHLIGHT)
-                .map(|(seq, _)| seq));
-            let cache = &mut ui.traceback_cache;
-            if cache.len() > 512 {
-                cache.clear();
-            }
-            let log_scroll = egui::ScrollArea::vertical()
-                // Following the end would undo the jump.
-                .stick_to_bottom(jump.is_none())
-                .auto_shrink([false, false])
-                .show(bottom, |area| {
-                    let mut clicked = None;
-                    let s = hw();
-                    for line in s
-                        .log
-                        .iter()
-                        .filter(|l| line_visible(l, show_firmware, show_sim, &filter))
-                    {
-                        let location = if line.text.contains("File \"") {
-                            if !cache.contains_key(&line.text) {
-                                let found = editor::traceback_location(&line.text, fw_dir);
-                                cache.insert(line.text.clone(), found);
-                            }
-                            cache.get(&line.text).cloned().flatten()
-                        } else {
-                            None
-                        };
-                        let shown = if let Some((path, number)) = location {
-                            let name = path.file_name().unwrap_or_default().to_string_lossy();
-                            let link = area
-                                .add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&line.text)
-                                            .monospace()
-                                            .color(palette.link),
-                                    )
-                                    .sense(egui::Sense::click()),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(format!("Open {name} at line {number}"));
-                            if link.clicked() {
-                                clicked = Some((path, number));
-                            }
-                            link
-                        } else if line.kind == LogKind::Error {
-                            area.label(
-                                egui::RichText::new(&line.text)
-                                    .monospace()
-                                    .color(palette.error),
-                            )
-                        } else {
-                            area.monospace(&line.text)
-                        };
-                        if jump == Some(line.seq) {
-                            shown.scroll_to_me(Some(egui::Align::Center));
-                        }
-                        if marked == Some(line.seq) {
-                            area.painter().rect_filled(
-                                shown.rect.expand(1.0),
-                                2.0,
-                                palette.accent.gamma_multiply(0.25),
-                            );
-                        }
-                    }
-                    clicked
-                });
-            if let Some(seq) = jump {
-                // One frame is enough to scroll; the mark fades on its own timer.
-                ui.log_jump = None;
-                ui.log_highlight = Some((seq, Instant::now()));
-            }
-            if marked.is_some() {
-                bottom
-                    .ctx()
-                    .request_repaint_after(Duration::from_millis(200));
-            }
-            // After the log lock is dropped: push_line takes it too.
-            if let Some((path, number)) = log_scroll.inner {
-                if let Err(e) = editor::open_in_editor(&cfg.editor.command, &path, number) {
-                    hw().push_line(format!("[sim] {e}"));
-                }
-            }
-        });
-    ui.log_height = log_panel.response.rect.height();
 
     let mut open = ui.show_shortcuts;
     egui::Window::new("Shortcuts")
@@ -1824,6 +1449,375 @@ fn panels(
             ui.log_filter.clear();
         }
         ui.log_jump = Some(seq);
+    }
+}
+
+/// What the panes need from `panels`, gathered so the dock's draw closure owns
+/// one value instead of a dozen borrows.
+struct PaneCx<'a> {
+    ui: &'a mut UiState,
+    audio: &'a mut AudioUi<'a>,
+    cfg: &'a SimConfig,
+    paths: &'a crate::Paths,
+    palette: &'a Palette,
+}
+
+/// Draws one dock tab's body.
+fn draw_pane(ui: &mut egui::Ui, pane: Pane, cx: &mut PaneCx) {
+    let paths = cx.paths;
+    let fw_dir = paths.code.parent().unwrap_or(Path::new("."));
+    match pane {
+        // Measured by the dock's viewer; the 3D scene is rendered behind egui.
+        Pane::Viewport => {}
+        Pane::Motion => motion_panel(ui, cx.ui),
+        Pane::State => state_panel(ui, cx.palette),
+        Pane::Pca => pca_panel(ui, cx.cfg, cx.palette),
+        Pane::Board => board_panel(ui, cx.palette),
+        Pane::Audio => {
+            cx.audio.sounds.wanted = true;
+            audio_panel(ui, cx.audio, fw_dir, cx.palette);
+        }
+        Pane::Plot => {
+            let limits = AccelLimits::read(&cx.ui.settings);
+            let heap_budget_kb = hw().board.heap_budget_kb as f32;
+            let state: &mut UiState = cx.ui;
+            plot_panel(
+                ui,
+                &mut state.plot,
+                &state.history,
+                &state.markers,
+                &limits,
+                heap_budget_kb,
+                cx.palette,
+            );
+        }
+        Pane::Settings => {
+            let auto_reload = cx.ui.auto_reload;
+            settings_panel(ui, &mut cx.ui.settings, fw_dir, auto_reload, cx.palette);
+        }
+        Pane::Log => log_panel(ui, cx.ui, cx.cfg, paths, cx.palette),
+        Pane::Shortcuts => shortcuts_window(ui),
+    }
+}
+
+fn motion_panel(side: &mut egui::Ui, state: &mut UiState) {
+    side.horizontal_wrapped(|row| {
+                        let dir = hw().nudge_dir;
+                        if tip(
+                            row.button("Nudge"),
+                            "One reading 0.3 g past the held value, in the chosen direction. Clicking the droid also boops, harder the longer you hold, from the side you click",
+                            Some(Cmd::Nudge),
+                        )
+                        .clicked()
+                        {
+                            nudge(dir);
+                        }
+                        if tip(
+                            row.button("Hard shake"),
+                            "One reading 2 g past the held value, in the chosen direction",
+                            Some(Cmd::Shake),
+                        )
+                        .clicked()
+                        {
+                            shake(dir);
+                        }
+                        if tip(
+                            row.checkbox(&mut state.tipped, "Tipped over"),
+                            "Hold the sensor upside down (z reads -1 g)",
+                            None,
+                        )
+                        .changed()
+                        {
+                            hw().accel_g = [0.0, 0.0, if state.tipped { -1.0 } else { 1.0 }];
+                        }
+                        if tip(row.button("Rest"), "Back to lying flat (z reads +1 g)", None).clicked() {
+                            hw().accel_g = [0.0, 0.0, 1.0];
+                            state.tipped = false;
+                        }
+                    });
+    let current = hw().nudge_dir;
+    let selected = DIRECTIONS
+        .iter()
+        .find(|(_, d)| *d == current)
+        .map_or("", |(name, _)| *name);
+    egui::ComboBox::from_label("Direction")
+        .selected_text(selected)
+        .show_ui(side, |menu| {
+            for (name, d) in DIRECTIONS {
+                if menu.selectable_label(current == d, name).clicked() {
+                    hw().nudge_dir = d;
+                }
+            }
+        })
+        .response
+        .on_hover_text(
+            "The firmware reads only z, so \u{b1}X/\u{b1}Y nudges are ignored, as on the robot",
+        );
+    let mut held = hw().accel_g;
+    let mut changed = false;
+    for (value, label) in held
+        .iter_mut()
+        .zip(["held x (g)", "held y (g)", "held z (g)"])
+    {
+        changed |= tip(
+            side.add(egui::Slider::new(value, -3.0..=3.0).text(label)),
+            "The accelerometer reading held between nudges",
+            None,
+        )
+        .changed();
+    }
+    if changed {
+        hw().accel_g = held;
+    }
+}
+
+fn pca_panel(side: &mut egui::Ui, cfg: &SimConfig, palette: &Palette) {
+    egui::Grid::new("channels")
+        .striped(true)
+        .show(side, |grid| {
+            grid.label("ch");
+            grid.label("part");
+            grid.label("duty");
+            grid.label("pulse");
+            grid.label("view");
+            grid.end_row();
+            let names = [
+                "R wing", "L wing", "main R", "main G", "main B", "small R", "small G", "small B",
+            ];
+            for ch in 0..16 {
+                // Spare channels appear once a custom shim writes to them.
+                let name = names.get(ch).copied().unwrap_or("spare");
+                if ch >= names.len() && hw().pca_duty[ch].is_none() {
+                    continue;
+                }
+                // Before hw() is locked below: these helpers lock it too.
+                let view = channel_view(cfg, ch);
+                let s = hw();
+                grid.label(ch.to_string());
+                grid.label(name);
+                match (s.duty_fraction(ch), s.pulse_us(ch)) {
+                    (Some(d), Some(p)) => {
+                        grid.label(format!("{:5.1}%", d * 100.0));
+                        grid.label(format!("{p:6.0} us"));
+                    }
+                    _ => {
+                        grid.label("-");
+                        grid.label("-");
+                    }
+                }
+                match view {
+                    ChannelView::Angle(Some(a)) => grid.label(format!("{a:5.1}°")),
+                    ChannelView::Angle(None) => grid.label("-"),
+                    ChannelView::Eye(rgb) => eye_swatch(grid, rgb, palette.muted),
+                    ChannelView::Blank => grid.label(""),
+                };
+                grid.end_row();
+            }
+        });
+    {
+        let s = hw();
+        side.label(format!(
+            "White LED duty {:.1}%",
+            s.white_duty as f32 / 655.35
+        ));
+        side.label(format!(
+            "Onboard LED {}   External power {}",
+            if s.onboard_led { "on" } else { "off" },
+            if s.external_power { "on" } else { "off" }
+        ));
+    }
+    side.label(
+        egui::RichText::new(
+            "Eye channels peak at 32.8% duty: set_pulse_width_range(0, 6550) at 50 Hz.",
+        )
+        .small()
+        .weak(),
+    );
+}
+
+fn log_panel(
+    bottom: &mut egui::Ui,
+    ui: &mut UiState,
+    cfg: &SimConfig,
+    paths: &crate::Paths,
+    palette: &Palette,
+) {
+    let fw_dir = paths.code.parent().unwrap_or(Path::new("."));
+    let fs_dir = &paths.fs;
+    bottom.horizontal(|row| {
+        for (tab, label) in [
+            (LogTab::Console, "Log"),
+            (LogTab::File(LOG_FILES[0]), LOG_FILES[0]),
+            (LogTab::File(LOG_FILES[1]), LOG_FILES[1]),
+        ] {
+            let hint = match tab {
+                LogTab::Console => "The console output of code.py and the simulator".to_owned(),
+                LogTab::File(name) => format!("{name} on the simulated drive"),
+            };
+            tip(
+                row.selectable_value(&mut ui.log_tab, tab, label),
+                &hint,
+                None,
+            );
+        }
+        row.separator();
+        if let LogTab::File(name) = ui.log_tab {
+            drive_file_header(row, &ui.drive_file, fs_dir, name);
+            return;
+        }
+        tip(
+            row.add(
+                egui::TextEdit::singleline(&mut ui.log_filter)
+                    .hint_text("search")
+                    .desired_width(180.0),
+            ),
+            "Show only the log lines containing this text",
+            None,
+        );
+        tip(
+            row.checkbox(&mut ui.show_firmware, "Firmware"),
+            "Show lines printed by code.py",
+            None,
+        );
+        tip(
+            row.checkbox(&mut ui.show_sim, "[sim]"),
+            "Show the simulator's own messages",
+            None,
+        );
+        if tip(row.button("Clear"), "Empty the log", None).clicked() {
+            hw().clear_log();
+        }
+        if tip(
+            row.button("Copy"),
+            "Copy the lines shown to the clipboard",
+            None,
+        )
+        .clicked()
+        {
+            let filter = ui.log_filter.to_lowercase();
+            // Released before copy_text so the lock is never held across egui calls.
+            let text = hw()
+                .log
+                .iter()
+                .filter(|l| line_visible(l, ui.show_firmware, ui.show_sim, &filter))
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            row.ctx().copy_text(text);
+        }
+        if tip(
+            row.button("Save"),
+            "Save the whole log to the captures folder next to the exe",
+            None,
+        )
+        .clicked()
+        {
+            // Snapshot first: file IO must not run under the shared lock.
+            let text = hw()
+                .log
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let note = match save_log(&paths.captures, &text) {
+                Ok(path) => format!("[sim] log saved to {}", path.display()),
+                Err(e) => format!("[sim] could not save the log: {e}"),
+            };
+            hw().push_line(note);
+        }
+    });
+    if let LogTab::File(name) = ui.log_tab {
+        ui.drive_file.refresh(fs_dir, name);
+        drive_file_body(bottom, &ui.drive_file);
+        return;
+    }
+    let filter = ui.log_filter.to_lowercase();
+    let (show_firmware, show_sim) = (ui.show_firmware, ui.show_sim);
+    let jump = ui.log_jump;
+    // A fresh jump marks its line straight away.
+    let marked = jump.or(ui
+        .log_highlight
+        .filter(|(_, at)| at.elapsed() < LOG_HIGHLIGHT)
+        .map(|(seq, _)| seq));
+    let cache = &mut ui.traceback_cache;
+    if cache.len() > 512 {
+        cache.clear();
+    }
+    let log_scroll = egui::ScrollArea::vertical()
+        // Following the end would undo the jump.
+        .stick_to_bottom(jump.is_none())
+        .auto_shrink([false, false])
+        .show(bottom, |area| {
+            let mut clicked = None;
+            let s = hw();
+            for line in s
+                .log
+                .iter()
+                .filter(|l| line_visible(l, show_firmware, show_sim, &filter))
+            {
+                let location = if line.text.contains("File \"") {
+                    if !cache.contains_key(&line.text) {
+                        let found = editor::traceback_location(&line.text, fw_dir);
+                        cache.insert(line.text.clone(), found);
+                    }
+                    cache.get(&line.text).cloned().flatten()
+                } else {
+                    None
+                };
+                let shown = if let Some((path, number)) = location {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    let link = area
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(&line.text)
+                                    .monospace()
+                                    .color(palette.link),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(format!("Open {name} at line {number}"));
+                    if link.clicked() {
+                        clicked = Some((path, number));
+                    }
+                    link
+                } else if line.kind == LogKind::Error {
+                    area.label(
+                        egui::RichText::new(&line.text)
+                            .monospace()
+                            .color(palette.error),
+                    )
+                } else {
+                    area.monospace(&line.text)
+                };
+                if jump == Some(line.seq) {
+                    shown.scroll_to_me(Some(egui::Align::Center));
+                }
+                if marked == Some(line.seq) {
+                    area.painter().rect_filled(
+                        shown.rect.expand(1.0),
+                        2.0,
+                        palette.accent.gamma_multiply(0.25),
+                    );
+                }
+            }
+            clicked
+        });
+    if let Some(seq) = jump {
+        // One frame is enough to scroll; the mark fades on its own timer.
+        ui.log_jump = None;
+        ui.log_highlight = Some((seq, Instant::now()));
+    }
+    if marked.is_some() {
+        bottom
+            .ctx()
+            .request_repaint_after(Duration::from_millis(200));
+    }
+    // After the log lock is dropped: push_line takes it too.
+    if let Some((path, number)) = log_scroll.inner {
+        if let Err(e) = editor::open_in_editor(&cfg.editor.command, &path, number) {
+            hw().push_line(format!("[sim] {e}"));
+        }
     }
 }
 
