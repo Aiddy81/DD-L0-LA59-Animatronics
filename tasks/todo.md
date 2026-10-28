@@ -1,3 +1,31 @@
+# Simulator: UI refresh part 3 — dockable, detachable panels and layouts (#80)
+
+Branch: `feature/sim-ui-docking`, stacked on `feature/sim-ui-toolbar` (PR #83, not yet merged). PR 3 of 5; no command palette, keyboard navigation, overlays or transitions. Crate: `egui_dock =0.16.0` (egui 0.31 release; confirmed with the user over `egui_tiles =0.12.0` because it has floating windows, close buttons and tab menus built in).
+
+- [x] Step 1 — `Cargo.toml`: `egui_dock =0.16.0` (serde; the dock state round-trips through TOML, so no `serde_json`); `dock.rs` (new): `Pane`, `PaneCx`, `draw_pane`; Motion/PCA/Log bodies extracted from `ui.rs`; dock replaces the side and log panels; Viewport pane sets the camera viewport and gates orbit/boop
+- [x] Step 2 — floating, tab context menu (Float / Detach / Close), View menu panel ticks, focus mode (F11), dock style from palette tokens
+- [x] Step 3 — detached OS windows (Bevy secondary `Window` + own egui context), close/Dock back re-docks, theme and UI scale per window
+- [x] Step 4 — `layout.rs` (new): layout in prefs (dock, floating rects, detached windows, main window position), named layouts (Default/Debug/Demo + user), Reset, export/import (`dist\layouts\`), validation, off-screen recovery
+- [x] README: docking, View menu, focus mode, layouts, export/import, per-window UI scale
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` (also `--tests`) clean; 7 scenarios + headless checks pass
+- [x] Captures: dock/float/detach/re-dock/hide/show every pane; focus mode; restart restores layout, floating and detached windows, scale; layouts switch; export/import round-trip; Reset; off-screen pulled back; Light/Dark/High contrast readable; boop only through the viewport
+- [ ] Commit, push, PR (stacked on #83)
+- [ ] Interactive with a real mouse: drag tabs to every edge, move a floating panel and a detached window between monitors, Ctrl+= / - / 0 in each window, the theme picker — user
+
+- [x] Follow-up from the user: Behaviours and Scenarios as their own panels (out of the toolbar); plot tickboxes as a 3×2 / 2×3 grid; drag a tab out past the window edge to detach it (floating panels were stuck at the edge)
+
+## Review
+- **Tear-off:** egui_dock hands `on_tab_button` a stand-in widget while a tab is dragged, so the drag is found by rebuilding egui_dock 0.16.0's tab-button ids (pinned with `=`). egui keeps the drag alive while the pointer is outside the window; letting go there detaches the tab under the pointer (`GetCursorPos`), slid onto that monitor allowing for the title bar. Docking back never adds a tab over the 3D view.
+- **UI scale never stuck (a PR 1 bug).** bevy_egui calls `set_pixels_per_point` every frame from `EguiContextSettings.scale_factor`, which overwrote `ctx.set_zoom_factor`. The scale now lives in that per-window setting, which is also what makes per-window scale possible.
+- **Two vsync'd windows cut the frame rate to ~19 FPS.** Detached windows use `AutoNoVsync`; the main window's vsync still paces the app (~60 FPS with a detached window open).
+- **The 3D view's hover never registered** inside an egui_dock tab (the dock's tab-body widget wins egui's hit test), so orbit and click-to-boop were dead from step 1 until the end. Hover is now pointer-in-rect plus top layer, and an orbit drag belongs to the view only if it started there, so dragging a tab across it doesn't spin the camera.
+- **egui_dock 0.16 never fills `WindowState.screen_rect`**, so floating panels' places weren't in the serialised dock. They're read from egui's area memory and saved separately (`floats`).
+- Saved detached windows open on the first `Update`, not at `Startup`; a startup-spawned window logged bevy_egui's "Failed to retrieve egui node data".
+- A window capture (PrintWindow) of a window behind another can return a stale frame, which looked like the main UI had vanished. Re-capture before believing a blank window.
+- The Import list was a third menu level and was squeezed to a sliver at the screen edge (the user caught it); the files are listed inline now.
+- Once, with synthetic input, Log and Plot ended up split and the camera top-down, which fits Bevy missing a mouse release while focus moved between windows. Not reproduced; worth watching with a real mouse.
+
+
 # Simulator: UI refresh part 2 — grouped toolbar, status bar, toasts (#80)
 
 Branch: `feature/sim-ui-toolbar`, stacked on `feature/sim-ui-theme` (PR #82, not yet merged). PR 2 of 5; no docking, command palette or overlays.

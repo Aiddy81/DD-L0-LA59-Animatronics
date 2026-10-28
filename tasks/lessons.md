@@ -6,3 +6,8 @@
 - **The simulator can't show self-triggering.** It has no servo vibration, so every threshold passed headless tests and still looped on the robot. Rule: treat simulator passes as "doesn't crash"; motion tuning needs a robot log (`log_mode`, see README "Logging on the robot").
 - **The droid shakes itself.** Wing snaps at the end of animations, breathing, and the trench run's buffeting all move the accelerometer, most strongly on x/y. Rule: read only z, wait `SETTLE_S` after any wing animation before re-measuring rest, and use a higher limit while attention or the trench run owns the wings.
 - **The serial console can't be watched with the wings running** (no data connection while the servos are powered). Rule: debug hardware behaviour via `log.txt`. Before using COM6, ask the user to stop the VS Code serial monitor, since only one program can hold the port.
+
+## Simulator UI (PR 3 of #80, Oct 2026)
+
+- **Menus near the window edge get squeezed.** A third-level egui submenu next to the right edge had no room and wrapped every name to a sliver; the user spotted it in a screenshot I had already looked at. Rule: when a capture shows a menu, check it at the edge it actually opens against, and avoid menus nested more than two deep (list items inline instead).
+- **Test the interaction a refactor touches, not just the layout.** Moving the 3D view into a dock tab silently killed orbit and click-to-boop (hover never registered), and it went unnoticed for three steps because captures only checked looks. Rule: after changing how input reaches a view, drag and click it in the running app.

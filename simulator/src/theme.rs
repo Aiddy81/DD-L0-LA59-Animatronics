@@ -5,13 +5,17 @@
 //! each shade tuned per theme so lines keep contrast against that theme's
 //! background (the light theme uses darker shades than the dark ones).
 
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 use bevy::window::{WindowTheme, WindowThemeChanged};
 use bevy_egui::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Margin, Stroke, TextStyle, Theme,
 };
-use bevy_egui::EguiContexts;
+use bevy_egui::{EguiContext, EguiContextSettings};
 use serde::{Deserialize, Serialize};
+
+use crate::dock::Detached;
 
 /// What the user picked in the toolbar; `System` follows the OS.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -360,23 +364,36 @@ fn follow_os_theme(mut events: EventReader<WindowThemeChanged>, mut theme: ResMu
 /// Pushes the style and zoom into egui, once at start and then only when the
 /// resolved theme or the scale changes, not every frame.
 fn apply_theme(
-    mut contexts: EguiContexts,
+    mut contexts: Query<(
+        Entity,
+        &mut EguiContext,
+        &mut EguiContextSettings,
+        Option<&Detached>,
+    )>,
     theme: Res<ActiveTheme>,
-    mut applied: Local<Option<(ResolvedTheme, f32)>>,
+    mut applied: Local<HashMap<Entity, (ResolvedTheme, f32)>>,
 ) {
-    let wanted = (theme.resolved, theme.scale);
-    if *applied == Some(wanted) {
-        return;
+    // Windows that are gone must not keep a stale entry, or a reused entity id
+    // would be taken for already themed.
+    applied.retain(|entity, _| contexts.contains(*entity));
+    for (entity, mut context, mut settings, detached) in &mut contexts {
+        // Every window has its own scale, so a detached one can be zoomed alone.
+        let scale = detached.map_or(theme.scale, |d| d.scale);
+        let wanted = (theme.resolved, scale);
+        if applied.get(&entity) == Some(&wanted) {
+            continue;
+        }
+        let ctx = context.get_mut();
+        apply(ctx, theme.palette, theme.resolved);
+        // bevy_egui resets pixels-per-point every frame from this setting, so
+        // an egui zoom factor would be overwritten; the scale has to live here.
+        if settings.scale_factor != scale {
+            settings.scale_factor = scale;
+        }
+        // Ctrl+= / Ctrl+- / Ctrl+0 are handled by the simulator so the scale is saved.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        applied.insert(entity, wanted);
     }
-    // The context doesn't exist until the first frames have run.
-    let Some(ctx) = contexts.try_ctx_mut() else {
-        return;
-    };
-    apply(ctx, theme.palette, theme.resolved);
-    ctx.set_zoom_factor(theme.scale);
-    // Ctrl+= / Ctrl+- / Ctrl+0 are handled by the simulator so the scale is saved.
-    ctx.options_mut(|o| o.zoom_with_keyboard = false);
-    *applied = Some(wanted);
 }
 
 /// Builds the egui visuals and style for a palette and installs them.
