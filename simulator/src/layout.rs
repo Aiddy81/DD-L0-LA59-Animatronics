@@ -130,6 +130,8 @@ fn debug_dock() -> DockState<Pane> {
             Pane::Pca,
             Pane::Board,
             Pane::Motion,
+            Pane::Behaviours,
+            Pane::Scenarios,
             Pane::Audio,
             Pane::Settings,
         ],
@@ -592,7 +594,7 @@ mod tests {
             assert!(l.detached.is_empty());
         }
         assert_eq!(panes(&builtin("Demo").expect("demo")), [Pane::Viewport]);
-        assert_eq!(panes(&builtin("Debug").expect("debug")).len(), 9);
+        assert_eq!(panes(&builtin("Debug").expect("debug")).len(), 11);
         assert!(builtin("nope").is_none());
     }
 

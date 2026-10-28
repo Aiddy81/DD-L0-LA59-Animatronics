@@ -40,9 +40,10 @@ pyo3 ={ version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
-# Volume-label lookup for the one-click deploy, and the OS light/dark setting. 0.61.2 is already in the tree via winit.
+# Volume-label lookup for the one-click deploy, the OS light/dark setting and the
+# pointer position for tearing a panel off into its own window. 0.61.2 is already in the tree via winit.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Registry"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 opt-level = 3

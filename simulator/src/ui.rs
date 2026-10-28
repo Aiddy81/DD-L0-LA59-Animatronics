@@ -536,6 +536,10 @@ impl Plugin for UiPlugin {
 
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Where the pointer sits on a torn-off panel's new window, in screen pixels
+/// from its top-left corner: a little way along its title bar.
+const TEAR_OFF_GRAB: IVec2 = IVec2::new(80, 12);
+
 #[derive(Default)]
 struct SaveState {
     /// When the preferences were last compared with the saved ones.
@@ -1327,12 +1331,22 @@ fn panels(
             let gap = row.spacing().item_spacing.x * 3.0;
             let avail = row.available_width() - ui.right_width - gap;
             let mut groups = GroupLayout::new(ui.group_widths, ui.menu_widths, avail, gap);
-            groups.show(row, GROUP_RUN, "▶ Run", "Run, stop, pause and step code.py", |g| {
-                run_group(g, &mut host.0)
-            });
+            groups.show(
+                row,
+                GROUP_RUN,
+                "▶ Run",
+                "Run, stop, pause and step code.py",
+                |g| run_group(g, &mut host.0),
+            );
             let crowded = groups.crowded();
             let mut rest = |row: &mut egui::Ui, groups: &mut GroupLayout| {
-                groups.show(row, GROUP_SPEED, "⏩ Speed", "How fast code.py's clock runs", speed_group);
+                groups.show(
+                    row,
+                    GROUP_SPEED,
+                    "⏩ Speed",
+                    "How fast code.py's clock runs",
+                    speed_group,
+                );
                 groups.show(
                     row,
                     GROUP_CAMERA,
@@ -1386,7 +1400,13 @@ fn panels(
                     }
                     let menu = r.menu_button(if crowded { "⚙" } else { "⚙ View" }, |m| {
                         panels_menu(m, &mut captures.dock, &detached, &mut captures.commands);
-                        layouts_menu(m, &mut ui, &mut captures, &detached, to_color(palette.panel));
+                        layouts_menu(
+                            m,
+                            &mut ui,
+                            &mut captures,
+                            &detached,
+                            to_color(palette.panel),
+                        );
                         m.separator();
                         appearance_controls(m, theme.choice, theme.scale, &mut ui.scale_drag)
                     });
@@ -1414,35 +1434,6 @@ fn panels(
                 ui.right_width = right.inner;
             }
         });
-        // Cloned out so the lock isn't held while a click writes the request.
-        let (behaviours, running) = {
-            let s = hw();
-            (s.behaviours.clone(), s.behaviour_running.clone())
-        };
-        if !behaviours.is_empty() {
-            bar.horizontal_wrapped(|row| {
-                row.label("Behaviours")
-                    .on_hover_text("Each no-argument async function in behaviours/ that code.py doesn't already run as a task");
-                for name in behaviours {
-                    let clicked = row
-                        .add_enabled(running.is_none(), egui::Button::new(&name))
-                        .on_hover_text(format!("Run {name}() once now, with breathing paused"))
-                        .on_disabled_hover_text(format!(
-                            "Wait for {}() to finish",
-                            running.as_deref().unwrap_or_default()
-                        ))
-                        .clicked();
-                    if clicked {
-                        hw().behaviour_request = Some(name);
-                    }
-                }
-            });
-        }
-        if !ui.scenarios.is_empty() {
-            bar.horizontal(|row| {
-                scenario_row(row, &mut ui, &mut host.0, &cfg, &captures.paths, palette)
-            });
-        }
     });
 
     // Declared before the dock so it spans the whole window's
@@ -1473,6 +1464,7 @@ fn panels(
     audio.sounds.wanted = false;
     let mut cx = PaneCx {
         ui: &mut ui,
+        host: &mut host,
         audio: &mut audio,
         cfg: &cfg,
         paths: &captures.paths,
@@ -1502,6 +1494,7 @@ fn panels(
                     .show_inside(area, &mut viewer);
             } else {
                 egui_dock::DockArea::new(&mut captures.dock.state)
+                    .id(dock::main_dock_id())
                     .style(style)
                     .show_add_buttons(false)
                     .window_bounds(bounds)
@@ -1514,17 +1507,34 @@ fn panels(
 
     // Applied after the dock is drawn: the tab's menu can't edit the layout
     // it is being drawn from.
-    for (pane, action) in actions {
-        match action {
-            PaneAction::Detach => {
-                if let Some(at) = captures.dock.state.find_tab(&pane) {
-                    captures.dock.state.remove_tab(at);
-                    dock::spawn_detached(
-                        &mut captures.commands,
-                        &DetachedSave::new(pane, scale),
-                        to_color(palette.panel),
-                    );
-                }
+    let dragging = captures
+        .dock
+        .focus
+        .is_none()
+        .then(|| dock::dragged_tab(&captures.dock.state, ctx))
+        .flatten();
+    // A tab let go outside the window opens in its own window under the
+    // pointer, with its title bar where the pointer is.
+    let torn = captures.dock.tear.update(dragging, ctx).map(|pane| {
+        let mut place = DetachedSave::new(pane, scale);
+        if let Some(at) = dock::cursor_screen_pos() {
+            place.x = Some(at.x.saturating_sub(TEAR_OFF_GRAB.x));
+            place.y = Some(at.y.saturating_sub(TEAR_OFF_GRAB.y));
+        }
+        place
+    });
+    let detaches = actions
+        .iter()
+        .filter(|(_, a)| *a == PaneAction::Detach)
+        .map(|(pane, _)| (DetachedSave::new(*pane, scale), false))
+        .chain(torn.map(|place| (place, true)));
+    for (place, under_pointer) in detaches {
+        if let Some(at) = captures.dock.state.find_tab(&place.pane) {
+            captures.dock.state.remove_tab(at);
+            let window =
+                dock::spawn_detached(&mut captures.commands, &place, to_color(palette.panel));
+            if under_pointer {
+                captures.commands.entity(window).insert(dock::FitOnMonitor);
             }
         }
     }
@@ -1547,7 +1557,7 @@ fn panels(
                 Cmd::ScaleReset => window.scale = 1.0,
                 other => run_cmd(
                     other,
-                    &mut host,
+                    cx.host,
                     &mut captures.dock,
                     &detached,
                     &mut captures.commands,
@@ -1636,6 +1646,7 @@ fn panels(
 /// one value instead of a dozen borrows.
 struct PaneCx<'a> {
     ui: &'a mut UiState,
+    host: &'a mut Host,
     audio: &'a mut AudioUi<'a>,
     cfg: &'a SimConfig,
     paths: &'a crate::Paths,
@@ -1677,6 +1688,16 @@ fn draw_pane(ui: &mut egui::Ui, pane: Pane, cx: &mut PaneCx) {
         }
         Pane::Log => log_panel(ui, cx.ui, cx.cfg, paths, cx.palette),
         Pane::Shortcuts => shortcuts_window(ui),
+        Pane::Behaviours => behaviours_panel(ui),
+        Pane::Scenarios => {
+            if cx.ui.scenarios.is_empty() {
+                ui.weak("No scenarios in simulator/scenarios/");
+            } else {
+                ui.horizontal_wrapped(|row| {
+                    scenario_row(row, cx.ui, &mut cx.host.0, cx.cfg, paths, cx.palette)
+                });
+            }
+        }
     }
 }
 
@@ -2425,6 +2446,34 @@ fn appearance_controls(
 }
 
 /// Scenario picker, Run scenario button and the current scenario's verdict.
+/// One button per behaviour, to run it straight away without its trigger.
+fn behaviours_panel(ui: &mut egui::Ui) {
+    // Cloned out so the lock isn't held while a click writes the request.
+    let (behaviours, running) = {
+        let s = hw();
+        (s.behaviours.clone(), s.behaviour_running.clone())
+    };
+    if behaviours.is_empty() {
+        ui.weak("Run code.py to list the behaviours in behaviours/");
+        return;
+    }
+    ui.horizontal_wrapped(|row| {
+        for name in behaviours {
+            let clicked = row
+                .add_enabled(running.is_none(), egui::Button::new(&name))
+                .on_hover_text(format!("Run {name}() once now, with breathing paused"))
+                .on_disabled_hover_text(format!(
+                    "Wait for {}() to finish",
+                    running.as_deref().unwrap_or_default()
+                ))
+                .clicked();
+            if clicked {
+                hw().behaviour_request = Some(name);
+            }
+        }
+    });
+}
+
 fn scenario_row(
     row: &mut egui::Ui,
     ui: &mut UiState,
@@ -2739,6 +2788,10 @@ const GROUPS: [&str; 6] = [
     "Heap",
 ];
 
+/// Pane width, in points, from which the plot's series toggles fit three
+/// groups to a row (the widest group is a label and three checkboxes).
+const PLOT_TOGGLES_3_COLUMNS: f32 = 560.0;
+
 /// What the plot shows; kept in `UiState` so it lasts between frames.
 struct PlotState {
     window_s: f32,
@@ -2906,17 +2959,33 @@ fn plot_panel(
             None,
         );
     });
-    for group in GROUPS {
-        ui.horizontal(|row| {
-            row.label(egui::RichText::new(group).small());
-            for (i, s) in SERIES.iter().enumerate().filter(|(_, s)| s.group == group) {
-                row.checkbox(
-                    &mut state.visible[i],
-                    egui::RichText::new(s.short).color((s.color)(palette)),
-                );
+    // The series toggles as a grid, three groups to a row when the pane is wide
+    // enough and two otherwise, instead of one group per line. Each group is a
+    // label cell and a checkbox cell, so the boxes line up down each column.
+    let per_row = if ui.available_width() >= PLOT_TOGGLES_3_COLUMNS {
+        3
+    } else {
+        2
+    };
+    egui::Grid::new("plot_series")
+        .num_columns(per_row * 2)
+        .spacing([8.0, 2.0])
+        .show(ui, |grid| {
+            for (n, group) in GROUPS.iter().enumerate() {
+                grid.label(egui::RichText::new(*group).small());
+                grid.horizontal(|row| {
+                    for (i, s) in SERIES.iter().enumerate().filter(|(_, s)| s.group == *group) {
+                        row.checkbox(
+                            &mut state.visible[i],
+                            egui::RichText::new(s.short).color((s.color)(palette)),
+                        );
+                    }
+                });
+                if (n + 1) % per_row == 0 {
+                    grid.end_row();
+                }
             }
         });
-    }
 
     let Some(last) = history.back() else {
         ui.label("No samples yet.");

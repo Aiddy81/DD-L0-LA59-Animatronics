@@ -30,10 +30,12 @@ pub enum Pane {
     Settings,
     Log,
     Shortcuts,
+    Behaviours,
+    Scenarios,
 }
 
 impl Pane {
-    pub const ALL: [Pane; 10] = [
+    pub const ALL: [Pane; 12] = [
         Pane::Viewport,
         Pane::Motion,
         Pane::State,
@@ -44,6 +46,8 @@ impl Pane {
         Pane::Settings,
         Pane::Log,
         Pane::Shortcuts,
+        Pane::Behaviours,
+        Pane::Scenarios,
     ];
 
     pub fn title(self) -> &'static str {
@@ -58,6 +62,8 @@ impl Pane {
             Pane::Settings => "Settings (settings.toml)",
             Pane::Log => "Log",
             Pane::Shortcuts => "Shortcuts",
+            Pane::Behaviours => "Behaviours",
+            Pane::Scenarios => "Scenarios",
         }
     }
 }
@@ -71,6 +77,86 @@ pub struct Dock {
     /// Where the floating windows were drawn last frame, kept by `panels` so a
     /// snapshot can save them.
     pub floats: Vec<FloatSave>,
+    /// The tab being dragged, and whether the pointer is outside the window.
+    pub tear: TearOff,
+}
+
+/// A tab drag that may end outside the main window. Floating panels can't
+/// leave the window (egui draws only inside it), so letting go of a tab out
+/// there detaches it into its own window instead.
+#[derive(Default)]
+pub struct TearOff {
+    pane: Option<Pane>,
+    outside: bool,
+}
+
+impl TearOff {
+    /// Called once a frame with the tab being dragged, if any. Returns the
+    /// pane to detach when a drag has just ended outside the window.
+    pub fn update(&mut self, dragging: Option<Pane>, ctx: &egui::Context) -> Option<Pane> {
+        // Judged where the pointer is now, so dragging back in cancels it. Once
+        // the pointer leaves the window egui has no position for it at all.
+        let inside = ctx
+            .input(|i| i.pointer.latest_pos())
+            .is_some_and(|pos| ctx.screen_rect().shrink(2.0).contains(pos));
+        let Some(pane) = dragging.filter(|p| *p != Pane::Viewport) else {
+            // egui drops a drag as soon as the pointer leaves the window, so
+            // the drag may end with the pointer already outside.
+            let torn = self.pane.filter(|_| self.outside || !inside);
+            *self = Self::default();
+            return torn;
+        };
+        *self = Self {
+            pane: Some(pane),
+            outside: !inside,
+        };
+        None
+    }
+}
+
+/// The main dock's egui id, set on its `DockArea` so `dragged_tab` can find
+/// its tabs.
+pub fn main_dock_id() -> egui::Id {
+    egui::Id::new("dock_main")
+}
+
+/// The tab being dragged in the main dock, if any. egui_dock doesn't report
+/// it (while dragging, its tab callbacks get a stand-in widget), so this
+/// rebuilds the id egui_dock 0.16.0 gives each tab button (dock id, then
+/// surface, node and tab index) and asks egui. The crate is pinned with `=`,
+/// so the scheme can't change underneath this.
+pub fn dragged_tab(state: &DockState<Pane>, ctx: &egui::Context) -> Option<Pane> {
+    ctx.dragged_id()?;
+    let dock = main_dock_id();
+    state.iter_surfaces().enumerate().find_map(|(s, surface)| {
+        let tree = surface.node_tree()?;
+        tree.iter().enumerate().find_map(|(n, node)| {
+            node.tabs()?.iter().enumerate().find_map(|(t, pane)| {
+                let id = dock
+                    .with((SurfaceIndex(s), "surface"))
+                    .with((NodeIndex(n), "node"))
+                    .with((t, "tab"));
+                ctx.is_being_dragged(id).then_some(*pane)
+            })
+        })
+    })
+}
+
+/// The mouse pointer in screen pixels, to open a torn-off panel's window
+/// under it. Bevy only knows the pointer inside its own windows.
+#[cfg(windows)]
+pub fn cursor_screen_pos() -> Option<IVec2> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT { x: 0, y: 0 };
+    // SAFETY: `point` is a valid, writable POINT for the call's duration.
+    let ok = unsafe { GetCursorPos(&mut point) };
+    (ok != 0).then_some(IVec2::new(point.x, point.y))
+}
+
+#[cfg(not(windows))]
+pub fn cursor_screen_pos() -> Option<IVec2> {
+    None
 }
 
 /// Settings every `DockState` gets, however it was made or loaded.
@@ -122,11 +208,33 @@ pub fn set_shown(state: &mut DockState<Pane>, pane: Pane, show: bool) {
     } else if !is_shown(state, pane) {
         if pane == Pane::Shortcuts {
             state.add_window(vec![pane]);
-        } else if state.focused_leaf().is_some_and(|(s, _)| !s.is_main()) {
-            // A panel dropped into a small floating window would be easy to miss.
-            state.main_surface_mut().push_to_focused_leaf(pane);
-        } else {
-            state.push_to_focused_leaf(pane);
+            return;
+        }
+        // Into the main window (a panel dropped into a small floating window
+        // would be easy to miss), in the leaf last clicked in, but never as a
+        // tab over the 3D view: then another leaf, or a split below the view.
+        let tree = state.main_surface_mut();
+        let holds_view = |node: &NodeIndex| {
+            tree[*node]
+                .tabs()
+                .is_some_and(|tabs| tabs.contains(&Pane::Viewport))
+        };
+        let target = tree.focused_leaf().filter(|n| !holds_view(n)).or_else(|| {
+            tree.iter()
+                .enumerate()
+                .map(|(i, node)| (NodeIndex(i), node))
+                .find(|(n, node)| node.is_leaf() && !holds_view(n))
+                .map(|(n, _)| n)
+        });
+        match (target, tree.find_tab(&Pane::Viewport)) {
+            (Some(node), _) => {
+                tree.set_focused_node(node);
+                tree.push_to_focused_leaf(pane);
+            }
+            (None, Some((view, _))) => {
+                tree.split_below(view, 0.7, vec![pane]);
+            }
+            (None, None) => tree.push_to_focused_leaf(pane),
         }
     }
 }
@@ -139,7 +247,13 @@ pub fn default_layout() -> DockState<Pane> {
     let [view, right] = tree.split_right(
         egui_dock::NodeIndex::root(),
         0.76,
-        vec![Pane::Motion, Pane::Audio, Pane::Settings],
+        vec![
+            Pane::Motion,
+            Pane::Behaviours,
+            Pane::Scenarios,
+            Pane::Audio,
+            Pane::Settings,
+        ],
     );
     tree.split_below(right, 0.5, vec![Pane::State, Pane::Pca, Pane::Board]);
     tree.split_below(view, 0.78, vec![Pane::Log, Pane::Plot]);
@@ -333,7 +447,7 @@ const MIN_VISIBLE: IVec2 = IVec2::new(64, 32);
 fn keep_windows_on_screen(
     mut commands: Commands,
     monitors: Query<(&Monitor, Has<PrimaryMonitor>)>,
-    mut windows: Query<(Entity, &mut Window), Without<OnScreenChecked>>,
+    mut windows: Query<(Entity, &mut Window, Has<FitOnMonitor>), Without<OnScreenChecked>>,
 ) {
     // Bevy learns the monitors a moment after start-up.
     if monitors.is_empty() {
@@ -343,7 +457,7 @@ fn keep_windows_on_screen(
         .iter()
         .find_map(|(m, is_primary)| is_primary.then_some(m))
         .or_else(|| monitors.iter().next().map(|(m, _)| m));
-    for (entity, mut window) in &mut windows {
+    for (entity, mut window, fit) in &mut windows {
         let mut monitor = primary;
         match window.position {
             WindowPosition::At(pos) => {
@@ -376,9 +490,42 @@ fn keep_windows_on_screen(
             if w > max_w || h > max_h {
                 window.resolution.set(w.min(max_w), h.min(max_h));
             }
+            if let (true, WindowPosition::At(pos)) = (fit, window.position) {
+                window.position = WindowPosition::At(fit_inside(pos, &window, m));
+            }
         }
         commands.entity(entity).insert(OnScreenChecked);
     }
+}
+
+/// Room left for the OS title bar and border around a window's inside, in
+/// logical pixels; Bevy only knows the inside size.
+const WINDOW_FRAME: IVec2 = IVec2::new(16, 48);
+
+/// Marks a window opened by tearing a tab off: it opens under the pointer, which
+/// may be near a screen edge, so it is slid fully onto that monitor.
+#[derive(Component)]
+pub struct FitOnMonitor;
+
+/// `pos` moved just enough for the whole window to be on `monitor`, as far as
+/// it fits (a window bigger than the monitor keeps its top-left corner on it).
+fn fit_inside(pos: IVec2, window: &Window, monitor: &Monitor) -> IVec2 {
+    let size = IVec2::new(
+        window.resolution.physical_width().min(i32::MAX as u32) as i32,
+        window.resolution.physical_height().min(i32::MAX as u32) as i32,
+    );
+    // The size is the inside of the window; the OS adds its title bar and border.
+    let frame = (WINDOW_FRAME.as_dvec2() * monitor.scale_factor).as_ivec2();
+    let size = size.saturating_add(frame);
+    let lo = monitor.physical_position;
+    let hi = (lo.as_i64vec2() + monitor.physical_size().as_i64vec2() - size.as_i64vec2())
+        .clamp(
+            bevy::math::I64Vec2::splat(i64::from(i32::MIN)),
+            bevy::math::I64Vec2::splat(i64::from(i32::MAX)),
+        )
+        .as_ivec2()
+        .max(lo);
+    pos.clamp(lo, hi)
 }
 
 /// The size of the part of a window at `pos` (physical pixels) that is over
@@ -521,6 +668,7 @@ impl Plugin for DockPlugin {
             state,
             focus: None,
             floats,
+            tear: TearOff::default(),
         })
         .insert_resource(ViewportRect::default())
         .add_systems(

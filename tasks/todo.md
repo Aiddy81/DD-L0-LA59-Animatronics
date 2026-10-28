@@ -12,7 +12,10 @@ Branch: `feature/sim-ui-docking`, stacked on `feature/sim-ui-toolbar` (PR #83, n
 - [ ] Commit, push, PR (stacked on #83)
 - [ ] Interactive with a real mouse: drag tabs to every edge, move a floating panel and a detached window between monitors, Ctrl+= / - / 0 in each window, the theme picker — user
 
+- [x] Follow-up from the user: Behaviours and Scenarios as their own panels (out of the toolbar); plot tickboxes as a 3×2 / 2×3 grid; drag a tab out past the window edge to detach it (floating panels were stuck at the edge)
+
 ## Review
+- **Tear-off:** egui_dock hands `on_tab_button` a stand-in widget while a tab is dragged, so the drag is found by rebuilding egui_dock 0.16.0's tab-button ids (pinned with `=`). egui keeps the drag alive while the pointer is outside the window; letting go there detaches the tab under the pointer (`GetCursorPos`), slid onto that monitor allowing for the title bar. Docking back never adds a tab over the 3D view.
 - **UI scale never stuck (a PR 1 bug).** bevy_egui calls `set_pixels_per_point` every frame from `EguiContextSettings.scale_factor`, which overwrote `ctx.set_zoom_factor`. The scale now lives in that per-window setting, which is also what makes per-window scale possible.
 - **Two vsync'd windows cut the frame rate to ~19 FPS.** Detached windows use `AutoNoVsync`; the main window's vsync still paces the app (~60 FPS with a detached window open).
 - **The 3D view's hover never registered** inside an egui_dock tab (the dock's tab-body widget wins egui's hit test), so orbit and click-to-boop were dead from step 1 until the end. Hover is now pointer-in-rect plus top layer, and an orbit drag belongs to the view only if it started there, so dragging a tab across it doesn't spin the camera.
