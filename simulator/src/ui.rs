@@ -3453,12 +3453,6 @@ fn state_panel(ui: &mut egui::Ui, palette: &Palette) {
         }
     }
 
-    let mono = egui::TextStyle::Monospace.resolve(ui.style());
-    let format = |color| egui::TextFormat {
-        font_id: mono.clone(),
-        color,
-        ..Default::default()
-    };
     for (i, task) in state.tasks.iter().enumerate() {
         ui.add_space(4.0);
         // The arrow sim_runtime.py joins the links with isn't in egui's
@@ -3480,18 +3474,21 @@ fn state_panel(ui: &mut egui::Ui, palette: &Palette) {
         });
         if !task.numbers.is_empty() {
             ui.indent(("task_numbers", i), |vars| {
-                // One pair per label, so a line only ever breaks between pairs.
-                vars.horizontal_wrapped(|row| {
-                    row.spacing_mut().item_spacing = egui::vec2(14.0, 2.0);
-                    for (name, value) in &task.numbers {
-                        let mut job = egui::text::LayoutJob::default();
-                        job.append(name, 0.0, format(palette.muted));
-                        job.append(" ", 0.0, format(palette.muted));
-                        job.append(&value.to_string(), 0.0, format(palette.text));
-                        row.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend))
-                            .on_hover_text("A number variable in this task's firmware functions");
-                    }
-                });
+                // A two-column list, name then value, one variable per row.
+                egui::Grid::new(("task_numbers_grid", i))
+                    .num_columns(2)
+                    .spacing([16.0, 2.0])
+                    .striped(true)
+                    .show(vars, |grid| {
+                        for (name, value) in &task.numbers {
+                            grid.label(egui::RichText::new(name).monospace().color(palette.muted))
+                                .on_hover_text(
+                                    "A number variable in this task's firmware functions",
+                                );
+                            grid.label(egui::RichText::new(value).monospace().color(palette.text));
+                            grid.end_row();
+                        }
+                    });
             });
         }
     }
