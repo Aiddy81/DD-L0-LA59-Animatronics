@@ -32,7 +32,8 @@ bevy = { version = "=0.17.3", default-features = false, features = [
     "wav",
 ] }
 # manage_clipboard lets ctx.copy_text reach the OS clipboard (the log panel's Copy button).
-bevy_egui = { version = "=0.38.1", default-features = false, features = ["render", "default_fonts", "manage_clipboard"] }
+# accesskit gives screen readers and Voice Access the egui tree (#94).
+bevy_egui = { version = "=0.38.1", default-features = false, features = ["render", "default_fonts", "manage_clipboard", "accesskit"] }
 # 0.34.1 is on egui 0.33, which bevy_egui 0.38 uses.
 egui_plot = "=0.34.1"
 # The dockable panel layout; 0.18.0 is the release for egui 0.33. serde is for saving the layout.

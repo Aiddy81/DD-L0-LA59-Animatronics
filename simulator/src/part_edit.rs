@@ -18,6 +18,7 @@ use bevy_egui::EguiContexts;
 use serde::Deserialize;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
+use crate::a11y;
 use crate::config::{PartCfg, PartKind, PartShape, PixelLayout};
 use crate::dock::ViewportRect;
 use crate::hw::hw;
@@ -918,8 +919,9 @@ pub fn panel(ui: &mut egui::Ui, edit: &mut PartEdit, palette: &Palette) {
         {
             edit.push(PartCmd::Redo);
         }
-        if row
-            .add_enabled(edit.dirty, egui::Button::new("Save"))
+        let save = row.add_enabled(edit.dirty, egui::Button::new("Save"));
+        // The log has a Save too.
+        if a11y::name(save, "Save parts")
             .on_hover_text(format!("Write the parts to simulator/{PARTS_FILE} (Ctrl+S)"))
             .clicked()
         {
@@ -977,7 +979,11 @@ pub fn panel(ui: &mut egui::Ui, edit: &mut PartEdit, palette: &Palette) {
 /// One labelled row of the settings grid.
 fn row(grid: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     grid.label(label);
-    grid.horizontal_wrapped(add);
+    // A named group, so the row's unlabelled fields are read as "Position" etc.
+    grid.horizontal_wrapped(|r| {
+        a11y::region(r, label);
+        add(r);
+    });
     grid.end_row();
 }
 
@@ -1010,8 +1016,10 @@ fn settings(ui: &mut egui::Ui, edit: &mut PartEdit, i: usize, palette: &Palette)
         .spacing([8.0, 4.0])
         .show(ui, |grid| {
             row(grid, "Name", |r| {
-                let field =
-                    r.add(egui::TextEdit::singleline(&mut name_buf.1).desired_width(140.0));
+                let field = a11y::label(
+                    r.add(egui::TextEdit::singleline(&mut name_buf.1).desired_width(140.0)),
+                    "Name",
+                );
                 let bad = name_problem(&others, i, &name_buf.1);
                 if field.changed() && bad.is_none() {
                     c.name = name_buf.1.clone();
@@ -1034,7 +1042,7 @@ fn settings(ui: &mut egui::Ui, edit: &mut PartEdit, i: usize, palette: &Palette)
                     (None, None) => 2,
                 };
                 let names = ["PCA channel", "Pin", "Shim only"];
-                egui::ComboBox::from_id_salt("part_source")
+                let source = egui::ComboBox::from_id_salt("part_source")
                     .selected_text(names[src])
                     .show_ui(r, |m| {
                         for (n, label) in names.iter().enumerate() {
@@ -1045,10 +1053,12 @@ fn settings(ui: &mut egui::Ui, edit: &mut PartEdit, i: usize, palette: &Palette)
                             m.selectable_value(&mut src, n, *label);
                         }
                     });
+                a11y::label(source.response, "Source");
                 match src {
                     0 => {
                         let mut ch = c.pca.unwrap_or(8);
-                        r.add(egui::DragValue::new(&mut ch).range(0..=15));
+                        let channel = r.add(egui::DragValue::new(&mut ch).range(0..=15));
+                        a11y::label(channel, "PCA channel");
                         c.pca = Some(ch);
                         c.pin = None;
                     }
@@ -1058,8 +1068,8 @@ fn settings(ui: &mut egui::Ui, edit: &mut PartEdit, i: usize, palette: &Palette)
                             pin_buf.1 = "D5".into();
                         }
                         let field = r
-                            .add(egui::TextEdit::singleline(&mut pin_buf.1).desired_width(90.0))
-                            .on_hover_text(
+                            .add(egui::TextEdit::singleline(&mut pin_buf.1).desired_width(90.0));
+                        let field = a11y::label(field, "Pin").on_hover_text(
                                 "A board pin name, as code.py uses it: D5, A0, EXTERNAL_NEOPIXELS",
                             );
                         pin_buf.1 = pin_buf.1.to_ascii_uppercase();
@@ -1077,51 +1087,56 @@ fn settings(ui: &mut egui::Ui, edit: &mut PartEdit, i: usize, palette: &Palette)
                 }
             });
             row(grid, "Size", |r| {
-                r.add(drag(&mut c.size, 0.001, 0.001..=2.0));
+                a11y::label(r.add(drag(&mut c.size, 0.001, 0.001..=2.0)), "Size");
                 r.label("Colour");
                 // The button converts through HSV every frame, which drifts the
                 // value; only a real pick counts.
                 let mut rgb = c.colour;
-                if egui::color_picker::color_edit_button_rgb(r, &mut rgb).changed() {
+                let colour = egui::color_picker::color_edit_button_rgb(r, &mut rgb);
+                if a11y::label(colour, "Colour").changed() {
                     c.colour = rgb.map(|v| round(v, 1000.0));
                 }
             });
             let lit = matches!(c.kind, PartKind::Led | PartKind::Pixels);
             if lit && (c.pca.is_some() || c.pin.is_some()) {
                 row(grid, "Full at duty", |r| {
-                    r.add(drag(&mut c.full_duty, 0.005, 0.001..=1.0))
+                    a11y::label(r.add(drag(&mut c.full_duty, 0.005, 0.001..=1.0)), "Full at duty")
                         .on_hover_text("Duty that counts as full brightness; 0.3275 for an LED driven like the eyes (0-6550 us)");
                 });
             }
             if c.kind == PartKind::Pixels {
                 row(grid, "Pixels", |r| {
-                    r.add(egui::DragValue::new(&mut c.count).range(1..=PartCfg::MAX_PIXELS));
-                    egui::ComboBox::from_id_salt("part_layout")
+                    let count =
+                        r.add(egui::DragValue::new(&mut c.count).range(1..=PartCfg::MAX_PIXELS));
+                    a11y::label(count, "Pixel count");
+                    let layout = egui::ComboBox::from_id_salt("part_layout")
                         .selected_text(layout_name(c.layout))
                         .show_ui(r, |m| {
                             m.selectable_value(&mut c.layout, PixelLayout::Row, "row");
                             m.selectable_value(&mut c.layout, PixelLayout::Ring, "ring");
                         });
+                    a11y::label(layout.response, "Pixel layout");
                     r.label("spacing");
-                    r.add(drag(&mut c.spacing, 0.001, 0.001..=2.0));
+                    a11y::label(r.add(drag(&mut c.spacing, 0.001, 0.001..=2.0)), "Spacing");
                 });
             }
             if c.kind == PartKind::ServoPart {
                 servo_rows(grid, &mut c);
             }
             row(grid, "Position", |r| {
-                for v in &mut c.pos {
-                    r.add(drag(v, 0.002, -10.0..=10.0));
+                for (v, axis) in c.pos.iter_mut().zip(["Position X", "Position Y", "Position Z"]) {
+                    a11y::label(r.add(drag(v, 0.002, -10.0..=10.0)), axis);
                 }
             });
             row(grid, "Rotation°", |r| {
-                for v in &mut c.rot_deg {
-                    r.add(
+                for (v, axis) in c.rot_deg.iter_mut().zip(["Rotation X", "Rotation Y", "Rotation Z"]) {
+                    let field = r.add(
                         egui::DragValue::new(v)
                             .speed(0.5)
                             .range(-360.0..=360.0)
                             .max_decimals(2),
                     );
+                    a11y::label(field, axis);
                 }
             });
             row(grid, "Nudge", |r| nudges(r, &mut c, step));
@@ -1146,12 +1161,13 @@ fn settings(ui: &mut egui::Ui, edit: &mut PartEdit, i: usize, palette: &Palette)
 
 fn servo_rows(grid: &mut egui::Ui, c: &mut PartCfg) {
     row(grid, "Shape", |r| {
-        egui::ComboBox::from_id_salt("part_shape")
+        let shape = egui::ComboBox::from_id_salt("part_shape")
             .selected_text(shape_name(c.shape))
             .show_ui(r, |m| {
                 m.selectable_value(&mut c.shape, PartShape::Box, "box");
                 m.selectable_value(&mut c.shape, PartShape::Cylinder, "cylinder");
             });
+        a11y::label(shape.response, "Shape");
     });
     let h = &mut c.hinge;
     row(grid, "Hinge axis", |r| {
@@ -1160,32 +1176,42 @@ fn servo_rows(grid: &mut egui::Ui, c: &mut PartCfg) {
             ("Y", [0.0, 1.0, 0.0]),
             ("Z", [0.0, 0.0, 1.0]),
         ] {
-            if r.selectable_label(h.hinge_axis == axis, label).clicked() {
+            let pick = r.selectable_label(h.hinge_axis == axis, label);
+            if a11y::label(pick, &format!("Hinge along {label}")).clicked() {
                 h.hinge_axis = axis;
             }
         }
-        for v in &mut h.hinge_axis {
-            r.add(drag(v, 0.01, -1.0..=1.0));
+        for (v, axis) in h
+            .hinge_axis
+            .iter_mut()
+            .zip(["Hinge X", "Hinge Y", "Hinge Z"])
+        {
+            a11y::label(r.add(drag(v, 0.01, -1.0..=1.0)), axis);
         }
     });
     row(grid, "Neutral°", |r| {
-        r.add(drag(&mut h.neutral_deg, 0.5, 0.0..=360.0))
+        let neutral = r.add(drag(&mut h.neutral_deg, 0.5, 0.0..=360.0));
+        a11y::label(neutral, "Neutral angle")
             .on_hover_text("Servo angle at which the part sits as placed");
         r.label("direction");
-        egui::ComboBox::from_id_salt("part_direction")
+        let direction = egui::ComboBox::from_id_salt("part_direction")
             .selected_text(if h.direction < 0.0 { "-1" } else { "+1" })
             .show_ui(r, |m| {
                 m.selectable_value(&mut h.direction, 1.0, "+1");
                 m.selectable_value(&mut h.direction, -1.0, "-1");
             });
+        a11y::label(direction.response, "Direction");
         r.label("gain");
-        r.add(drag(&mut h.gain, 0.01, -10.0..=10.0));
+        a11y::label(r.add(drag(&mut h.gain, 0.01, -10.0..=10.0)), "Gain");
     });
     row(grid, "Limits°", |r| {
         let max = h.max_deg;
-        r.add(drag(&mut h.min_deg, 0.5, -360.0..=max));
+        a11y::label(
+            r.add(drag(&mut h.min_deg, 0.5, -360.0..=max)),
+            "Lower limit",
+        );
         let min = h.min_deg;
-        r.add(drag(&mut h.max_deg, 0.5, min..=360.0));
+        a11y::label(r.add(drag(&mut h.max_deg, 0.5, min..=360.0)), "Upper limit");
     });
 }
 
@@ -1193,20 +1219,49 @@ fn servo_rows(grid: &mut egui::Ui, c: &mut PartCfg) {
 /// (Y), and turns about the normal.
 fn nudges(r: &mut egui::Ui, c: &mut PartCfg, step: &mut f32) {
     let q = part_quat(c.rot_deg);
-    let mut shift = |r: &mut egui::Ui, label: &str, dir: Vec3, tip: &str| {
-        if r.small_button(label).on_hover_text(tip).clicked() {
+    // (button, spoken name, direction, hover text): "X-" and the turn arrows read badly.
+    let shifts = [
+        (
+            "X-",
+            "Move X minus",
+            Vec3::NEG_X,
+            "Along the surface, the part's -X",
+        ),
+        (
+            "X+",
+            "Move X plus",
+            Vec3::X,
+            "Along the surface, the part's +X",
+        ),
+        (
+            "Z-",
+            "Move Z minus",
+            Vec3::NEG_Z,
+            "Along the surface, the part's -Z",
+        ),
+        (
+            "Z+",
+            "Move Z plus",
+            Vec3::Z,
+            "Along the surface, the part's +Z",
+        ),
+        ("In", "Move in", Vec3::NEG_Y, "Into the surface"),
+        ("Out", "Move out", Vec3::Y, "Out of the surface"),
+    ];
+    for (label, said, dir, tip) in shifts {
+        if a11y::name(r.small_button(label), said)
+            .on_hover_text(tip)
+            .clicked()
+        {
             let p = Vec3::from(c.pos) + q * dir * *step;
             c.pos = tidy3(p, 1e4);
         }
-    };
-    shift(r, "X-", Vec3::NEG_X, "Along the surface, the part's -X");
-    shift(r, "X+", Vec3::X, "Along the surface, the part's +X");
-    shift(r, "Z-", Vec3::NEG_Z, "Along the surface, the part's -Z");
-    shift(r, "Z+", Vec3::Z, "Along the surface, the part's +Z");
-    shift(r, "In", Vec3::NEG_Y, "Into the surface");
-    shift(r, "Out", Vec3::Y, "Out of the surface");
-    for (label, deg) in [("⟲15°", 15.0f32), ("⟳15°", -15.0)] {
-        if r.small_button(label)
+    }
+    for (label, said, deg) in [
+        ("⟲15°", "Turn left 15 degrees", 15.0f32),
+        ("⟳15°", "Turn right 15 degrees", -15.0),
+    ] {
+        if a11y::name(r.small_button(label), said)
             .on_hover_text("Turn about the surface normal")
             .clicked()
         {
@@ -1215,13 +1270,14 @@ fn nudges(r: &mut egui::Ui, c: &mut PartCfg, step: &mut f32) {
             c.rot_deg = [x, y, z].map(|v| round(v.to_degrees(), 100.0));
         }
     }
-    egui::ComboBox::from_id_salt("part_step")
+    let picker = egui::ComboBox::from_id_salt("part_step")
         .selected_text(format!("step {}", short(*step)))
         .show_ui(r, |m| {
             for s in [0.002, 0.01, 0.05] {
                 m.selectable_value(step, s, format!("{s}"));
             }
         });
+    a11y::label(picker.response, "Nudge step");
 }
 
 #[cfg(test)]
