@@ -4,6 +4,7 @@ and code.py can run headless (in CI) without the desktop app.
 It records what code.py does to the hardware; headless.py drives the
 scenario (nudges, idle trigger) and checks the result.
 """
+import math
 import sys
 import time
 
@@ -55,11 +56,183 @@ _partial = [""]
 _heap_now = [0.0]
 
 
+# Generic parts (parts.toml in the app): name -> (kind, left to shims). Empty
+# in headless runs; a test fills it in. part_values holds what the part calls
+# set, as the app's HwState::parts does: ("level", x), ("rgb", (r, g, b)) and
+# ("pixels", [...]) in 0-1, ("angle", deg), ("pressed", bool).
+MAX_PART_NAME = 32
+MAX_PIXELS = 1024
+MAX_PART_WARNINGS = 128
+parts = {}
+part_values = {}
+_part_warned = set()
+
+
 def reset():
     _t0[0] = time.monotonic()
     _debt[0] = 0.0
     _board_time[0] = 0.0
     task_holds.clear()
+    part_values.clear()
+    _part_warned.clear()
+
+
+def _part_warn(call, name, problem):
+    if len(_part_warned) >= MAX_PART_WARNINGS or name in _part_warned:
+        return
+    _part_warned.add(name)
+    log('[sim] simhw.{}("{}"): {}; ignored\n'.format(call, name, problem))
+
+
+def _part_name(name, call):
+    if not isinstance(name, str):
+        _part_warn(call, "", "the name must be a string")
+        return None
+    return name[:MAX_PART_NAME + 1]
+
+
+def _part_target(call, name, kinds, setting):
+    if name not in parts:
+        problem = "no part has this name in parts.toml"
+    elif parts[name][0] not in kinds:
+        problem = "it is a {} part, not {}".format(parts[name][0], " or ".join(kinds))
+    elif setting and not parts[name][1]:
+        problem = "it follows its pca or pin, so a shim can't set it"
+    else:
+        return parts[name][0]
+    _part_warn(call, name, problem)
+    return None
+
+
+def _number(value):
+    if isinstance(value, (str, bytes)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _rgb(item):
+    if isinstance(item, (str, bytes)):
+        return None
+    try:
+        values = list(item) if len(item) == 3 else None
+    except TypeError:
+        return None
+    if values is None:
+        return None
+    values = [_number(v) for v in values]
+    return None if None in values else values
+
+
+def _unit_colour(c):
+    if not all(math.isfinite(v) for v in c):
+        return None
+    return tuple(min(max(v, 0.0), 255.0) / 255.0 for v in c)
+
+
+def set_part(name, value):
+    name = _part_name(name, "set_part")
+    if name is None:
+        return
+    kind = _part_target("set_part", name, ("led", "pixels", "servo_part"), True)
+    if kind is None:
+        return
+    problem = _set_part_value(name, kind, _shim_value(value))
+    if problem:
+        _part_warn("set_part", name, problem)
+
+
+def _shim_value(value):
+    """("on", bool), ("number", float), ("rgb", [r, g, b]) or None, checking
+    bool first as True is also an int."""
+    if isinstance(value, bool):
+        return ("on", value)
+    number = _number(value)
+    if number is not None:
+        return ("number", number)
+    rgb = _rgb(value)
+    return ("rgb", rgb) if rgb is not None else None
+
+
+def _set_part_value(name, kind, value):
+    """Stores the value for `kind`, or returns what's wrong with it."""
+    if value is None:
+        return "the value must be a number, True/False or (r, g, b)"
+    what, v = value
+    if kind == "servo_part":
+        if what != "number" or not math.isfinite(v):
+            return "a servo_part needs an angle in degrees"
+        part_values[name] = ("angle", v)
+    elif what == "on":
+        part_values[name] = ("level", 1.0 if v else 0.0)
+    elif what == "number":
+        if not math.isfinite(v):
+            return "brightness must be a number, not NaN or infinite"
+        part_values[name] = ("level", min(max(v, 0.0), 1.0))
+    elif kind == "pixels":
+        return "a pixels part takes brightness here; set_pixels sets its colours"
+    else:
+        colour = _unit_colour(v)
+        if colour is None:
+            return "r, g and b must be numbers"
+        part_values[name] = ("rgb", colour)
+    return None
+
+
+def _pixel_list(pixels):
+    if isinstance(pixels, (str, bytes)):
+        return None, "pixels must be a list of (r, g, b)"
+    try:
+        if len(pixels) > MAX_PIXELS:
+            return None, "more than {} pixels".format(MAX_PIXELS)
+    except TypeError:
+        pass
+    try:
+        items = iter(pixels)
+    except TypeError:
+        return None, "pixels must be a list of (r, g, b)"
+    out = []
+    while True:
+        try:
+            item = next(items)
+        except StopIteration:
+            return out, None
+        except Exception:  # noqa: BLE001 - the app also swallows a failing iterable
+            return None, "pixels must be a list of (r, g, b)"
+        if len(out) == MAX_PIXELS:
+            return None, "more than {} pixels".format(MAX_PIXELS)
+        rgb = _rgb(item)
+        if rgb is None:
+            return None, "each pixel must be (r, g, b)"
+        out.append(rgb)
+
+
+def set_pixels(name, pixels):
+    name = _part_name(name, "set_pixels")
+    if name is None:
+        return
+    found, problem = _pixel_list(pixels)
+    if _part_target("set_pixels", name, ("pixels",), True) is None:
+        return
+    if problem is None:
+        colours = [_unit_colour(c) for c in found]
+        if None in colours:
+            problem = "r, g and b must be numbers"
+        else:
+            part_values[name] = ("pixels", colours)
+    if problem:
+        _part_warn("set_pixels", name, problem)
+
+
+def part_input(name):
+    name = _part_name(name, "part_input")
+    if name is None:
+        return False
+    if _part_target("part_input", name, ("button",), False) is None:
+        return False
+    return part_values.get(name) == ("pressed", True)
 
 
 def now():

@@ -113,6 +113,7 @@ impl Plugin for PartsPlugin {
 /// Reads the parts file whenever code.py (re)starts: at launch, on Restart
 /// (R) and on Auto-reload, which `ui::hot_reload` also triggers when the file
 /// is saved. An unchanged file is left alone, so its warnings show once.
+/// Then tells the simhw part calls, which wait for it, what parts this run has.
 fn reload_parts(
     paths: Res<crate::Paths>,
     mut parts: ResMut<Parts>,
@@ -123,8 +124,17 @@ fn reload_parts(
         return;
     }
     seen.0 = Some(runs);
-    let path = paths.simulator.join(PARTS_FILE);
-    let text = match read_parts_file(&path) {
+    load_parts_file(&paths.simulator.join(PARTS_FILE), &mut parts, &mut seen.1);
+    let mut s = hw();
+    // A restart since `runs` was read gets its own pass next frame.
+    if s.runs == runs {
+        s.part_kinds = Some(part_kinds(&parts.0));
+    }
+}
+
+/// `seen` is the text last loaded, so an unchanged file is skipped.
+fn load_parts_file(path: &Path, parts: &mut ResMut<Parts>, seen: &mut Option<String>) {
+    let text = match read_parts_file(path) {
         Ok(text) => text.unwrap_or_default(),
         Err(e) => {
             hw().push_line(format!(
@@ -133,7 +143,7 @@ fn reload_parts(
             return;
         }
     };
-    if seen.1.as_deref() == Some(text.as_str()) {
+    if seen.as_deref() == Some(text.as_str()) {
         return;
     }
     let (list, warnings) = match parse_parts(&text) {
@@ -142,11 +152,11 @@ fn reload_parts(
             hw().push_line(format!(
                 "[sim] {PARTS_FILE} is invalid, keeping the previous parts: {e}"
             ));
-            seen.1 = Some(text);
+            *seen = Some(text);
             return;
         }
     };
-    seen.1 = Some(text);
+    *seen = Some(text);
     let mut s = hw();
     for w in warnings {
         s.push_line(w);
@@ -285,6 +295,134 @@ fn follow_sources(parts: Res<Parts>, cfg: Res<SimConfig>) {
             },
         }
     }
+}
+
+/// What the simhw part calls need to know about each part: its kind, and
+/// whether it is left to shims (no `pca` or `pin` to follow).
+fn part_kinds(parts: &[PartCfg]) -> HashMap<String, (PartKind, bool)> {
+    parts
+        .iter()
+        .map(|p| (p.name.clone(), (p.kind, p.source() == PartSource::Shim)))
+        .collect()
+}
+
+/// Most names the simhw part calls warn about in one run, so a shim making
+/// up names can't fill the log or memory.
+const MAX_SHIM_WARNINGS: usize = 128;
+
+/// A `simhw.set_part` value as Python passed it, before range checks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShimValue {
+    On(bool),
+    Number(f64),
+    /// 0-255 per channel, like `neopixel`.
+    Rgb([f64; 3]),
+}
+
+/// Logs a simhw part call's problem, once per run per name.
+pub fn shim_warn(s: &mut HwState, call: &str, name: &str, problem: &str) {
+    if s.part_warned.len() >= MAX_SHIM_WARNINGS || !s.part_warned.insert(name.to_owned()) {
+        return;
+    }
+    s.push_line(format!("[sim] simhw.{call}({name:?}): {problem}; ignored"));
+}
+
+/// The kind of the part a simhw call names, or `None` after warning when it
+/// can't take this call. `setting` calls need a part left to shims.
+fn shim_target(
+    s: &mut HwState,
+    call: &str,
+    name: &str,
+    kinds: &[PartKind],
+    setting: bool,
+) -> Option<PartKind> {
+    let found = s.part_kinds.as_ref().map(|k| k.get(name).copied());
+    let problem = match found {
+        None => "the parts file isn't loaded yet".to_owned(),
+        Some(None) => format!("no part has this name in {PARTS_FILE}"),
+        Some(Some((kind, _))) if !kinds.contains(&kind) => {
+            let wanted: Vec<&str> = kinds.iter().map(|k| k.name()).collect();
+            format!("it is a {} part, not {}", kind.name(), wanted.join(" or "))
+        }
+        Some(Some((_, false))) if setting => {
+            "it follows its pca or pin, so a shim can't set it".to_owned()
+        }
+        Some(Some((kind, _))) => return Some(kind),
+    };
+    shim_warn(s, call, name, &problem);
+    None
+}
+
+/// A 0-255 colour as the 0-1 the drawing uses; `None` unless all three are numbers.
+fn unit_colour(c: [f64; 3]) -> Option<[f32; 3]> {
+    c.iter()
+        .all(|v| v.is_finite())
+        .then(|| c.map(|v| (v.clamp(0.0, 255.0) / 255.0) as f32))
+}
+
+/// `simhw.set_part`: brightness 0-1 or on/off for an `led` or `pixels` part,
+/// `(r, g, b)` 0-255 for an `led`, degrees for a `servo_part`. `Err` is a
+/// value Python passed that isn't any of those.
+pub fn shim_set_part(s: &mut HwState, name: &str, value: Result<ShimValue, &str>) {
+    const CALL: &str = "set_part";
+    let kinds = [PartKind::Led, PartKind::Pixels, PartKind::ServoPart];
+    let Some(kind) = shim_target(s, CALL, name, &kinds, true) else {
+        return;
+    };
+    let level = |on: bool| PartValue::Level(if on { 1.0 } else { 0.0 });
+    let set = match (kind, value) {
+        (_, Err(problem)) => Err(problem.to_owned()),
+        (PartKind::Led | PartKind::Pixels, Ok(ShimValue::On(on))) => Ok(level(on)),
+        (PartKind::Led | PartKind::Pixels, Ok(ShimValue::Number(x))) if x.is_finite() => {
+            Ok(PartValue::Level(x.clamp(0.0, 1.0) as f32))
+        }
+        (PartKind::Led, Ok(ShimValue::Rgb(c))) => unit_colour(c)
+            .map(PartValue::Rgb)
+            .ok_or_else(|| "r, g and b must be numbers".to_owned()),
+        (PartKind::Pixels, Ok(ShimValue::Rgb(_))) => {
+            Err("a pixels part takes brightness here; set_pixels sets its colours".to_owned())
+        }
+        (PartKind::ServoPart, Ok(ShimValue::Number(x))) if x.is_finite() => {
+            Ok(PartValue::Angle(x as f32))
+        }
+        (PartKind::ServoPart, _) => Err("a servo_part needs an angle in degrees".to_owned()),
+        _ => Err("brightness must be a number, not NaN or infinite".to_owned()),
+    };
+    match set {
+        Ok(value) => {
+            s.parts.insert(name.to_owned(), value);
+        }
+        Err(problem) => shim_warn(s, CALL, name, &problem),
+    }
+}
+
+/// `simhw.set_pixels`: one `(r, g, b)` 0-255 per pixel of a `pixels` part.
+/// Pixels past the part's `count` aren't drawn. `Err` is a list Python passed
+/// that isn't one (or is longer than `PartCfg::MAX_PIXELS`).
+pub fn shim_set_pixels(s: &mut HwState, name: &str, pixels: Result<Vec<[f64; 3]>, String>) {
+    const CALL: &str = "set_pixels";
+    if shim_target(s, CALL, name, &[PartKind::Pixels], true).is_none() {
+        return;
+    }
+    let set = pixels.and_then(|list| {
+        list.into_iter()
+            .map(unit_colour)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| "r, g and b must be numbers".to_owned())
+    });
+    match set {
+        Ok(list) => {
+            s.parts.insert(name.to_owned(), PartValue::Pixels(list));
+        }
+        Err(problem) => shim_warn(s, CALL, name, &problem),
+    }
+}
+
+/// `simhw.part_input`: whether a `button` part is pressed; `false` after a
+/// warning for anything else.
+pub fn shim_part_input(s: &mut HwState, name: &str) -> bool {
+    shim_target(s, "part_input", name, &[PartKind::Button], false).is_some()
+        && matches!(s.parts.get(name), Some(PartValue::Pressed(true)))
 }
 
 /// glTF droids are ready once their scene has spawned, with its named nodes.
@@ -927,5 +1065,127 @@ mod tests {
             ..PartCfg::default()
         };
         assert_eq!(pixel_positions(&cfg).len(), PartCfg::MAX_PIXELS);
+    }
+
+    /// A fresh run whose parts file holds one part of each kind left to
+    /// shims, plus a flap that follows PCA channel 8.
+    fn shim_run() -> HwState {
+        let (list, warnings) = parse_parts(
+            r#"
+            [[part]]
+            name = "lamp"
+            [[part]]
+            name = "ring"
+            kind = "pixels"
+            count = 3
+            [[part]]
+            name = "flap"
+            kind = "servo_part"
+            [[part]]
+            name = "go"
+            kind = "button"
+            [[part]]
+            name = "tail"
+            kind = "servo_part"
+            pca = 8
+            "#,
+        )
+        .expect("valid TOML");
+        assert!(warnings.is_empty());
+        let mut s = HwState::new();
+        s.part_kinds = Some(part_kinds(&list));
+        s
+    }
+
+    fn sim_lines(s: &HwState) -> Vec<String> {
+        s.log
+            .iter()
+            .map(|l| l.text.clone())
+            .filter(|t| t.starts_with("[sim] simhw."))
+            .collect()
+    }
+
+    #[test]
+    fn set_part_picks_the_value_from_the_kind() {
+        let mut s = shim_run();
+        shim_set_part(&mut s, "lamp", Ok(ShimValue::Number(0.25)));
+        assert_eq!(s.parts.get("lamp"), Some(&PartValue::Level(0.25)));
+        shim_set_part(&mut s, "lamp", Ok(ShimValue::Number(7.0)));
+        assert_eq!(s.parts.get("lamp"), Some(&PartValue::Level(1.0)));
+        shim_set_part(&mut s, "lamp", Ok(ShimValue::Rgb([255.0, 51.0, -4.0])));
+        assert_eq!(s.parts.get("lamp"), Some(&PartValue::Rgb([1.0, 0.2, 0.0])));
+        shim_set_part(&mut s, "ring", Ok(ShimValue::On(true)));
+        assert_eq!(s.parts.get("ring"), Some(&PartValue::Level(1.0)));
+        shim_set_part(&mut s, "flap", Ok(ShimValue::Number(120.0)));
+        assert_eq!(s.parts.get("flap"), Some(&PartValue::Angle(120.0)));
+        assert!(sim_lines(&s).is_empty());
+    }
+
+    #[test]
+    fn set_pixels_scales_to_unit_colours() {
+        let mut s = shim_run();
+        let list = vec![[255.0, 0.0, 0.0], [0.0, 300.0, 0.0], [0.0, 0.0, 51.0]];
+        shim_set_pixels(&mut s, "ring", Ok(list));
+        assert_eq!(
+            s.parts.get("ring"),
+            Some(&PartValue::Pixels(vec![
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.2]
+            ]))
+        );
+        assert!(sim_lines(&s).is_empty());
+    }
+
+    #[test]
+    fn part_input_reads_a_button() {
+        let mut s = shim_run();
+        assert!(!shim_part_input(&mut s, "go"));
+        s.parts.insert("go".into(), PartValue::Pressed(true));
+        assert!(shim_part_input(&mut s, "go"));
+        assert!(sim_lines(&s).is_empty());
+    }
+
+    #[test]
+    fn bad_calls_warn_once_per_name_and_change_nothing() {
+        let mut s = shim_run();
+        for _ in 0..3 {
+            shim_set_part(&mut s, "nope", Ok(ShimValue::Number(1.0)));
+        }
+        shim_set_pixels(&mut s, "nope", Ok(vec![]));
+        assert!(!shim_part_input(&mut s, "nope"));
+        let lines = sim_lines(&s);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("set_part(\"nope\")") && lines[0].contains("no part"));
+
+        let nan = ShimValue::Number(f64::NAN);
+        shim_set_part(&mut s, "lamp", Ok(nan));
+        shim_set_part(&mut s, "flap", Ok(ShimValue::On(true)));
+        shim_set_part(&mut s, "go", Ok(ShimValue::On(true)));
+        shim_set_part(&mut s, "tail", Ok(ShimValue::Number(90.0)));
+        shim_set_pixels(&mut s, "ring", Ok(vec![[0.0, f64::INFINITY, 0.0]]));
+        assert!(!shim_part_input(&mut s, "flap"));
+        // One line each for lamp, flap, go, tail and ring; flap's second
+        // problem is already warned about.
+        assert_eq!(sim_lines(&s).len(), 6, "{:?}", sim_lines(&s));
+        assert!(s.parts.is_empty());
+        assert!(sim_lines(&s)
+            .iter()
+            .any(|l| l.contains("\"go\"") && l.contains("button part")));
+        assert!(sim_lines(&s)
+            .iter()
+            .any(|l| l.contains("\"tail\"") && l.contains("pca or pin")));
+    }
+
+    #[test]
+    fn warnings_are_capped_and_wait_for_the_parts_file() {
+        let mut s = HwState::new();
+        shim_set_part(&mut s, "lamp", Ok(ShimValue::Number(1.0)));
+        assert!(sim_lines(&s)[0].contains("isn't loaded yet"));
+        let mut s = shim_run();
+        for i in 0..1000 {
+            shim_set_part(&mut s, &format!("x{i}"), Ok(ShimValue::On(true)));
+        }
+        assert_eq!(sim_lines(&s).len(), MAX_SHIM_WARNINGS);
     }
 }

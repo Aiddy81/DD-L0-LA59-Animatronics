@@ -1,3 +1,23 @@
+# Simulator: simhw part calls — stage 3 of #65
+
+Branch: `feature/simulator-parts-stage3`, stacked on `feature/simulator-parts-stage2` (PR #89, on #87; neither merged). Stage 3 only: no drag and drop (stage 4). No new crates.
+
+- [x] `hw.rs`: `part_kinds` (name → kind, left to shims), `None` until parts.rs publishes it for the run; `part_warned`; both reset per run. `PartValue`'s `allow(dead_code)` removed (`Rgb`/`Pixels` now come from simhw)
+- [x] `parts.rs`: `reload_parts` publishes the kind table on every new run (unchanged and invalid files too); `shim_set_part` / `shim_set_pixels` / `shim_part_input` with one warning per run per name, capped at 128 names; 5 unit tests
+- [x] `pyhost.rs`: `set_part`, `set_pixels`, `part_input` take `PyAny` and check types, NaN, sizes (iterables read no further than 1025 items); wait (GIL released, ≤2 s) for the run's kind table so code.py can't beat the first frame
+- [x] `PartKind::name()` in `config.rs`, used by the PCA9685 panel too
+- [x] `tests/simhw.py` mirrors the calls; `tests/shim_dir.py` (already in CI) runs the guide's `neopixel` and `touchio` shims straight from `custom-shims.md`, plus bad-input checks
+- [x] `custom-shims.md` steps 1, 4, 8, Example B note, new Example D; README "Driving parts from a shim", custom shims, not-simulated and tests notes
+- [x] Docker `CHECK=1` (fmt, clippy -D warnings), `--all-targets` clippy, 7 scenarios pass; 96 unit tests (Windows test exe run from `dist\`)
+- [x] Running app (scratch repo with the guide's parts and shims): ring chases blue on Lola and Primitive, turns red while the touch pad is held (logged, no boop), unknown `D11` warns once per run, again once after R
+- [ ] Commit, push, PR (stacked on #89)
+
+## Review
+- **Kinds live in the Bevy world, calls on the Python thread.** `reset_for_run` runs before the next frame reloads the parts, so a call at import time could see no parts. The table is `None` until published for this run and the calls wait for it, rather than keeping last run's table (stale after editing the file).
+- `set_pixels` takes 0–255 (what `neopixel` holds, brightness applied by the shim); `set_part` brightness is 0–1 and an `led`'s `(r, g, b)` is 0–255 to match.
+- A part with a `pca`/`pin` source refuses shim writes with a warning: `follow_sources` would overwrite them every frame.
+- Worktrees have no `PropMaker_Feather/sounds/` (gitignored), so the real firmware stops at boot when run from a worktree's `dist\`; the Docker scenarios cover it.
+
 # Simulator: parts file — stage 2 of #65
 
 Branch: `feature/simulator-parts-stage2`, stacked on `feature/simulator-parts-stage1` (PR #87, not yet merged). Stage 2 only: no new `simhw.set_part` / `set_pixels` / `part_input` (stage 3) or drag and drop (stage 4). No new crates.

@@ -5,11 +5,13 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyBool, PyDict, PyModule, PyString};
 
+use crate::config::PartCfg;
 use crate::hw::{
     hw, AngryWindow, AudioCmd, FwState, IdleWait, MarkerKind, PinValue, ScenarioStatus, TaskState,
 };
+use crate::parts::ShimValue;
 use crate::wav::MixerFormat;
 
 /// Hardware stand-ins, compiled into the exe so it runs on its own. Shims in
@@ -91,6 +93,40 @@ mod simhw {
     #[pyfunction]
     fn pin_input(pin: &str) -> Option<bool> {
         hw().button_pins.get(pin).copied()
+    }
+
+    /// Drives a part left to shims in parts.toml: brightness 0-1 or on/off
+    /// for an `led` or `pixels` part, `(r, g, b)` 0-255 for an `led`, degrees
+    /// for a `servo_part`. Anything else logs one warning per run and name.
+    #[pyfunction]
+    fn set_part(py: Python<'_>, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) {
+        let Some(name) = part_name(name, "set_part") else {
+            return;
+        };
+        wait_for_parts(py);
+        crate::parts::shim_set_part(&mut hw(), &name, shim_value(value));
+    }
+
+    /// Sets a `pixels` part's colours, one `(r, g, b)` 0-255 per pixel, as
+    /// `neopixel` holds them after its brightness is applied.
+    #[pyfunction]
+    fn set_pixels(py: Python<'_>, name: &Bound<'_, PyAny>, pixels: &Bound<'_, PyAny>) {
+        let Some(name) = part_name(name, "set_pixels") else {
+            return;
+        };
+        let pixels = pixel_list(pixels);
+        wait_for_parts(py);
+        crate::parts::shim_set_pixels(&mut hw(), &name, pixels);
+    }
+
+    /// Whether a `button` part is pressed; `False` for anything else.
+    #[pyfunction]
+    fn part_input(py: Python<'_>, name: &Bound<'_, PyAny>) -> bool {
+        let Some(name) = part_name(name, "part_input") else {
+            return false;
+        };
+        wait_for_parts(py);
+        crate::parts::shim_part_input(&mut hw(), &name)
     }
 
     #[pyfunction]
@@ -305,6 +341,89 @@ mod simhw {
             results,
         });
     }
+}
+
+/// A part call's name argument. A name longer than any part's is cut, so it
+/// can't grow the warning set; a non-string warns and gives `None`.
+fn part_name(name: &Bound<'_, PyAny>, call: &str) -> Option<String> {
+    match name.downcast::<PyString>() {
+        Ok(text) => Some(
+            text.to_string_lossy()
+                .chars()
+                .take(PartCfg::MAX_NAME + 1)
+                .collect(),
+        ),
+        Err(_) => {
+            crate::parts::shim_warn(&mut hw(), call, "", "the name must be a string");
+            None
+        }
+    }
+}
+
+/// parts.rs fills in the parts for a run on the next frame after it starts,
+/// which code.py can beat. Waits for that (once a run, about a frame), with
+/// the GIL released.
+fn wait_for_parts(py: Python<'_>) {
+    py.allow_threads(|| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            {
+                let s = hw();
+                if s.part_kinds.is_some() || s.stop_requested {
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+}
+
+/// Three numbers, from any sequence of exactly three (not a string).
+fn rgb(item: &Bound<'_, PyAny>) -> Option<[f64; 3]> {
+    if item.is_instance_of::<PyString>() || item.len().ok()? != 3 {
+        return None;
+    }
+    let values: Vec<f64> = item.extract().ok()?;
+    values.try_into().ok()
+}
+
+/// A `set_part` value: a bool (checked first, as Python's `True` is also an
+/// int), a number, or `(r, g, b)`.
+fn shim_value(value: &Bound<'_, PyAny>) -> Result<ShimValue, &'static str> {
+    if let Ok(on) = value.downcast::<PyBool>() {
+        return Ok(ShimValue::On(on.is_true()));
+    }
+    if let Ok(x) = value.extract::<f64>() {
+        return Ok(ShimValue::Number(x));
+    }
+    rgb(value)
+        .map(ShimValue::Rgb)
+        .ok_or("the value must be a number, True/False or (r, g, b)")
+}
+
+/// A `set_pixels` list, read no further than one past the limit, so a huge
+/// or endless iterable costs nothing.
+fn pixel_list(pixels: &Bound<'_, PyAny>) -> Result<Vec<[f64; 3]>, String> {
+    let too_many = || format!("more than {} pixels", PartCfg::MAX_PIXELS);
+    let not_a_list = || "pixels must be a list of (r, g, b)".to_owned();
+    if pixels.is_instance_of::<PyString>() {
+        return Err(not_a_list());
+    }
+    if pixels.len().is_ok_and(|n| n > PartCfg::MAX_PIXELS) {
+        return Err(too_many());
+    }
+    let mut list = Vec::new();
+    for item in pixels.try_iter().map_err(|_| not_a_list())? {
+        if list.len() == PartCfg::MAX_PIXELS {
+            return Err(too_many());
+        }
+        let item = item.map_err(|_| not_a_list())?;
+        list.push(rgb(&item).ok_or_else(|| "each pixel must be (r, g, b)".to_owned())?);
+    }
+    Ok(list)
 }
 
 /// A scenario to play against a run: its name, TOML text, and the servo and

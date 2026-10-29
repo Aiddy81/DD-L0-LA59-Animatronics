@@ -1,11 +1,11 @@
 //! Simulated hardware state shared between the Python thread (which writes it
 //! through the `simhw` module) and the Bevy app (which renders it).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::Instant;
 
-use crate::config::BoardCfg;
+use crate::config::{BoardCfg, PartKind};
 use crate::wav::MixerFormat;
 
 /// PCA9685 runs the servo FeatherWing at 50 Hz, so one period is 20 ms.
@@ -98,13 +98,12 @@ pub struct IdleWait {
 
 /// What a generic part (`parts.rs`) is showing or, for a button, reading.
 #[derive(Clone, Debug, PartialEq)]
-// RGB and pixel lists come from simhw calls (#65, stage 3).
-#[allow(dead_code)]
 pub enum PartValue {
     /// Brightness 0-1 of the part's colour.
     Level(f32),
+    /// RGB 0-1.
     Rgb([f32; 3]),
-    /// One RGB value per pixel.
+    /// One RGB value (0-1) per pixel.
     Pixels(Vec<[f32; 3]>),
     /// Servo degrees.
     Angle(f32),
@@ -133,6 +132,12 @@ pub struct HwState {
     pub pins: HashMap<String, PinValue>,
     /// Input pins wired to a button part: pressed or not.
     pub button_pins: HashMap<String, bool>,
+    /// Each part's kind and whether it is left to shims (no `pca` or `pin`),
+    /// for the simhw part calls. `None` until parts.rs has read the parts
+    /// file for this run.
+    pub part_kinds: Option<HashMap<String, (PartKind, bool)>>,
+    /// Names the simhw part calls have already warned about this run.
+    pub part_warned: HashSet<String>,
     /// Runs started since launch; parts.rs reloads the parts file when it changes.
     pub runs: u64,
     /// Held acceleration in g (x, y, z). 1 g on z = sitting still.
@@ -210,6 +215,8 @@ impl HwState {
             parts: HashMap::new(),
             pins: HashMap::new(),
             button_pins: HashMap::new(),
+            part_kinds: None,
+            part_warned: HashSet::new(),
             runs: 0,
             accel_g: [0.0, 0.0, 1.0],
             nudge_dir: [0.0, 0.0, 1.0],
@@ -545,8 +552,11 @@ mod tests {
         assert_eq!(s.parts.get("flap"), Some(&PartValue::Angle(30.0)));
         s.pins.insert("D5".into(), PinValue::Digital(true));
         s.button_pins.insert("D6".into(), true);
+        s.part_kinds = Some(HashMap::new());
+        s.part_warned.insert("nope".into());
         s.reset_for_run();
         assert!(s.parts.is_empty());
+        assert!(s.part_kinds.is_none() && s.part_warned.is_empty());
         assert!(s.pins.is_empty() && s.button_pins.is_empty());
         assert_eq!(s.runs, 1);
     }

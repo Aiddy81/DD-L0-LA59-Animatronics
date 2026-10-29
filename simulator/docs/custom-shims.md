@@ -1,6 +1,6 @@
 # Writing custom shims for the simulator
 
-This guide shows how to add or change the Python stand-ins ("shims") that the simulator uses in place of CircuitPython hardware libraries. You only need Python and a text editor. No Rust, Docker or rebuild is involved, unless the 3D view needs to draw something new (see [step 8](#8-when-a-shim-needs-rust-changes)).
+This guide shows how to add or change the Python stand-ins ("shims") that the simulator uses in place of CircuitPython hardware libraries. You only need Python and a text editor. No Rust, Docker or rebuild is involved: new LEDs, pixel strips, moving parts and buttons are listed in `simulator/parts.toml` and driven through `simhw`. Only a new *kind* of output, such as a display, needs Rust (see [step 8](#8-when-a-shim-needs-rust-changes)).
 
 ## 1. What a shim is, and when you need one
 
@@ -14,7 +14,7 @@ The placeholder keeps the rest of the firmware running, but it can't tell you an
 
 - see what the firmware does with a library (log the calls),
 - feed the firmware realistic values (a button, a sensor),
-- drive an output the simulator already shows (servos and LEDs on the PCA9685, the white LED),
+- drive an output the simulator already shows (servos and LEDs on the PCA9685, the white LED), or a part you add in `simulator/parts.toml` (an LED, a NeoPixel strip or ring, a servo-turned shape, a button),
 - change how a built-in shim behaves without touching the simulator's source.
 
 ## 2. Where shim files go
@@ -75,6 +75,9 @@ Shims reach the simulator only through the built-in `simhw` module (`import simh
 | `simhw.set_pwm_pin(pin_name, duty, frequency=500)` | A `pwmio` pin's duty (0-65535) at `frequency` Hz. `"EXTERNAL_NEOPIXELS"` is the white LED and lights the model; any pin can drive a part in `simulator/parts.toml` (see the README's [Parts file](../../README.md#parts-file)). |
 | `simhw.set_pin(pin_name, value)` | A digital output. `"LED"` (onboard LED) and `"EXTERNAL_POWER"` show in the PCA9685 panel; any pin can drive a part in `simulator/parts.toml`. |
 | `simhw.pin_input(pin_name)` | Whether the `button` part on that input pin is pressed, or `None` when no button is on it. The `digitalio` shim uses it so `DigitalInOut.value` reads the button, inverted with `Pull.UP`. |
+| `simhw.set_part(name, value)` | Drives the part called `name` in `simulator/parts.toml`. What `value` means depends on the part's `kind`: brightness `0.0`-`1.0` (or `True`/`False` for on/off) for an `led` or `pixels` part, `(r, g, b)` with each `0`-`255` for an `led`, or the servo angle in degrees for a `servo_part` (turned through its `hinge` like the wings). The part must have no `pca` or `pin` (those follow their source instead). |
+| `simhw.set_pixels(name, [(r, g, b), ...])` | Sets each pixel of a `pixels` part, `0`-`255` per channel: the values `neopixel` holds after its `brightness` is applied. Pixel 0 is the first in the row or ring. Missing pixels are dark, extra ones aren't drawn; at most 1024. |
+| `simhw.part_input(name)` | Whether the `button` part called `name` is pressed (clicked on the model), `True` or `False`. Works for any button, with or without a `pin`. |
 | `simhw.accel()` | The next accelerometer reading as `(x, y, z)` in **g** (not m/s²), from the Motion controls (*Nudge*, *Shake*, *Tipped over*, *held z*) or a click on the droid. |
 | `simhw.accel_range(g)` | Tells the simulator the accelerometer's full-scale range in g (2, 4, 8 or 16), so the plot can draw its clip level. Call it when the range is set. The shim still clips the readings itself. |
 | `simhw.play_wav(path, level, looped)` | Plays a WAV file on the PC's speakers at `level` (0.0-1.0), optionally looping. |
@@ -89,6 +92,14 @@ Shims reach the simulator only through the built-in `simhw` module (`import simh
 | `simhw.log(text)` | Writes raw text to the log. `print()` in a shim does the same. Start a line with `[sim]` so it's filtered with the simulator's own messages rather than the firmware's. |
 
 `set_heap`, `heap` and `take_idle_trigger` also exist, but are used by the runtime itself, not by shims.
+
+The three part calls never raise. A name that isn't in `parts.toml`, a part of the wrong kind, a part that follows a `pca` or `pin`, or a bad value (wrong type, NaN, too many pixels) logs one warning per name per run and is otherwise ignored, for example:
+
+```
+[sim] simhw.set_pixels("ring"): no part has this name in parts.toml; ignored
+```
+
+`parts.toml` is read again on every restart, so a part added to it is there for the next run.
 
 For waits, use `time.sleep()` and `time.monotonic()` as the firmware does. Inside the simulator they are already the virtual clock, so they follow Speed and Pause.
 
@@ -215,7 +226,7 @@ class PCA9685:
         pass
 ```
 
-`adafruit_motor.servo` (built in) does the angle maths, so channel 8 shows as a *spare* row in the PCA9685 table with 7.5% duty and a 1499 µs pulse, as worked out in [step 5](#5-model-the-hardware-maths-faithfully). Channels 8-15 aren't drawn on the 3D model; that would need Rust ([step 8](#8-when-a-shim-needs-rust-changes)).
+`adafruit_motor.servo` (built in) does the angle maths, so channel 8 shows as a *spare* row in the PCA9685 table with 7.5% duty and a 1499 µs pulse, as worked out in [step 5](#5-model-the-hardware-maths-faithfully). To see the tail on the 3D model too, add a `servo_part` with `pca = 8` to `simulator/parts.toml` (see the README's [Parts file](../../README.md#parts-file)).
 
 The same pattern works for a `pwmio` pin: call `simhw.set_pwm_pin(pin.name, duty)`, as the built-in [`pwmio.py`](../shims/pwmio.py) does.
 
@@ -252,6 +263,156 @@ The built-in LIS3DH shim always reports `tapped` as `False`. To try tap detectio
 
 The log shows `shim 'adafruit_lis3dh' loaded from dist\shims\ (overrides built-in)`. With `set_tap(1, 60)`, *Shake* (3 g) reads as a tap and *Nudge* doesn't. Delete the file to go back to the built-in.
 
+### Example D: a NeoPixel ring and a touch pad, with no Rust (`neopixel`, `touchio`)
+
+`neopixel` is "not simulated" out of the box. This example adds a ring of 12 NeoPixels around the droid's gear band and a touch pad on its front, and two shims that drive them. Say the firmware does this:
+
+```python
+# in the firmware
+import time
+import board
+import neopixel
+import touchio
+
+ring = neopixel.NeoPixel(board.D10, 12, brightness=0.3, auto_write=False)
+pad = touchio.TouchIn(board.A1)
+
+while True:
+    for i in range(ring.n):
+        ring.fill(0)
+        ring[i] = (255, 0, 0) if pad.value else 0x0050FF  # red while touched
+        ring.show()
+        time.sleep(0.1)
+```
+
+**1. Add the parts.** Copy `simulator/parts.example.toml` to `simulator/parts.toml` (or start an empty one) and add a `pixels` ring and a `button`. Neither has a `pca` or `pin`, so they are left to shims:
+
+```toml
+# simulator/parts.toml
+[[part]]
+name = "band_pixels"
+kind = "pixels"
+layout = "ring"
+count = 12
+spacing = 0.6
+pos = [0, 1.42, 0]
+size = 0.04
+
+[[part]]
+name = "touch_pad"
+kind = "button"
+pos = [0, 1.38, 1.18]
+rot_deg = [90, 0, 0]
+size = 0.07
+colour = [0.2, 0.6, 1.0]
+```
+
+**2. Add the `neopixel` shim.** It keeps the pixels the way the real library does (unscaled, so reading `ring[i]` back gives what was written) and applies `brightness` when it sends them with `simhw.set_pixels`:
+
+```python
+# simulator\dist\shims\neopixel.py
+"""Stand-in for neopixel that draws on a `pixels` part in parts.toml. Mirrors
+NeoPixel(pin, n, *, bpp, brightness, auto_write, pixel_order), pixels[i] and
+slices, fill(), show(), brightness, n and deinit()."""
+import simhw
+
+# The pixels part each data pin drives; the names must match parts.toml.
+PARTS = {"D10": "band_pixels"}
+
+RGB = "RGB"
+GRB = "GRB"
+RGBW = "RGBW"
+GRBW = "GRBW"
+
+
+def _colour(value):
+    """A pixel as (r, g, b): from a packed 0xRRGGBB int or a tuple."""
+    if isinstance(value, int):
+        return ((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF)
+    if len(value) not in (3, 4):
+        raise ValueError("Expected tuple of length 3 or 4")
+    return tuple(value[:3])  # an RGBW pixel's white channel isn't drawn
+
+
+class NeoPixel:
+    def __init__(self, pin, n, *, bpp=3, brightness=1.0, auto_write=True,
+                 pixel_order=None):
+        self.n = n
+        self.auto_write = auto_write
+        self._part = PARTS.get(pin.name, pin.name)
+        self._pixels = [(0, 0, 0)] * n
+        self._brightness = min(max(brightness, 0.0), 1.0)
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, index):
+        return self._pixels[index]
+
+    def __setitem__(self, index, value):
+        if isinstance(index, slice):
+            for i, v in zip(range(*index.indices(self.n)), value):
+                self._pixels[i] = _colour(v)
+        else:
+            self._pixels[index] = _colour(value)
+        if self.auto_write:
+            self.show()
+
+    @property
+    def brightness(self):
+        return self._brightness
+
+    @brightness.setter
+    def brightness(self, value):
+        self._brightness = min(max(value, 0.0), 1.0)
+        if self.auto_write:
+            self.show()
+
+    def fill(self, color):
+        self._pixels = [_colour(color)] * self.n
+        if self.auto_write:
+            self.show()
+
+    def show(self):
+        b = self._brightness
+        simhw.set_pixels(self._part, [tuple(c * b for c in p) for p in self._pixels])
+
+    def deinit(self):
+        self._pixels = [(0, 0, 0)] * self.n
+        self.show()
+```
+
+**3. Add the `touchio` shim.** A touch pad reads `True` while the `touch_pad` part is clicked on the model:
+
+```python
+# simulator\dist\shims\touchio.py
+"""Stand-in for touchio that reads a `button` part in parts.toml. Mirrors
+TouchIn(pin), value, threshold and deinit()."""
+import simhw
+
+# The button part each touch pin reads; the names must match parts.toml.
+PARTS = {"A1": "touch_pad"}
+
+
+class TouchIn:
+    def __init__(self, pin):
+        self._part = PARTS.get(pin.name, pin.name)
+        self.threshold = 0
+
+    @property
+    def value(self):
+        return simhw.part_input(self._part)
+
+    def deinit(self):
+        pass
+```
+
+**4. Restart the run (R).** The log shows both shims loaded from `dist\shims\` and `[sim] parts.toml: 2 parts loaded`. A blue dot chases round the ring and turns red while you hold the mouse down on the touch pad; the PCA9685 panel lists `band_pixels` (`1/12 lit`) and `touch_pad` (`pressed` / `released`). This works on both the Lola and Primitive models.
+
+If a name doesn't match (say the firmware uses `board.D11`, which isn't in `PARTS`), the shim sends to a part called `D11` and the log says so once per run, `[sim] simhw.set_pixels("D11"): no part has this name in parts.toml; ignored`, while the rest of the firmware keeps running. Add the pin to `PARTS` or rename the part to fix it.
+
+`simulator/tests/shim_dir.py` runs these two shims straight from this page, so CI catches it if they stop working.
+
 ## 7. Testing a shim
 
 1. **Run it.** Save the shim; the run restarts if *Restart when firmware is saved* is ticked, otherwise press **R**.
@@ -273,11 +434,22 @@ To make a drop-in shim permanent for everyone, move it into `simulator/shims/` a
 
 ## 8. When a shim needs Rust changes
 
-A shim can use only the outputs `simhw` already offers ([step 4](#4-talking-to-the-simulator-simhw)). If the 3D view needs to show a new **kind** of output, such as a NeoPixel strip, a display or a new moving part, the simulator itself needs changing:
+Most new hardware needs no Rust. The simulator has four general part kinds, listed in `simulator/parts.toml` (see the README's [Parts file](../../README.md#parts-file)):
+
+| Kind | For | Driven by |
+|---|---|---|
+| `led` | a single LED, one colour or RGB | a PCA9685 channel, a pin, or `simhw.set_part` |
+| `pixels` | a NeoPixel strip or ring | a PCA9685 channel or pin (all one brightness), or `simhw.set_pixels` / `set_part` |
+| `servo_part` | a flap, tail or anything else a servo turns about a hinge | a PCA9685 channel, a pin, or `simhw.set_part` |
+| `button` | a button, switch or touch pad (an input) | the mouse; read with `digitalio` (`pin = ...`) or `simhw.part_input` |
+
+So a shim for new hardware is usually a parts entry plus the calls in [step 4](#4-talking-to-the-simulator-simhw), as in [Example D](#example-d-a-neopixel-ring-and-a-touch-pad-with-no-rust-neopixel-touchio).
+
+Only a new **kind** of output, one that none of these four can show (a display, for example), needs the simulator itself changing:
 
 1. **`simulator/src/hw.rs`**: add a field to the shared hardware state (`HwState`) to hold the new output, and reset it in `reset_for_run`.
-2. **`simulator/src/pyhost.rs`**: add a `#[pyfunction]` to the `simhw` module that writes that field, like `set_pca` or `set_pin`.
-3. **`simulator/src/scene.rs`** and **`simulator/src/droid.rs`**: draw it on the model. **`simulator/src/ui.rs`**: add a readout to the side panel if useful.
+2. **`simulator/src/pyhost.rs`**: add a `#[pyfunction]` to the `simhw` module that writes that field, like `set_pca` or `set_part`. Check every argument Python passes (types, NaN, sizes) and log a `[sim]` warning rather than raising or panicking.
+3. **`simulator/src/scene.rs`** (or `parts.rs` for something part-like): draw it on the model; `droid.rs` stays the primitive model. **`simulator/src/ui.rs`**: add a readout to the side panel if useful.
 4. **`simulator/tests/simhw.py`**: add the same function to the pure-Python `simhw` that the headless test uses, so CI keeps passing.
 5. Rebuild with `.\simulator\build.ps1`, and keep `cargo fmt` and `cargo clippy` clean.
 
