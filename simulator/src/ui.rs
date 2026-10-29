@@ -544,6 +544,25 @@ const SHORTCUTS: &[Shortcut] = &[
     ),
 ];
 
+/// A menu that stays open while its checkboxes and sliders are used and closes
+/// on a click outside it or on `ui.close()`. egui 0.32+ menus close on any
+/// click inside by default. Sub-menus take their root menu's setting.
+fn menu_button<'a, R>(
+    ui: &mut egui::Ui,
+    label: impl egui::IntoAtoms<'a>,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    if egui::containers::menu::is_in_menu(ui) {
+        return ui.menu_button(label, body);
+    }
+    let config = egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (resp, inner) = egui::containers::menu::MenuButton::new(label)
+        .config(config)
+        .ui(ui, body);
+    egui::InnerResponse::new(inner.map(|i| i.inner), resp)
+}
+
 /// Hover text for a control. When `cmd` has a key binding in `SHORTCUTS` the
 /// keys are appended, so a tooltip can't disagree with the Shortcuts window.
 /// Also shown while the control is disabled, when egui would otherwise show
@@ -848,7 +867,7 @@ fn save_prefs(
     mut saved: ResMut<Prefs>,
     paths: Res<crate::Paths>,
     mut state: Local<SaveState>,
-    mut exits: EventReader<AppExit>,
+    mut exits: MessageReader<AppExit>,
 ) {
     let exiting = exits.read().count() > 0;
     // The Layouts menu edits the saved layouts in place, which a comparison with
@@ -1172,7 +1191,7 @@ fn reload_sim_toml(ui: &mut UiState, cfg: &mut SimConfig, path: &Path) {
     hw().push_line(line);
 }
 
-fn stop_on_exit(mut exits: EventReader<AppExit>, mut host: ResMut<Host>) {
+fn stop_on_exit(mut exits: MessageReader<AppExit>, mut host: ResMut<Host>) {
     if exits.read().next().is_some() {
         host.0.stop();
     }
@@ -1300,7 +1319,7 @@ impl GroupLayout {
             row.separator();
         }
         if self.collapsed[group] {
-            let button = tip(row.menu_button(label, body).response, hint, None);
+            let button = tip(menu_button(row, label, body).response, hint, None);
             // Inside the More menu the button is menu-wide, not its toolbar width.
             if !self.more_pass {
                 self.menu[group] = button.rect.width();
@@ -1481,12 +1500,12 @@ fn viewport_bar(
             Cmd::Camera(CameraView::Reset),
         );
         ui.separator();
-        let light = ui.menu_button("Light", |m| {
+        let light = menu_button(ui, "Light", |m| {
             for choice in RoomLight::ALL {
                 let cmd = Cmd::Light(choice);
                 let resp = m.add_enabled(
                     cmd_enabled(cmd, en),
-                    egui::SelectableLabel::new(room == choice, choice.label()),
+                    egui::Button::selectable(room == choice, choice.label()),
                 );
                 if tip(
                     resp,
@@ -1496,7 +1515,7 @@ fn viewport_bar(
                 .clicked()
                 {
                     cmds.push(cmd);
-                    m.close_menu();
+                    m.close();
                 }
             }
         });
@@ -1527,7 +1546,7 @@ fn viewport_bar(
             Cmd::Record,
         );
         ui.separator();
-        let menu = ui.menu_button("Overlays", |m| {
+        let menu = menu_button(ui, "Overlays", |m| {
             for overlay in Overlay::ALL {
                 let cmd = Cmd::Overlay(overlay);
                 let mut on = overlays.get(overlay);
@@ -1660,7 +1679,7 @@ fn panels(
     ),
     mut captures: Captures,
 ) {
-    let Some(ctx) = contexts.try_ctx_mut() else {
+    let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
     // Cloned (it is a handle) so `contexts` is free to hand out the detached windows' ones.
@@ -1741,7 +1760,7 @@ fn panels(
             rest(row, &mut groups);
             if crowded {
                 row.separator();
-                let more = row.menu_button("More", |m| {
+                let more = menu_button(row, "More", |m| {
                     groups.more_pass = true;
                     rest(m, &mut groups);
                     groups.more_pass = false;
@@ -1762,7 +1781,7 @@ fn panels(
                     {
                         cmds.push(Cmd::ToggleHelp);
                     }
-                    let menu = r.menu_button(if crowded { "⚙" } else { "⚙ View" }, |m| {
+                    let menu = menu_button(r, if crowded { "⚙" } else { "⚙ View" }, |m| {
                         if tip(
                             m.button("Command palette…"),
                             "Search and run any command",
@@ -1771,7 +1790,7 @@ fn panels(
                         .clicked()
                         {
                             cmds.push(Cmd::Palette);
-                            m.close_menu();
+                            m.close();
                         }
                         m.separator();
                         panels_menu(m, &captures.dock, &detached, &en, &mut cmds);
@@ -1926,7 +1945,7 @@ fn panels(
     // Run after the dock is drawn: a command can edit the layout it was drawn from.
     // A floated panel opens near the middle; egui_dock sizes the window at 0.8 of this.
     let float_rect = egui::Rect::from_min_size(
-        ctx.screen_rect().center() - egui::vec2(210.0, 160.0),
+        ctx.content_rect().center() - egui::vec2(210.0, 160.0),
         egui::vec2(525.0, 400.0),
     );
     {
@@ -1986,9 +2005,9 @@ fn panels(
     }
 
     for (entity, mut window) in &mut captures.detached {
-        // The window's context appears a frame after it is spawned.
-        let Some(wctx) = contexts
-            .try_ctx_for_entity_mut(entity)
+        // The context, on the window's camera, appears a frame after it is spawned.
+        let Ok(wctx) = contexts
+            .ctx_for_entity_mut(window.ui_camera)
             .map(|c| egui::Context::clone(c))
         else {
             continue;
@@ -2976,7 +2995,7 @@ fn toggle_pane(
 }
 
 /// Whether the widget with keyboard focus is a text field (a DragValue being
-/// typed into counts). Not `wants_keyboard_input`: in egui 0.31 that is true
+/// typed into counts). Not `wants_keyboard_input`: in egui 0.33 that is true
 /// for any focused widget, so tabbing to a button would turn every key off.
 fn text_field_focused(ctx: &egui::Context) -> bool {
     ctx.memory(|m| m.focused())
@@ -3271,7 +3290,7 @@ fn layouts_menu(
     });
 
     if let Some(name) = builtin {
-        m.close_menu();
+        m.close();
         cmds.push(Cmd::Layout(name));
     }
     let Some(action) = action else {
@@ -3279,7 +3298,7 @@ fn layouts_menu(
     };
     // Deleting leaves the menu open so several can go in one visit.
     if !matches!(action, LayoutAction::Delete(_)) {
-        m.close_menu();
+        m.close();
     }
     let now = matches!(action, LayoutAction::Save(_) | LayoutAction::Export(_))
         .then(|| captures.current_layout());

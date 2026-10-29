@@ -1,10 +1,10 @@
 //! The 3D droid: a placeholder built from primitives, or `assets/droid.glb`
 //! if present. Joints and lights are driven from the simulated hardware.
 
-use bevy::core_pipeline::bloom::Bloom;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -347,10 +347,7 @@ fn setup(
     });
     commands.spawn((
         Camera3d::default(),
-        Camera {
-            hdr: true,
-            ..default()
-        },
+        bevy::render::view::Hdr,
         Tonemapping::TonyMcMapface,
         Bloom::NATURAL,
         Transform::default(),
@@ -429,7 +426,7 @@ fn sensor_dir(normal: Option<Vec3>) -> Option<[f32; 3]> {
 /// camera that happens to start on it doesn't count. Clicks on any part
 /// bubble up to the model's root, which has this observer.
 fn boop(
-    click: Trigger<Pointer<Click>>,
+    click: On<Pointer<Click>>,
     drag: Res<DragDistance>,
     viewport: Res<ViewportRect>,
     edit: Res<crate::part_edit::PartEdit>,
@@ -826,7 +823,7 @@ pub(crate) fn apply_viewport(
         let y = ((r.min.y * ppp).round().max(0.0) as u32).min(max_h - 1);
         let w = ((r.width() * ppp).round().max(1.0) as u32).min(max_w - x);
         let h = ((r.height() * ppp).round().max(1.0) as u32).min(max_h - y);
-        Some(bevy::render::camera::Viewport {
+        Some(bevy::camera::Viewport {
             physical_position: UVec2::new(x, y),
             physical_size: UVec2::new(w, h),
             ..default()

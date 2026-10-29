@@ -143,13 +143,22 @@ fn main() {
     let shims_mtime = ui::shims_mtime(&paths.shims);
     let parts_mtime = ui::file_mtime(&paths.simulator.join(parts::PARTS_FILE));
 
+    // Single-pass: `ui::panels` draws the main window and every detached one
+    // from `Update`. Multi-pass would need a schedule per window; the option is
+    // deprecated but still supported in bevy_egui 0.38.
+    #[allow(deprecated)]
+    let egui_plugin = EguiPlugin {
+        enable_multipass_for_primary_context: false,
+        ..default()
+    };
+
     App::new()
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "DD-L0-LA59 Simulator".into(),
-                        resolution: (prefs.window_width, prefs.window_height).into(),
+                        resolution: dock::resolution(prefs.window_width, prefs.window_height),
                         position: match (prefs.window_x, prefs.window_y) {
                             (Some(x), Some(y)) => WindowPosition::At(IVec2::new(x, y)),
                             _ => WindowPosition::Automatic,
@@ -169,9 +178,7 @@ fn main() {
         .add_plugins((
             MeshPickingPlugin,
             bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
-            EguiPlugin {
-                enable_multipass_for_primary_context: false,
-            },
+            egui_plugin,
         ))
         .insert_resource(cfg)
         .insert_resource(paths)
