@@ -1,6 +1,8 @@
 //! DD-L0-LA59 simulator: runs PropMaker_Feather/code.py unmodified against
 //! simulated hardware and shows the droid in 3D.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// The test exe stays a console app, so it prints its results and the caller
+// waits for its exit code.
+#![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod audio;
 mod capture;

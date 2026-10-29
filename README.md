@@ -312,11 +312,13 @@ A name that isn't in the file, the wrong kind, a part that follows a `pca` or `p
 
 `python simulator/tests/shim_dir.py` checks drop-in shims: overriding and adding modules, a broken or unreadable shim, and the `simhw` part calls, running the `neopixel` and `touchio` examples straight from `simulator/docs/custom-shims.md` and feeding the calls bad input. CI runs it too.
 
-The Settings panel's `settings.toml` reader and writer (`simulator/src/settings.rs`) has unit tests that need only `rustc`: `docker run --rm -v "${PWD}:/workspace" -w /workspace/simulator ddl0-sim-dev bash -c "rustc --edition 2021 --test src/settings.rs -o /tmp/settings-test && /tmp/settings-test"`. The Audio panel's WAV reader (`src/wav.rs`) and the deploy planner (`src/deploy.rs`, against temporary folders, never a real drive) are tested the same way: swap the file name in that command.
+The simulator's Rust unit tests run with `.\simulator\build.ps1 -Test`. The build cross-compiles them into `simulator\dist\ddl0-sim-tests.exe` (a Windows exe, so it can't run in the Linux container), then runs it from `dist\`, where it finds the Python and MinGW DLLs it needs. A failing test fails the script. To rerun them without rebuilding, run `.\ddl0-sim-tests.exe` from `simulator\dist\`.
+
+The tests for `settings.rs`, `wav.rs` and `deploy.rs` need only `rustc`, so they can also be run on their own, which is quicker. For the Settings panel's `settings.toml` reader and writer (`simulator/src/settings.rs`): `docker run --rm -v "${PWD}:/workspace" -w /workspace/simulator ddl0-sim-dev bash -c "rustc --edition 2021 --test src/settings.rs -o /tmp/settings-test && /tmp/settings-test"`. The Audio panel's WAV reader (`src/wav.rs`) and the deploy planner (`src/deploy.rs`, against temporary folders, never a real drive) are tested the same way: swap the file name in that command.
 
 `simulator\build.ps1` runs `headless.py` in the dev image as its last step, so a firmware change that breaks a behaviour fails the build. The failing checks and scenarios are listed as `FAIL` lines. The simulator is still built in `simulator\dist\`, so you can open it to see what went wrong.
 
-GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download.
+GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run.
 
 ### The 3D model
 

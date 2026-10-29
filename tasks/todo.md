@@ -1,3 +1,21 @@
+# Simulator: unit tests in CI, servo-part limits in the app — #88
+
+Branch: `feature/sim-tests-ci` off `Documentation`. The user approved the one `.github/workflows/simulator.yml` edit. Windows CI job chosen over Wine or Linux host tests: no image change, real Windows, same DLLs as the app.
+
+- [x] `docker/build.sh`: `TEST=1` builds the unit tests (`cargo test --no-run`, exe path read from cargo's JSON with `python3`) and stages `dist/ddl0-sim-tests.exe`
+- [x] `build.ps1 -Test`: passes `TEST=1`, runs the exe from `dist\`, fails on any failing test
+- [x] CI: `build` sets `TEST=1`; new `unit-tests` job on `windows-latest` downloads `ddl0-sim-windows` and runs the exe
+- [x] README "Tests and CI"
+- [x] `main.rs`: the GUI-subsystem attribute skips `cfg(test)`, so the test exe is a console app
+- [x] `build.ps1 -Test`: 108 passed; a deliberate failing test fails it (exit 101); plain `build.ps1` stages no test exe; `cargo fmt --check` clean
+- [x] Running app, Lola and Primitive, test part on ch 0 (neutral 57.5, gain 8, ±45; breathing sweeps 50–65°): held still at −45 and +45 while the servo kept moving; `direction = -1` moves each limit to the other end of the servo range; gain 5 at 50° matches gain 8 at the servo angle asking for the same −37.5° (same pixel extent). Captures in `simulator\dist\captures\issue-88\`
+- [ ] Commit, push, PR; CI's `unit-tests` job passes
+
+## Review
+- **The first `-Test` run "passed" without running anything.** Release builds set `windows_subsystem = "windows"`, and the test exe inherited it: no console, so PowerShell neither waited for it nor got an exit code, and CI would have passed the same way. Fixed in `main.rs`; checked with a deliberately failing test.
+- **The PCA9685 panel's part value is the servo angle it follows, not the hinge angle**, so the limit checks compare poses across frames instead: a clamped flap stays still while the servo still moves.
+- The test-part file was temporary and has been deleted; no `parts.toml` is committed.
+
 # Simulator: drag-and-drop part placement — stage 4 of #65
 
 Branch: `feature/simulator-parts-stage4`, stacked on `feature/simulator-parts-stage3` (PR #90, on #89 and #87; none merged). Confirmed with the user: slide-on-surface plus fields (no 3D gizmos), an auto-save toggle (remembered) plus Save / Ctrl+S, and an "Edit parts" toggle that turns clicks into select/slide with no boops. One new direct crate, `toml_edit =0.22.27`, already in Cargo.lock through `toml`.

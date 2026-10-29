@@ -29,6 +29,11 @@
 .PARAMETER DebugBuild
     Debug profile instead of release (faster to compile, slower to run).
 
+.PARAMETER Test
+    Also build the Rust unit tests, stage them as dist\ddl0-sim-tests.exe
+    and run them here, from dist\ so they find the Python and MinGW DLLs.
+    CI runs the same exe on Windows. Any failing test fails the script.
+
 .EXAMPLE
     .\simulator\build.ps1 -Run
 #>
@@ -37,6 +42,7 @@ param(
     [switch]$RebuildImage,
     [switch]$Run,
     [switch]$DebugBuild,
+    [switch]$Test,
     [string]$Image = 'ddl0-sim-dev'
 )
 
@@ -65,6 +71,7 @@ if ($RebuildImage -or $LASTEXITCODE -ne 0) {
 Get-Process ddl0-sim -ErrorAction SilentlyContinue | Stop-Process -Force
 
 $locked = if (Test-Path (Join-Path $sim 'Cargo.lock')) { '1' } else { '0' }
+$runTests = if ($Test) { '1' } else { '0' }
 
 Write-Host "== Cross-compiling in $Image ($profileDir; first build takes a while)" -ForegroundColor Cyan
 # docker/build.sh does the build and staging; CI runs the same script.
@@ -73,7 +80,7 @@ docker run --rm `
     -v ddl0-sim-cargo-registry:/usr/local/cargo/registry `
     -v ddl0-sim-target:/target `
     -e CARGO_TARGET_DIR=/target `
-    -e "PROFILE=$profileDir" -e "LOCKED=$locked" `
+    -e "PROFILE=$profileDir" -e "LOCKED=$locked" -e "TEST=$runTests" `
     -w /workspace/simulator $Image bash docker/build.sh
 if ($LASTEXITCODE -eq 3) {
     throw (@(
@@ -86,6 +93,14 @@ if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 $exe = Join-Path $dist 'ddl0-sim.exe'
 Write-Host ""
 Write-Host "== Built: $exe" -ForegroundColor Green
+
+if ($Test) {
+    Write-Host "== Rust unit tests" -ForegroundColor Cyan
+    # Run from dist\ so Windows finds the Python and MinGW DLLs beside it.
+    Push-Location $dist
+    try { & (Join-Path $dist 'ddl0-sim-tests.exe') } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw "unit tests failed ($LASTEXITCODE): see the FAILED lines above" }
+}
 
 if ($Run) {
     Start-Process -FilePath $exe -WorkingDirectory $dist
