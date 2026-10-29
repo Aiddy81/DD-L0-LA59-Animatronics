@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 
 use crate::hw::{
-    hw, AngryWindow, AudioCmd, FwState, IdleWait, MarkerKind, ScenarioStatus, TaskState,
+    hw, AngryWindow, AudioCmd, FwState, IdleWait, MarkerKind, PinValue, ScenarioStatus, TaskState,
 };
 use crate::wav::MixerFormat;
 
@@ -60,10 +60,19 @@ mod simhw {
     }
 
     #[pyfunction]
-    fn set_pwm_pin(pin: &str, duty: u16) {
+    #[pyo3(signature = (pin, duty, frequency = 500))]
+    fn set_pwm_pin(pin: &str, duty: u16, frequency: u32) {
+        let mut s = hw();
         if pin == "EXTERNAL_NEOPIXELS" {
-            hw().white_duty = duty;
+            s.white_duty = duty;
         }
+        s.pins.insert(
+            pin.to_owned(),
+            PinValue::Pwm {
+                duty,
+                freq: frequency,
+            },
+        );
     }
 
     #[pyfunction]
@@ -74,6 +83,14 @@ mod simhw {
             "EXTERNAL_POWER" => s.external_power = value,
             _ => {}
         }
+        s.pins.insert(pin.to_owned(), PinValue::Digital(value));
+    }
+
+    /// Whether the button part wired to this input pin is pressed; `None`
+    /// when no button is on it.
+    #[pyfunction]
+    fn pin_input(pin: &str) -> Option<bool> {
+        hw().button_pins.get(pin).copied()
     }
 
     #[pyfunction]

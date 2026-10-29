@@ -116,7 +116,7 @@ def set_pca(channel, duty):
         wing_writes.append(now())
 
 
-def set_pwm_pin(name, duty):
+def set_pwm_pin(name, duty, frequency=500):
     if name == "EXTERNAL_NEOPIXELS":
         white[0] = duty
         white_writes.append(now())
@@ -124,6 +124,11 @@ def set_pwm_pin(name, duty):
 
 def set_pin(name, value):
     pins[name] = value
+
+
+def pin_input(name):
+    # Headless runs have no button parts.
+    return None
 
 
 def accel():

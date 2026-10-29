@@ -847,8 +847,8 @@ class _Scenario:
             if scenario.active:
                 scenario._pca(channel, duty)
 
-        def set_pwm_pin(name, duty):
-            real.set_pwm_pin(name, duty)
+        def set_pwm_pin(name, duty, frequency=500):
+            real.set_pwm_pin(name, duty, frequency)
             if scenario.active and name == "EXTERNAL_NEOPIXELS":
                 for key in scenario._channel_names.get("white", []):
                     scenario._observe("led", key, duty / 65535.0)

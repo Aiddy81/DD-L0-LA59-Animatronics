@@ -1,3 +1,24 @@
+# Simulator: parts file — stage 2 of #65
+
+Branch: `feature/simulator-parts-stage2`, stacked on `feature/simulator-parts-stage1` (PR #87, not yet merged). Stage 2 only: no new `simhw.set_part` / `set_pixels` / `part_input` (stage 3) or drag and drop (stage 4). No new crates.
+
+- [x] `simulator/parts.toml` (not `[[part]]` in sim.toml): parts fail one at a time instead of rejecting the whole wing/eye config; stage 4 can rewrite it without wiping sim.toml's comments; restart-on-save vs sim.toml's live apply stay separate. `parts.example.toml` committed; no `parts.toml`, so the default droid is unchanged
+- [x] `config.rs`: `PartCfg` gains `pca`, `pin`, `anchor`, `full_duty`; `deny_unknown_fields` on `PartCfg`/`HingeCfg`; `PartCfg::check()` validates name, numbers, counts, sources, hinge
+- [x] `parts.rs`: `parse_parts` (each entry on its own, `[sim]` warning per skipped one, duplicates, 64-part cap); reload when a run starts (`HwState::runs`); `follow_sources` (PCA duty/pulse, PWM/digital pin); anchors by node name, then the wing/glow components both models have; glTF parts wait for `SceneInstanceReady`
+- [x] `hw.rs` pin table (`pins`, `button_pins`); `pyhost.rs` `set_pwm_pin(…, frequency)`, `set_pin` record every pin, new `pin_input`; `pwmio`/`digitalio` shims, scenario proxy and `tests/simhw.py` mirrored
+- [x] `ui.rs`: Auto-reload also watches `parts.toml`; PCA9685 panel lists parts (name, value, kind, source); a spare channel shows its part's name
+- [x] README "Parts file" section; `custom-shims.md` simhw table
+- [x] Docker `CHECK=1` (fmt, clippy -D warnings) + `--all-targets` clippy; 7 scenarios pass; 91 unit tests (Windows test exe run from `dist\`)
+- [x] Running app with the example file plus a bad entry, on Lola and Primitive: flap follows ch 0 (same angle as R wing), tail light follows the white LED pin, wing lamp rides the right wing lit by main R, ring on the band, button on D5 pressed/released with no boop; bad entry logged and skipped; saving the file restarts and applies; with Auto-reload off, Restart applies
+- [x] `digitalio` button read checked in Docker (pull-up/pull-down, no button = unchanged)
+- [ ] Commit, push, PR (stacked on #87)
+
+## Review
+- **Value column was cut off** at the default panel width (long pin names like `EXTERNAL_NEOPIXELS`); columns are now name · value · kind · source.
+- **Pin buttons are written every frame**, not only on press, so a released button on a pull-up input reads `True` from the start of a run and after a restart.
+- Parts anchored to Lola-only nodes (`head`, …) are skipped on the primitive model with a warning, by design; the five shared names work on both.
+- `ddl0-sim` isn't listed for the computer-use tool, so captures used PrintWindow with `SetCursorPos` + a relative `mouse_event` nudge for clicks.
+
 # Simulator: generic part types — stage 1 of #65
 
 Branch: `feature/simulator-parts-stage1` off `Documentation`. Stage 1 only: no parts file, pin/PCA sources, `simhw` calls or panel listing (stages 2–4). No new crates.

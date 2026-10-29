@@ -138,6 +138,7 @@ fn main() {
     host.start();
     let code_mtime = ui::firmware_mtime(&paths.code);
     let shims_mtime = ui::shims_mtime(&paths.shims);
+    let parts_mtime = ui::file_mtime(&paths.simulator.join(parts::PARTS_FILE));
 
     App::new()
         .add_plugins(
@@ -176,6 +177,7 @@ fn main() {
             code_mtime,
             shims_mtime,
             sim_toml_mtime,
+            parts_mtime,
             &prefs,
         ))
         .insert_resource(audio::AudioMix::new(prefs.volume, prefs.muted))
