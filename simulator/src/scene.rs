@@ -53,9 +53,9 @@ fn slew(actual: f32, target: f32, max_step: f32) -> f32 {
 
 /// Where one physical servo is, as opposed to where code.py told it to go.
 #[derive(Default)]
-struct ServoTrack {
+pub(crate) struct ServoTrack {
     /// Servo degrees; `None` until the first command (it then starts there).
-    actual: Option<f32>,
+    pub(crate) actual: Option<f32>,
     /// Virtual time the current lag began.
     lag_since: Option<f64>,
     warned: bool,
@@ -65,7 +65,7 @@ impl ServoTrack {
     /// Follows `target` for one frame. Returns how far behind it is and for
     /// how long, once per stretch of falling more than LAG_WARN_DEG behind
     /// for longer than LAG_SUSTAIN_S.
-    fn follow(&mut self, target: f32, max_step: f32, now: f64) -> Option<(f32, f64)> {
+    pub(crate) fn follow(&mut self, target: f32, max_step: f32, now: f64) -> Option<(f32, f64)> {
         let actual = self.actual.map_or(target, |a| slew(a, target, max_step));
         self.actual = Some(actual);
         let lag = (target - actual).abs();
@@ -80,6 +80,13 @@ impl ServoTrack {
         }
         self.warned = true;
         Some((lag, behind_s))
+    }
+
+    /// A restart reset the clock. The servo stays where it physically was;
+    /// only the lag timing starts over.
+    pub(crate) fn restart(&mut self) {
+        self.lag_since = None;
+        self.warned = false;
     }
 }
 
@@ -523,25 +530,28 @@ fn commanded_angle(cfg: &SimConfig, side: Side) -> Option<f32> {
     (pulse > 0.0).then(|| cfg.servo.angle_for_pulse(pulse))
 }
 
-/// Moves each servo toward its command at the servo's rated speed and warns
-/// when code.py keeps asking for more than that. Tracked even with the
-/// toolbar's limit off, so the warning still shows.
-fn slew_servos(cfg: Res<SimConfig>, mut slew: ResMut<ServoSlew>) {
+/// One frame of servo motion in virtual time: the time now, the furthest a
+/// servo can turn since `last_now` (which is updated), and whether the clock
+/// went back because code.py restarted.
+pub(crate) fn servo_frame(cfg: &SimConfig, last_now: &mut Option<f64>) -> (f64, f32, bool) {
     let now = hw().clock.now();
-    let last = slew.last_now.replace(now).unwrap_or(now);
-    if now < last {
-        // A restart reset the clock. The servos stay where they physically
-        // were; only the lag timing starts over.
-        for track in &mut slew.tracks {
-            track.lag_since = None;
-            track.warned = false;
-        }
-    }
+    let last = last_now.replace(now).unwrap_or(now);
     let dt = (now - last).max(0.0) as f32;
     let max_step = cfg
         .servo
         .max_speed_dps()
         .map_or(f32::INFINITY, |dps| dps * dt);
+    (now, max_step, now < last)
+}
+
+/// Moves each servo toward its command at the servo's rated speed and warns
+/// when code.py keeps asking for more than that. Tracked even with the
+/// toolbar's limit off, so the warning still shows.
+fn slew_servos(cfg: Res<SimConfig>, mut slew: ResMut<ServoSlew>) {
+    let (now, max_step, restarted) = servo_frame(&cfg, &mut slew.last_now);
+    if restarted {
+        slew.tracks.iter_mut().for_each(ServoTrack::restart);
+    }
     for side in Side::BOTH {
         let Some(target) = commanded_angle(&cfg, side) else {
             continue; // unpowered: the servo stays put
@@ -613,17 +623,26 @@ fn drive_glow(
         let rgb = glow_rgb(&cfg, glow.source);
         for handle in &glow.materials {
             if let Some(m) = materials.get_mut(handle) {
-                m.emissive = LinearRgba::rgb(rgb.x, rgb.y, rgb.z) * 40.0;
+                m.emissive = glow_emissive(rgb);
             }
         }
     }
     for (light, mut point) in &mut lights {
-        let rgb = glow_rgb(&cfg, light.0);
-        let peak = rgb.max_element();
-        point.intensity = peak * 60_000.0;
-        if peak > 0.0 {
-            point.color = Color::linear_rgb(rgb.x / peak, rgb.y / peak, rgb.z / peak);
-        }
+        shine(&mut point, glow_rgb(&cfg, light.0));
+    }
+}
+
+/// How brightly a lit material glows for a drive of `rgb` (0..1 per channel).
+pub(crate) fn glow_emissive(rgb: Vec3) -> LinearRgba {
+    LinearRgba::rgb(rgb.x, rgb.y, rgb.z) * 40.0
+}
+
+/// Sets a lamp's point light for a drive of `rgb` (0..1 per channel).
+pub(crate) fn shine(point: &mut PointLight, rgb: Vec3) {
+    let peak = rgb.max_element();
+    point.intensity = peak * 60_000.0;
+    if peak > 0.0 {
+        point.color = Color::linear_rgb(rgb.x / peak, rgb.y / peak, rgb.z / peak);
     }
 }
 

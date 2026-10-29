@@ -1,3 +1,22 @@
+# Simulator: generic part types — stage 1 of #65
+
+Branch: `feature/simulator-parts-stage1` off `Documentation`. Stage 1 only: no parts file, pin/PCA sources, `simhw` calls or panel listing (stages 2–4). No new crates.
+
+- [x] `config.rs`: `PartCfg` (flat: kind-specific fields are ignored by other kinds), `PartKind`, `PixelLayout`, `PartShape`, `HingeCfg`; `WingCfg::elevation_deg` delegates to `HingeCfg`
+- [x] `hw.rs`: `HwState::parts` (name → `PartValue`), cleared by `reset_for_run`
+- [x] `scene.rs` / `droid.rs`: shared `ServoTrack`, `servo_frame`, `glow_emissive`, `shine`, `lamp_material`, `lamp_light` (no behaviour change)
+- [x] `parts.rs` (new): `Parts` resource, spawn under `DroidRoot`, LED/pixels glow, servo part slew + hinge, button press/release with no boop
+- [x] Docker `CHECK=1` build (fmt, clippy -D warnings), `--all-targets` clippy, 7 scenarios pass, 83 unit tests (Windows test exe against `dist\`)
+- [x] No parts: app unchanged on Lola and Primitive (captures)
+- [x] Local demo (removed before commit): one part of each kind on both models; LED cycles colour, ring chases, flap swings (clamping is covered by unit tests), button press/release logged with no boop, head click still boops, orbit from the button works, parts rebuilt on model switch
+- [x] Commit, push, PR into `Documentation` (#87)
+
+## Review
+- **Button stuck down (found in the demo).** The cap sinks while pressed, so the pointer is no longer over it when the mouse button comes up and `Pointer<Released>` goes to the shell instead. The release is now a system (`release_held_button`) that lets go of the held button once the left mouse button is up, wherever the pointer is.
+- **Synthetic drags don't orbit with `SetCursorPos`**: the camera reads raw mouse motion, so capture scripts need relative `mouse_event` moves.
+- `PartCfg` is a flat struct (kind-specific fields ignored by other kinds) rather than a tagged enum, so each `[[part]]` in stage 2's file only lists what it needs and serde defaults stay simple.
+- CI still doesn't run `cargo test` (Windows cross target); the tests were run as a Windows exe from `dist`.
+
 # Simulator: UI refresh part 5 — 3D viewport overlays, mini-toolbar, transitions (#80)
 
 Branch: `feature/sim-ui-viewport`, stacked on `feature/sim-ui-palette` (PR #85, not yet merged). PR 5 of 5. No new crates. Room light moves into the mini-toolbar too (user's choice).

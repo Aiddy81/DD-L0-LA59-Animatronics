@@ -13,6 +13,7 @@ mod hw;
 mod layout;
 mod overlay;
 mod palette;
+mod parts;
 mod prefs;
 mod pyhost;
 mod scene;
@@ -186,6 +187,7 @@ fn main() {
         .add_plugins((
             theme::ThemePlugin,
             scene::ScenePlugin,
+            parts::PartsPlugin,
             audio::AudioPlugin,
             capture::CapturePlugin,
             toast::ToastPlugin,

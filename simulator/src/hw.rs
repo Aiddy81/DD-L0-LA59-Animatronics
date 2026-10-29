@@ -96,6 +96,21 @@ pub struct IdleWait {
     pub length: f64,
 }
 
+/// What a generic part (`parts.rs`) is showing or, for a button, reading.
+#[derive(Clone, Debug, PartialEq)]
+// Only buttons write a value so far; the others come from simhw calls (#65).
+#[allow(dead_code)]
+pub enum PartValue {
+    /// Brightness 0-1 of the part's colour.
+    Level(f32),
+    Rgb([f32; 3]),
+    /// One RGB value per pixel.
+    Pixels(Vec<[f32; 3]>),
+    /// Servo degrees.
+    Angle(f32),
+    Pressed(bool),
+}
+
 pub struct HwState {
     /// 16-bit duty cycle per PCA9685 channel, `None` until first written.
     pub pca_duty: [Option<u16>; 16],
@@ -103,6 +118,8 @@ pub struct HwState {
     pub white_duty: u16,
     pub onboard_led: bool,
     pub external_power: bool,
+    /// Generic parts' values by part name; a part with no entry is off/at rest.
+    pub parts: HashMap<String, PartValue>,
     /// Held acceleration in g (x, y, z). 1 g on z = sitting still.
     pub accel_g: [f32; 3],
     /// Unit direction that Nudge, Hard shake and a head click push in, added to
@@ -175,6 +192,7 @@ impl HwState {
             white_duty: 0,
             onboard_led: false,
             external_power: false,
+            parts: HashMap::new(),
             accel_g: [0.0, 0.0, 1.0],
             nudge_dir: [0.0, 0.0, 1.0],
             accel_pulses: VecDeque::new(),
@@ -498,6 +516,16 @@ pub fn hw() -> MutexGuard<'static, HwState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_clears_part_values() {
+        let mut s = HwState::new();
+        s.parts.insert("flap".into(), PartValue::Angle(30.0));
+        s.parts.insert("go".into(), PartValue::Pressed(true));
+        assert_eq!(s.parts.get("flap"), Some(&PartValue::Angle(30.0)));
+        s.reset_for_run();
+        assert!(s.parts.is_empty());
+    }
 
     /// Waits (briefly, in real time) until the clock reads as paused.
     fn wait_until_paused(clock: &SimClock) {

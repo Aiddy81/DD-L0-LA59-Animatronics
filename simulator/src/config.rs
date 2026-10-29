@@ -194,9 +194,130 @@ impl ServoCfg {
 }
 
 impl WingCfg {
+    pub fn hinge(&self) -> HingeCfg {
+        HingeCfg {
+            neutral_deg: self.neutral_deg,
+            direction: self.direction,
+            gain: self.gain,
+            hinge_axis: self.hinge_axis,
+            min_deg: self.min_deg,
+            max_deg: self.max_deg,
+        }
+    }
+
+    pub fn elevation_deg(&self, servo_deg: f32) -> f32 {
+        self.hinge().elevation_deg(servo_deg)
+    }
+}
+
+/// A joint turned by a servo through a linkage, like the wings.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct HingeCfg {
+    /// Servo angle at which the joint is at 0 degrees.
+    pub neutral_deg: f32,
+    /// +1 if a larger servo angle turns the joint positive, -1 if negative.
+    pub direction: f32,
+    /// Joint degrees per servo degree.
+    pub gain: f32,
+    /// Axis in the part's local space; a positive angle turns right-handed about it.
+    pub hinge_axis: [f32; 3],
+    pub min_deg: f32,
+    pub max_deg: f32,
+}
+
+impl Default for HingeCfg {
+    fn default() -> Self {
+        Self {
+            neutral_deg: 90.0,
+            direction: 1.0,
+            gain: 1.0,
+            hinge_axis: [1.0, 0.0, 0.0],
+            min_deg: -90.0,
+            max_deg: 90.0,
+        }
+    }
+}
+
+impl HingeCfg {
+    /// Joint angle for a servo angle, within the travel limits.
     pub fn elevation_deg(&self, servo_deg: f32) -> f32 {
         ((servo_deg - self.neutral_deg) * self.direction * self.gain)
             .clamp(self.min_deg, self.max_deg)
+    }
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PartKind {
+    /// A glowing sphere: brightness 0-1 of `colour`, or an RGB value.
+    #[default]
+    Led,
+    /// `count` glowing dots in a row or ring, one RGB value each.
+    Pixels,
+    /// A shape turned about a hinge by a servo angle.
+    ServoPart,
+    /// A cap on the model that can be pressed with the mouse (an input).
+    Button,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelLayout {
+    #[default]
+    Row,
+    Ring,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PartShape {
+    #[default]
+    Box,
+    Cylinder,
+}
+
+/// One generic part on the droid. Fields that don't apply to its kind are
+/// ignored, so a TOML entry only lists what it needs.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct PartCfg {
+    pub name: String,
+    pub kind: PartKind,
+    /// Position relative to the droid's root. The part's local +Y points out
+    /// of the surface it sits on.
+    pub pos: [f32; 3],
+    /// Rotation as X, Y, Z Euler angles in degrees.
+    pub rot_deg: [f32; 3],
+    /// Radius of an LED, pixel or button cap; half-width of a servo shape.
+    pub size: f32,
+    /// LED colour at full brightness; body colour of a servo shape or button.
+    pub colour: [f32; 3],
+    /// Pixels: how many.
+    pub count: usize,
+    pub layout: PixelLayout,
+    /// Pixels: distance between neighbouring dots.
+    pub spacing: f32,
+    /// Servo part: what it looks like. It extends along local +Z from the hinge.
+    pub shape: PartShape,
+    pub hinge: HingeCfg,
+}
+
+impl Default for PartCfg {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            kind: PartKind::Led,
+            pos: [0.0; 3],
+            rot_deg: [0.0; 3],
+            size: 0.05,
+            colour: [1.0, 1.0, 1.0],
+            count: 8,
+            layout: PixelLayout::Row,
+            spacing: 0.15,
+            shape: PartShape::Box,
+            hinge: HingeCfg::default(),
+        }
     }
 }
 
@@ -223,5 +344,87 @@ impl SimConfig {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wing_elevation_unchanged() {
+        let cfg = SimConfig::default();
+        // Right wing: lower servo angle = higher wing.
+        assert_eq!(cfg.wing_right.elevation_deg(90.0), 0.0);
+        assert!((cfg.wing_right.elevation_deg(0.0) - 40.5).abs() < 1e-4);
+        assert_eq!(cfg.wing_right.elevation_deg(180.0), 0.0);
+        // Left wing: clamps at its 75 degree limit.
+        assert!((cfg.wing_left.elevation_deg(100.0) - 40.5).abs() < 1e-4);
+        assert_eq!(cfg.wing_left.elevation_deg(180.0), 75.0);
+    }
+
+    #[test]
+    fn hinge_applies_neutral_direction_gain_and_limits() {
+        let hinge = HingeCfg {
+            neutral_deg: 45.0,
+            direction: -1.0,
+            gain: 2.0,
+            min_deg: -30.0,
+            max_deg: 60.0,
+            ..HingeCfg::default()
+        };
+        assert_eq!(hinge.elevation_deg(45.0), 0.0);
+        assert_eq!(hinge.elevation_deg(35.0), 20.0);
+        assert_eq!(hinge.elevation_deg(0.0), 60.0);
+        assert_eq!(hinge.elevation_deg(180.0), -30.0);
+    }
+
+    #[test]
+    fn parts_read_from_toml() {
+        #[derive(Deserialize)]
+        struct File {
+            part: Vec<PartCfg>,
+        }
+        let file: File = toml::from_str(
+            r#"
+            [[part]]
+            name = "lamp"
+            pos = [0.0, 2.0, 0.5]
+            colour = [1.0, 0.5, 0.0]
+
+            [[part]]
+            name = "ring"
+            kind = "pixels"
+            count = 12
+            layout = "ring"
+
+            [[part]]
+            name = "flap"
+            kind = "servo_part"
+            shape = "cylinder"
+            hinge = { neutral_deg = 0.0, max_deg = 45.0 }
+
+            [[part]]
+            name = "go"
+            kind = "button"
+            "#,
+        )
+        .expect("valid parts");
+        let [lamp, ring, flap, go] = &file.part[..] else {
+            panic!("expected four parts");
+        };
+        assert_eq!(lamp.kind, PartKind::Led);
+        assert_eq!(lamp.pos, [0.0, 2.0, 0.5]);
+        assert_eq!(lamp.size, PartCfg::default().size);
+        assert_eq!((ring.kind, ring.count), (PartKind::Pixels, 12));
+        assert_eq!(ring.layout, PixelLayout::Ring);
+        assert_eq!(
+            (flap.kind, flap.shape),
+            (PartKind::ServoPart, PartShape::Cylinder)
+        );
+        assert_eq!(flap.hinge.max_deg, 45.0);
+        assert_eq!(flap.hinge.gain, 1.0);
+        assert_eq!(go.kind, PartKind::Button);
+        assert!(toml::from_str::<File>("[[part]]\nkind = \"display\"").is_err());
     }
 }
