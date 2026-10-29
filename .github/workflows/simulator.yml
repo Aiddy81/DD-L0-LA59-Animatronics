@@ -40,14 +40,14 @@ jobs:
             .ci-cache/target
           key: sim-${{ runner.os }}-${{ hashFiles('simulator/Cargo.lock', 'simulator/docker/Dockerfile') }}
           restore-keys: sim-${{ runner.os }}-
-      - name: Format, lint and build
+      - name: Format, lint, build and build the unit tests
         run: |
           mkdir -p .ci-cache/registry .ci-cache/target
           docker run --rm \
             -v "$PWD:/workspace" \
             -v "$PWD/.ci-cache/registry:/usr/local/cargo/registry" \
             -v "$PWD/.ci-cache/target:/target" \
-            -e CARGO_TARGET_DIR=/target -e CHECK=1 -e LOCKED=1 \
+            -e CARGO_TARGET_DIR=/target -e CHECK=1 -e LOCKED=1 -e TEST=1 \
             -w /workspace/simulator ddl0-sim-dev bash docker/build.sh
           sudo chown -R "$(id -u):$(id -g)" .ci-cache simulator/dist
       - name: Upload the simulator
@@ -56,3 +56,22 @@ jobs:
           name: ddl0-sim-windows
           path: simulator/dist/
           retention-days: 14
+
+  # The tests are a Windows exe (cross-compiled like the app), so they run on
+  # Windows, from the built dist/ beside the Python and MinGW DLLs.
+  unit-tests:
+    name: Rust unit tests (Windows)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ddl0-sim-windows
+          path: dist
+      - name: Run the unit tests
+        shell: pwsh
+        working-directory: dist
+        run: |
+          .\ddl0-sim-tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
