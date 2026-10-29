@@ -7,8 +7,8 @@
 //! Bevy axes: Y up, +Z forward (the droid faces the default camera).
 
 use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use crate::scene::{Glow, GlowLight, GlowSource, Side, Wing};
 

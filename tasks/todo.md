@@ -1,3 +1,28 @@
+# Simulator: accessibility — #94
+
+Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit integration is off in 0.34 and back on in 0.38). Each stage is its own branch off `Documentation` and its own PR. Plan: screen-reader tree and names, keyboard 3D view, announcements and text alternatives, contrast and Windows settings, docs.
+
+- [ ] **Stage 1 — `feature/bevy-0.17`**: bevy =0.17.3, bevy_egui =0.38.1 (egui 0.33), egui_plot =0.34.1, egui_dock =0.18.0; no behaviour change
+  - [x] Changelogs reviewed (bevy_egui 0.35–0.38, egui 0.32/0.33); every changed Bevy/egui_dock API checked against the 0.16/0.17 and 0.16/0.18 sources
+  - [x] Compiles; fmt, clippy `-D warnings`, 109 unit tests (one new: a layout saved by egui_dock 0.16 loads), 7 headless scenarios
+  - [x] Running app: orbit, Reset, boop by click (firmware sees the motion), overlays (pointers on their parts), menus stay open while ticking, palette, High contrast, UI scale, F6, Plot, detach/scale/redock a pane, parts drag and drop + undo
+  - [ ] Not checked by hand: the animations-off setting
+  - [ ] Commit, push, PR into `Documentation`
+
+### Review (stage 1)
+- **egui now draws through a camera.** The 3D camera only covers the 3D tab and turns off with it, so the main window got its own full-window egui camera (order 1, no meshes, no picking, premultiplied blend over the scene).
+- **Detached windows crashed on open** ("No fonts loaded"): the context was added in `Update`, so bevy_egui ended its pass without starting one. Now added in `PreUpdate` before bevy_egui's `InitContexts`.
+- **egui 0.32+ closes a menu on any click inside it.** Top-level menus now use `CloseOnClickOutside`, as 0.31 behaved.
+- **Single-pass egui kept** behind `#[allow(deprecated)]`: multi-pass needs a schedule per window. Follow-up when bevy_egui drops single-pass.
+- **Test-tool artefacts, not bugs:** an instant synthetic click puts press and release in one frame, so `boop` sees the drag left from moving the cursor; hold the button briefly. Text sent as Unicode characters (as dictation may send it) never reaches egui fields, in 0.34 as in 0.38 — revisit in stage 2.
+- Saved layouts keep working: egui_dock 0.18's tuple node variants serialise like 0.16's struct variants.
+
+- [ ] Stage 2 — `feature/a11y-tree`: AccessKit on; names for glyph-only buttons and painted rows; unique sayable names (test)
+- [ ] Stage 3 — `feature/a11y-3d-keys`: focusable 3D view (orbit/pan/zoom/reset keys), keyboard boop, add part without dragging
+- [ ] Stage 4 — `feature/a11y-announce`: live status line, sound captions, droid status text, plot table view
+- [ ] Stage 5 — `feature/a11y-visual`: WCAG contrast test, follow Windows high contrast / animations / text size, focus everywhere
+- [ ] Stage 6 — README Accessibility section; Narrator and Voice Access checks against the issue's "Done when"
+
 # Simulator: unit tests in CI, servo-part limits in the app — #88
 
 Branch: `feature/sim-tests-ci` off `Documentation`. The user approved the one `.github/workflows/simulator.yml` edit. Windows CI job chosen over Wine or Linux host tests: no image change, real Windows, same DLLs as the app.
