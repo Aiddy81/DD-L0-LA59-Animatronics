@@ -99,7 +99,7 @@ The three part calls never raise. A name that isn't in `parts.toml`, a part of t
 [sim] simhw.set_pixels("ring"): no part has this name in parts.toml; ignored
 ```
 
-`parts.toml` is read again on every restart, so a part added to it is there for the next run.
+`parts.toml` is read again on every restart, so a part added to it is there for the next run. A part placed with the mouse in the **Parts** panel (see the README's [Placing parts with the mouse](../../README.md#placing-parts-with-the-mouse)) is there at once, and a shim can drive it straight away.
 
 For waits, use `time.sleep()` and `time.monotonic()` as the firmware does. Inside the simulator they are already the virtual clock, so they follow Speed and Pause.
 
@@ -285,7 +285,7 @@ while True:
         time.sleep(0.1)
 ```
 
-**1. Add the parts.** Copy `simulator/parts.example.toml` to `simulator/parts.toml` (or start an empty one) and add a `pixels` ring and a `button`. Neither has a `pca` or `pin`, so they are left to shims:
+**1. Add the parts.** The quickest way is the **Parts** panel: drag `pixels` and `button` onto the droid, then in the settings rename them `band_pixels` and `touch_pad`, set the pixels' layout to *ring* and count to 12, and leave *Source* on *Shim only*. The panel writes `simulator/parts.toml` for you. (The entries below centre the ring inside the droid so it circles the gear band; type that into *Position* to match.) Or copy `simulator/parts.example.toml` to `simulator/parts.toml` (or start an empty one) and add the two entries by hand. Neither has a `pca` or `pin`, so they are left to shims:
 
 ```toml
 # simulator/parts.toml
@@ -443,7 +443,7 @@ Most new hardware needs no Rust. The simulator has four general part kinds, list
 | `servo_part` | a flap, tail or anything else a servo turns about a hinge | a PCA9685 channel, a pin, or `simhw.set_part` |
 | `button` | a button, switch or touch pad (an input) | the mouse; read with `digitalio` (`pin = ...`) or `simhw.part_input` |
 
-So a shim for new hardware is usually a parts entry plus the calls in [step 4](#4-talking-to-the-simulator-simhw), as in [Example D](#example-d-a-neopixel-ring-and-a-touch-pad-with-no-rust-neopixel-touchio).
+So a shim for new hardware is usually a parts entry (dragged on from the **Parts** panel, or written by hand) plus the calls in [step 4](#4-talking-to-the-simulator-simhw), as in [Example D](#example-d-a-neopixel-ring-and-a-touch-pad-with-no-rust-neopixel-touchio).
 
 Only a new **kind** of output, one that none of these four can show (a display, for example), needs the simulator itself changing:
 

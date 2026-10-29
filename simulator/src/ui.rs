@@ -25,6 +25,7 @@ use crate::hw::{hw, AudioCmd, LogKind, LogLine, MarkerKind, PartValue, TaskState
 use crate::layout::{self, DetachedSave, Layout};
 use crate::overlay::{Overlay, Overlays};
 use crate::palette;
+use crate::part_edit::{PartCmd, PartEdit};
 use crate::parts::Parts;
 use crate::prefs::{Prefs, MAX_WINDOW, MIN_WINDOW};
 use crate::pyhost::{PyHost, ScenarioRun};
@@ -219,6 +220,8 @@ enum Cmd {
     /// Move keyboard focus to the next or previous dock tab (F6).
     NextPanel,
     PrevPanel,
+    /// Something for the Parts panel: undo, redo, delete, save, edit mode.
+    Parts(PartCmd),
 }
 
 /// One line of the shortcut table. The Shortcuts window, the key handling,
@@ -328,6 +331,45 @@ const SHORTCUTS: &[Shortcut] = &[
         Cmd::Idle,
     ),
     action("Run", "Deploy to CIRCUITPY", Cmd::Deploy),
+    // Before the plain-letter keys below, so Ctrl+S is never also S (shake).
+    bound(
+        "Parts",
+        "Ctrl+Z",
+        "Undo the last part change",
+        &[(CTRL, egui::Key::Z)],
+        Cmd::Parts(PartCmd::Undo),
+    ),
+    bound(
+        "Parts",
+        "Ctrl+Y",
+        "Redo a part change",
+        &[(CTRL, egui::Key::Y)],
+        Cmd::Parts(PartCmd::Redo),
+    ),
+    bound(
+        "Parts",
+        "Ctrl+S",
+        "Save the parts to parts.toml",
+        &[(CTRL, egui::Key::S)],
+        Cmd::Parts(PartCmd::Save),
+    ),
+    bound(
+        "Parts",
+        "Del",
+        "Delete the selected part",
+        &[(NO_MODS, egui::Key::Delete)],
+        Cmd::Parts(PartCmd::Delete),
+    ),
+    action(
+        "Parts",
+        "Edit parts: click selects, drag slides, no boops",
+        Cmd::Parts(PartCmd::ToggleEdit),
+    ),
+    info(
+        "Parts",
+        "Drag a kind from the Parts panel",
+        "Place a part on the droid",
+    ),
     bound(
         "Motion",
         "N",
@@ -398,6 +440,7 @@ const SHORTCUTS: &[Shortcut] = &[
     action("Panel", "", Cmd::TogglePane(Pane::Shortcuts)),
     action("Panel", "", Cmd::TogglePane(Pane::Behaviours)),
     action("Panel", "", Cmd::TogglePane(Pane::Scenarios)),
+    action("Panel", "", Cmd::TogglePane(Pane::Parts)),
     action("Panel", "Float the focused panel", Cmd::FloatPanel),
     action(
         "Panel",
@@ -791,6 +834,7 @@ type SavedState<'w> = (
     Res<'w, AudioMix>,
     Res<'w, ActiveTheme>,
     Res<'w, Overlays>,
+    Res<'w, PartEdit>,
 );
 
 /// Writes the preferences when they change (checked once a second, so a drag
@@ -799,7 +843,7 @@ type SavedState<'w> = (
 /// the AppExit event is still readable.
 fn save_prefs(
     ui: Res<UiState>,
-    (model, room, mix, theme, overlays): SavedState,
+    (model, room, mix, theme, overlays, part_edit): SavedState,
     (windows, detached, dock): WindowState,
     mut saved: ResMut<Prefs>,
     paths: Res<crate::Paths>,
@@ -857,6 +901,7 @@ fn save_prefs(
         board_speed,
         servo_speed,
         auto_reload: ui.auto_reload,
+        parts_autosave: part_edit.autosave,
         overlay_wings: overlays.get(Overlay::Wings),
         overlay_eyes: overlays.get(Overlay::Eyes),
         overlay_led: overlays.get(Overlay::Led),
@@ -1069,6 +1114,7 @@ fn hot_reload(
     mut cfg: ResMut<SimConfig>,
     paths: Res<crate::Paths>,
     mut toasts: ResMut<Toasts>,
+    part_edit: Res<PartEdit>,
 ) {
     if ui.last_check.elapsed().as_millis() < 500 {
         return;
@@ -1087,7 +1133,8 @@ fn hot_reload(
         Some(("firmware", "Firmware"))
     } else if shims != ui.shims_mtime {
         Some(("shims", "Shims"))
-    } else if parts != ui.parts_mtime {
+    } else if parts != ui.parts_mtime && parts != part_edit.written {
+        // (Not when the change is the Parts panel saving it.)
         Some(("parts", "Parts"))
     } else {
         None
@@ -1145,6 +1192,7 @@ struct Captures<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<Detached>>,
     prefs: ResMut<'w, Prefs>,
     commands: Commands<'w, 's>,
+    part_edit: ResMut<'w, PartEdit>,
 }
 
 impl Captures<'_, '_> {
@@ -1800,6 +1848,7 @@ fn panels(
         audio: &mut audio,
         cfg: &cfg,
         parts: &parts,
+        edit: &mut captures.part_edit,
         paths: &captures.paths,
         palette,
     };
@@ -1897,6 +1946,7 @@ fn panels(
             theme: theme.reborrow(),
             detached: &detached,
             float_rect,
+            parts: &mut *cx.edit,
         };
         palette_step(&mut cmd_cx, false, &mut cmds, palette);
         dispatch(cmds, &mut cmd_cx, Scope::Main);
@@ -2021,6 +2071,7 @@ fn panels(
             theme: theme.reborrow(),
             detached: &detached,
             float_rect,
+            parts: &mut *cx.edit,
         };
         palette_step(&mut cmd_cx, true, &mut wcmds, palette);
         let scope = Scope::Window {
@@ -2075,6 +2126,7 @@ struct CmdCx<'a, 'w, 's> {
     detached: &'a [(Entity, Pane)],
     /// Where a panel floated from the palette or a key opens.
     float_rect: egui::Rect,
+    parts: &'a mut PartEdit,
 }
 
 /// Which window a command came from. Focus mode, the dock and the UI scale
@@ -2192,6 +2244,7 @@ impl CmdCx<'_, '_, '_> {
             }
             Cmd::LogMode => toggle_log_mode(&self.paths.fs),
             Cmd::AutoReload => self.ui.auto_reload = !self.ui.auto_reload,
+            Cmd::Parts(cmd) => self.parts.push(cmd),
             Cmd::Overlay(overlay) => self.overlays.toggle(overlay),
             Cmd::Animations => {
                 let on = !self.theme.animations();
@@ -2328,6 +2381,7 @@ fn cmd_checked(cmd: Cmd, cx: &CmdCx, options: (bool, bool, bool)) -> Option<bool
         Cmd::BoardSpeed => options.1,
         Cmd::ServoSpeed => options.2,
         Cmd::AutoReload => cx.ui.auto_reload,
+        Cmd::Parts(PartCmd::ToggleEdit) => cx.parts.editing,
         Cmd::Focus => cx.dock.focus.is_some(),
         Cmd::TogglePane(pane) => pane_shown(cx.dock, cx.detached, pane),
         _ => return None,
@@ -2398,6 +2452,7 @@ struct PaneCx<'a> {
     audio: &'a mut AudioUi<'a>,
     cfg: &'a SimConfig,
     parts: &'a Parts,
+    edit: &'a mut PartEdit,
     paths: &'a crate::Paths,
     palette: &'a Palette,
 }
@@ -2438,6 +2493,7 @@ fn draw_pane(ui: &mut egui::Ui, pane: Pane, cx: &mut PaneCx) {
         Pane::Log => log_panel(ui, cx.ui, cx.cfg, paths, cx.palette),
         Pane::Shortcuts => shortcuts_window(ui),
         Pane::Behaviours => behaviours_panel(ui),
+        Pane::Parts => crate::part_edit::panel(ui, cx.edit, cx.palette),
         Pane::Scenarios => {
             if cx.ui.scenarios.is_empty() {
                 ui.weak("No scenarios in simulator/scenarios/");

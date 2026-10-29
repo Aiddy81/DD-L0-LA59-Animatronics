@@ -98,7 +98,7 @@ impl Plugin for OverlayPlugin {
 /// `Camera::world_to_viewport` gives logical pixels from the window's corner
 /// (Bevy 0.16 adds the viewport's offset itself); egui wants points. A point
 /// is `ppp` physical pixels and a logical pixel is `window_scale` of them.
-fn to_egui(logical: Vec2, window_scale: f32, ppp: f32) -> egui::Pos2 {
+pub(crate) fn to_egui(logical: Vec2, window_scale: f32, ppp: f32) -> egui::Pos2 {
     let k = window_scale / ppp;
     egui::pos2(logical.x * k, logical.y * k)
 }

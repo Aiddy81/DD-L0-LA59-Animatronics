@@ -1,3 +1,23 @@
+# Simulator: drag-and-drop part placement — stage 4 of #65
+
+Branch: `feature/simulator-parts-stage4`, stacked on `feature/simulator-parts-stage3` (PR #90, on #89 and #87; none merged). Confirmed with the user: slide-on-surface plus fields (no 3D gizmos), an auto-save toggle (remembered) plus Save / Ctrl+S, and an "Edit parts" toggle that turns clicks into select/slide with no boops. One new direct crate, `toml_edit =0.22.27`, already in Cargo.lock through `toml`.
+
+- [x] `part_edit.rs`: working list with stable ids, undo/redo (50 steps, one per drag or field edit), drop from the panel via `MeshRayCast` (anchor = the wing if the hit is under one, else `body`; +Y along the surface normal), slide a selected part, selection ring and drop preview drawn with egui
+- [x] Parts panel: kinds as drag sources, list, settings (name kept unique, source, size, colour, full_duty, pixels, servo shape/hinge/limits, position, rotation, nudges), Delete, Undo/Redo, Save, Auto-save
+- [x] Saving with `toml_edit`: only changed keys and entries touched, comments/order/unloaded entries kept, a key back at its default removed; temp file then rename; invalid TOML left alone with a warning; no restart on the app's own write
+- [x] `parts.rs`: `Part(name)`, press observer selects in edit mode and stops propagation; button parts don't press in edit mode; `PartsFileText` resource replaces the loader's local; `part_kinds` republished on live edits
+- [x] `scene.rs`: boop off in edit mode; orbit not grabbed while a part slides. `dock.rs`/`layout.rs`: `Pane::Parts` (default layout with State/PCA9685/Board; Debug); old layouts load. `ui.rs`: `Cmd::Parts`, Ctrl+Z / Ctrl+Y / Ctrl+S / Del, palette toggle, prefs `parts_autosave`
+- [x] 12 new unit tests (unique names, round trip, comments/order/unknown entries kept, rename and source change in place, invalid TOML, temp+rename, undo/redo, delete+undo, undo cap, surface rotation, short numbers, layouts without the Parts pane)
+- [x] README "Placing parts with the mouse", panels and keys; `custom-shims.md` notes
+- [x] Docker `CHECK=1`, 7 scenarios, 108 unit tests from `dist\`
+- [x] Running app, Lola and Primitive: drop lands at the pointer; slide; settings live; no boops in edit mode; orbit from background and from the droid; delete + Ctrl+Z; auto-save off shows *unsaved*, Ctrl+S writes; restart reloads `parts.toml`; a part dropped on a wing rides it through the trench run
+- [ ] Commit, push, PR (stacked on #90)
+
+## Review
+- **The colour button drifted the value.** egui's `color_edit_button_rgb` goes through HSV every frame, so `0.2` became `0.20000029` and each frame was a change. Now only a real pick is applied, rounded to 3 places.
+- **Lola's big white panels aren't the wings.** Drops there anchor to `body`, correctly; the wings are the two rear panels. A part placed on one model may float or sink on the other, since both share one file (documented).
+- **Relative `mouse_event` moves are accelerated** by Windows, so long drags in capture scripts overshoot; use `SetCursorPos` to the target, then a small relative nudge.
+
 # Simulator: simhw part calls — stage 3 of #65
 
 Branch: `feature/simulator-parts-stage3`, stacked on `feature/simulator-parts-stage2` (PR #89, on #87; neither merged). Stage 3 only: no drag and drop (stage 4). No new crates.

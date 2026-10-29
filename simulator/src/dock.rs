@@ -32,10 +32,11 @@ pub enum Pane {
     Shortcuts,
     Behaviours,
     Scenarios,
+    Parts,
 }
 
 impl Pane {
-    pub const ALL: [Pane; 12] = [
+    pub const ALL: [Pane; 13] = [
         Pane::Viewport,
         Pane::Motion,
         Pane::State,
@@ -48,6 +49,7 @@ impl Pane {
         Pane::Shortcuts,
         Pane::Behaviours,
         Pane::Scenarios,
+        Pane::Parts,
     ];
 
     pub fn title(self) -> &'static str {
@@ -64,6 +66,7 @@ impl Pane {
             Pane::Shortcuts => "Shortcuts",
             Pane::Behaviours => "Behaviours",
             Pane::Scenarios => "Scenarios",
+            Pane::Parts => "Parts",
         }
     }
 }
@@ -405,7 +408,11 @@ pub fn default_layout() -> DockState<Pane> {
             Pane::Settings,
         ],
     );
-    tree.split_below(right, 0.5, vec![Pane::State, Pane::Pca, Pane::Board]);
+    tree.split_below(
+        right,
+        0.5,
+        vec![Pane::State, Pane::Pca, Pane::Board, Pane::Parts],
+    );
     tree.split_below(view, 0.78, vec![Pane::Log, Pane::Plot]);
     prepare(&mut state);
     state

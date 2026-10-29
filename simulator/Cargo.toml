@@ -39,6 +39,8 @@ egui_dock = { version = "=0.16.0", features = ["serde"] }
 pyo3 ={ version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+# Rewrites parts.toml in place, keeping its comments and order (0.22 is the one toml 0.8 already uses).
+toml_edit = "=0.22.27"
 
 # Volume-label lookup for the one-click deploy, the OS light/dark setting and the
 # pointer position for tearing a panel off into its own window. 0.61.2 is already in the tree via winit.
