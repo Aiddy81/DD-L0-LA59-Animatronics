@@ -17,7 +17,25 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
 - **Test-tool artefacts, not bugs:** an instant synthetic click puts press and release in one frame, so `boop` sees the drag left from moving the cursor; hold the button briefly. Text sent as Unicode characters (as dictation may send it) never reaches egui fields, in 0.34 as in 0.38 — revisit in stage 2.
 - Saved layouts keep working: egui_dock 0.18's tuple node variants serialise like 0.16's struct variants.
 
-- [ ] Stage 2 — `feature/a11y-tree`: AccessKit on; names for glyph-only buttons and painted rows; unique sayable names (test)
+- [ ] **Stage 2 — `feature/a11y-tree`** (stacked on #97): AccessKit on; names for glyph-only buttons and painted rows; unique sayable names (test)
+  - [x] `Cargo.toml`: bevy_egui `accesskit` feature; `cargo tree -i accesskit` shows one 0.21.1 (shared by bevy_winit, bevy_a11y and egui)
+  - [x] `a11y.rs`: forward AccessKit actions (Narrator activate, Voice Access click) to egui; text from `VK_PACKET` key events (dictation) into egui; `spoken` / `tidy` / `name` / `label` / `region` / `tab` helpers
+  - [x] Names: toolbar emoji buttons without the emoji (`tip` and `menu_button` tidy every name); ⌨ ⚙ ⬆ when crowded; detached `+` / `−` / scale %; ✖ delete layout; ⟲/⟳ 15° and X±/Z±/In/Out; palette rows (list option, selected, ticked, keys) and search box; eye swatch value
+  - [x] Found by auditing the live tree: dock tabs and their close buttons (egui_dock paints them unnamed), speed / UI scale / volume sliders, theme / scenario / plot window / Parts drop-downs, every Parts field, Settings fields, log search, plots, Plot series toggles ("main eye R", not three "R"s); duplicate names split ("Reset view" / "Reset plot", "Save parts" / "Save log", "Reset KEY" per setting)
+  - [x] Regions: toolbar, status bar, every pane (docked or detached, from `draw_pane`), 3D view and its control bar, Parts settings rows
+  - [x] Unit tests: AccessKit tree of the Run / Speed / Options groups and the palette rows has non-empty, glyph-free names, unique per group; crowded Deploy is "Deploy"; `spoken` cases
+  - [x] `build.ps1 -Test` (113 passed, 7 scenarios), `cargo fmt --check`, `clippy --release --locked -D warnings`
+  - [x] Live tree read with Windows' UI Automation (what Narrator and Voice Access use): names above; Invoke on Run, Nudge (boop), Pause, tabs, Undo, detached Larger UI / Dock back all act; Toggle on checkboxes; Tab moves focus to named controls; Narrator follows focus onto tabs; no crash with a client attached through detach and redock
+  - [ ] Voice Access by voice ("click Restart", "click Nudge"): not spoken here, needs the user; the Invoke calls it makes were checked
+  - [x] No behaviour change: orbit, boop by click, View menu stays open while ticking, palette, detach/redock, parts drag and drop + undo
+  - [ ] Commit, push, PR into `feature/bevy-0.17`
+
+### Review (stage 2)
+- **bevy_egui never passes AccessKit actions to egui.** Bevy turns them into `ActionRequest` messages that nobody read, so Narrator's activate and Voice Access's "click" would have done nothing. `a11y::forward_actions` sends each to every egui context (the message doesn't name a window; egui acts only where a widget has the target id).
+- **Dictated text root cause** (winit 0.30.13, `platform_impl/windows/keyboard.rs`): text sent as Unicode characters arrives as `VK_PACKET`, which winit reports as `Key::Unidentified` with the character in `text`; bevy_egui only turns `Key::Character` into text. `a11y::forward_packet_text` handles exactly that case, so real keys still type once (checked).
+- AccessKit is enabled per context when it is added, and only if its window already has an adapter. Windows are created in `about_to_wait` before the next update, so detached windows qualify; confirmed by reading a detached window's tree.
+- **Left for later:** a slider's number box has no name (egui names it from the slider's own text, which would move the visible "Speed" / "UI scale" / volume label); egui_dock's collapse and close-all buttons and its splitters are unnamed (ids not derivable; needs an egui_dock change); "Shortcuts" is both a toolbar button and a tab name while that tab is open.
+- Tree audit scripts (PowerShell + `UIAutomationClient`, built into Windows) list unnamed actionable elements and duplicate names; worth keeping for stage 6's checks.
 - [ ] Stage 3 — `feature/a11y-3d-keys`: focusable 3D view (orbit/pan/zoom/reset keys), keyboard boop, add part without dragging
 - [ ] Stage 4 — `feature/a11y-announce`: live status line, sound captions, droid status text, plot table view
 - [ ] Stage 5 — `feature/a11y-visual`: WCAG contrast test, follow Windows high contrast / animations / text size, focus everywhere

@@ -222,6 +222,12 @@ const HIGH_CONTRAST: Palette = Palette {
     stroke_width: 2.0,
 };
 
+/// A palette for unit tests that draw UI.
+#[cfg(test)]
+pub fn test_palette() -> &'static Palette {
+    &DARK
+}
+
 impl ResolvedTheme {
     fn palette(self) -> &'static Palette {
         match self {

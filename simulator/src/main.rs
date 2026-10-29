@@ -4,6 +4,7 @@
 // waits for its exit code.
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
+mod a11y;
 mod audio;
 mod capture;
 mod config;
@@ -197,6 +198,7 @@ fn main() {
         .insert_resource(overlay::Overlays::from_prefs(&prefs))
         .insert_resource(prefs)
         .add_plugins((
+            a11y::A11yPlugin,
             theme::ThemePlugin,
             scene::ScenePlugin,
             parts::PartsPlugin,

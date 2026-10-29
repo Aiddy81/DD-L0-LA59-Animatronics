@@ -5,7 +5,7 @@
 //! The state lives in each egui context's own memory, so every window (main
 //! or detached) has an independent palette.
 
-use bevy_egui::egui::{self, Align2, Id, Key, Modifiers, Sense, Stroke, TextStyle};
+use bevy_egui::egui::{self, accesskit, Align2, Id, Key, Modifiers, Sense, Stroke, TextStyle};
 
 use crate::theme::Palette;
 
@@ -111,12 +111,37 @@ fn first_enabled(enabled: &[bool]) -> usize {
     enabled.iter().position(|e| *e).unwrap_or(0)
 }
 
+/// The row as a screen reader sees it: a list option named "Group: label",
+/// selected while highlighted, ticked for an on/off command that is on, with
+/// its keys as the description.
+fn describe_row<T>(response: &egui::Response, row: &Row<T>, selected: bool) {
+    let name = format!("{}: {}", row.group, row.label);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, row.enabled, &name)
+    });
+    response.ctx.accesskit_node_builder(response.id, |node| {
+        node.set_role(accesskit::Role::ListBoxOption);
+        node.set_selected(selected);
+        if let Some(on) = row.checked {
+            node.set_toggled(if on {
+                accesskit::Toggled::True
+            } else {
+                accesskit::Toggled::False
+            });
+        }
+        if !row.keys.is_empty() {
+            node.set_description(row.keys);
+        }
+    });
+}
+
 /// One full-width line: `Group: label` on the left, the keys on the right.
 fn row_ui<T>(ui: &mut egui::Ui, row: &Row<T>, selected: bool) -> egui::Response {
     let height = ui.text_style_height(&TextStyle::Body) + 2.0 * ui.spacing().button_padding.y;
     let size = egui::vec2(ui.available_width(), height);
     ui.add_enabled_ui(row.enabled, |ui| {
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        describe_row(&response, row, selected);
         if ui.is_rect_visible(rect) {
             let visuals = ui.style().interact_selectable(&response, selected);
             if selected || response.hovered() {
@@ -218,6 +243,8 @@ pub fn show<T: Clone>(ctx: &egui::Context, rows: &[Row<T>], palette: &Palette) -
                     .hint_text("Type a command\u{2026}")
                     .desired_width(f32::INFINITY),
             );
+            ui.ctx()
+                .accesskit_node_builder(edit.id, |node| node.set_label("Search commands"));
             // Kept while open, so a click on the scroll bar doesn't strand typing.
             if st.just_opened || !edit.has_focus() {
                 edit.request_focus();
@@ -239,9 +266,20 @@ pub fn show<T: Clone>(ctx: &egui::Context, rows: &[Row<T>], palette: &Palette) -
                 .min_scrolled_height(LIST_MAX_HEIGHT)
                 .auto_shrink([false, true])
                 .show(ui, |list| {
+                    list.ctx().accesskit_node_builder(list.unique_id(), |node| {
+                        node.set_role(accesskit::Role::ListBox);
+                        node.set_label("Commands");
+                    });
                     for (pos, &i) in visible.iter().enumerate() {
                         let selected = pos == st.selected;
                         let response = row_ui(list, &rows[i], selected);
+                        if selected {
+                            // Focus stays in the search box; this tells a
+                            // screen reader which row the arrows are on.
+                            list.ctx().accesskit_node_builder(edit.id, |node| {
+                                node.set_active_descendant(accesskit::NodeId(response.id.value()));
+                            });
+                        }
                         if selected && moved {
                             response.scroll_to_me(None);
                         }

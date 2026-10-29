@@ -794,6 +794,10 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
         tab.title().into()
     }
 
+    fn on_tab_button(&mut self, tab: &mut Pane, response: &egui::Response) {
+        crate::a11y::tab(response, tab.title());
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Pane) {
         if *tab == Pane::Viewport {
             let rect = ui.max_rect();
@@ -810,7 +814,8 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
             // Its own layer, so the hover test above (and the boop and orbit
             // that depend on it) is false over the bar and its open menus.
             let bar = &mut *self.bar;
-            egui::Area::new(egui::Id::new("viewport_bar"))
+            crate::a11y::region(ui, Pane::Viewport.title());
+            let area = egui::Area::new(egui::Id::new("viewport_bar"))
                 .order(egui::Order::Middle)
                 .pivot(egui::Align2::RIGHT_TOP)
                 .fixed_pos(rect.right_top() + egui::vec2(-8.0, 8.0))
@@ -821,6 +826,7 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
                     bar_ui.set_max_width((rect.width() - 16.0).max(0.0));
                     bar(bar_ui);
                 });
+            crate::a11y::label(area.response, "3D view controls");
         } else {
             let opacity = self.fades.opacity(*tab, self.now);
             if opacity < 1.0 {
