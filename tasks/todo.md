@@ -87,7 +87,7 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
   - [x] Focus ring seen in all three themes on the 3D view (all four sides), dock tabs, toolbar buttons; in Dark also the palette search box (rows are marked by the selection fill, 3.11:1), Droid status rows, plot table rows and a detached Plot window
   - [x] No behaviour change: click boop (`[sim] boop 0.7 g from +Z`, noseBoops), orbit drag, View menu, palette, detach + Dock back, Parts add (auto-saved) + Undo
   - [ ] Not checked live: Windows text size (no change requested of the user; mapping unit-tested), a saved Light/Dark pick staying put while Windows flips (unit-tested)
-  - [ ] Commit, push, PR into `feature/a11y-announce`
+  - [x] Commit, push, PR into `feature/a11y-announce` (#102)
 
 ### Review (stage 5)
 - **winit only sends `WindowThemeChanged` when its own light/dark verdict flips** (winit 0.30.13 `event_loop.rs` `WM_SETTINGCHANGE`; its verdict is `apps_dark && !high_contrast`). A contrast theme turned on while Windows is in light mode, Animation effects and text size raise no event, so the settings are also re-read every 2 s (three `SystemParametersInfoW` calls and two registry reads); `ActiveTheme` is written only when something changed.
