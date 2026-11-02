@@ -26,6 +26,10 @@ bevy = { version = "=0.17.3", default-features = false, features = [
     "bevy_winit",
     "multi_threaded",
     "png",
+    # Since 0.17 Bevy's own types (Transform, Mesh3d, ...) are put in the type
+    # registry by this feature, not by their plugins. Without it, spawning a
+    # glTF scene panics with "unregistered type ...Transform".
+    "reflect_auto_register",
     "tonemapping_luts",
     "ktx2",
     "zstd_rust",
