@@ -103,6 +103,13 @@ pub(crate) fn to_egui(logical: Vec2, window_scale: f32, ppp: f32) -> egui::Pos2 
     egui::pos2(logical.x * k, logical.y * k)
 }
 
+/// The inverse of `to_egui`: an egui point as the window's logical pixels,
+/// which `Camera::viewport_to_world` takes.
+pub(crate) fn from_egui(pos: egui::Pos2, window_scale: f32, ppp: f32) -> Vec2 {
+    let k = ppp / window_scale;
+    Vec2::new(pos.x * k, pos.y * k)
+}
+
 /// World units of arrow per g, and the most g it is drawn for.
 const ARROW_PER_G: f32 = 0.6;
 const ARROW_MAX_G: f32 = 3.0;
@@ -366,6 +373,19 @@ fn side_away_from(anchor: egui::Pos2, centre: Option<egui::Pos2>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn points_go_back_to_logical_pixels() {
+        // A 1.5x window with the UI at 125%: ppp = 1.875.
+        for p in [egui::pos2(0.0, 0.0), egui::pos2(412.5, 230.0)] {
+            let back = to_egui(from_egui(p, 1.5, 1.875), 1.5, 1.875);
+            assert!((back - p).length() < 1e-4, "{p:?} -> {back:?}");
+        }
+        assert_eq!(
+            from_egui(egui::pos2(100.0, 50.0), 1.5, 1.875),
+            Vec2::new(125.0, 62.5)
+        );
+    }
 
     #[test]
     fn viewport_pixels_become_points() {

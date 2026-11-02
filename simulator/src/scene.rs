@@ -166,6 +166,43 @@ struct Tween {
 
 /// How long a camera preset takes to glide into place.
 const TWEEN_SECS: f32 = 0.45;
+/// How long one key step glides, short enough that held keys stay smooth.
+const KEY_TWEEN_SECS: f32 = 0.12;
+
+/// The orbit camera's limits, for the mouse and the keys alike: from just
+/// below level to nearly straight down, and from close up to far out.
+const PITCH_MIN: f32 = -0.2;
+const PITCH_MAX: f32 = 1.45;
+const DIST_MIN: f32 = 1.5;
+const DIST_MAX: f32 = 20.0;
+
+/// One arrow press turns the camera this far (5 degrees).
+const KEY_TURN: f32 = 0.087;
+/// One Shift+arrow press pans this fraction of the camera's distance.
+const KEY_PAN: f32 = 0.05;
+/// One + press brings the camera this much closer; − undoes it.
+const KEY_ZOOM: f32 = 0.9;
+
+/// Keys pressed this frame while the 3D view had keyboard focus, as counts
+/// (key repeat can bring several in one frame). Filled by the dock, read by
+/// `orbit_camera`.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub(crate) struct CamKeys {
+    /// Right / up presses less left / down: moves the camera that way round the droid.
+    pub orbit: Vec2,
+    /// The same with Shift: slides the view.
+    pub pan: Vec2,
+    /// + presses less − presses.
+    pub zoom: i32,
+    /// Home: back to the starting view.
+    pub home: bool,
+}
+
+impl CamKeys {
+    pub fn any_step(&self) -> bool {
+        self.orbit != Vec2::ZERO || self.pan != Vec2::ZERO || self.zoom != 0
+    }
+}
 
 #[derive(Component)]
 pub struct OrbitCam {
@@ -192,6 +229,26 @@ impl Pose {
         distance: 5.2,
         focus: HOME_FOCUS,
     };
+}
+
+/// The camera's rotation for a pose.
+fn pose_rotation(p: &Pose) -> Quat {
+    Quat::from_euler(EulerRot::YXZ, p.yaw, -p.pitch, 0.0)
+}
+
+/// `pose` moved by the key presses in `keys` (not Home, which is a preset),
+/// within the same limits as the mouse. The arrows move the camera itself:
+/// right swings it round to its right, up raises it to look down more, and
+/// with Shift they slide it the same ways.
+fn key_step(pose: Pose, keys: CamKeys) -> Pose {
+    let mut p = pose;
+    p.yaw += keys.orbit.x * KEY_TURN;
+    p.pitch = (p.pitch + keys.orbit.y * KEY_TURN).clamp(PITCH_MIN, PITCH_MAX);
+    let rot = pose_rotation(&pose);
+    let pan = (rot * Vec3::X * keys.pan.x + rot * Vec3::Y * keys.pan.y) * pose.distance * KEY_PAN;
+    p.focus += pan;
+    p.distance = (p.distance * KEY_ZOOM.powi(keys.zoom)).clamp(DIST_MIN, DIST_MAX);
+    p
 }
 
 fn smoothstep(t: f32) -> f32 {
@@ -437,12 +494,7 @@ fn boop(
         return;
     }
     let dir = sensor_dir(click.hit.normal).unwrap_or_else(|| crate::hw::hw().nudge_dir);
-    let delta = boop_strength(click.duration.as_secs_f32());
-    crate::ui::boop(dir, delta);
-    crate::hw::hw().push_line(format!(
-        "[sim] boop {delta:.1} g from {}",
-        crate::ui::nearest_direction(dir)
-    ));
+    crate::ui::boop_logged(dir, boop_strength(click.duration.as_secs_f32()));
 }
 
 /// glTF models: attach behaviour to nodes by name once the scene spawns.
@@ -716,7 +768,11 @@ pub(crate) fn orbit_camera(
         *grabbed = false;
     }
     drag.0 += motion.delta.length();
-    let preset = controls.camera.take();
+    let keys = viewport.keys;
+    let preset = controls
+        .camera
+        .take()
+        .or(keys.home.then_some(CameraView::Reset));
     // Aim at the main eye's current position, so it works for either model.
     let eye_focus = glows
         .iter()
@@ -752,6 +808,22 @@ pub(crate) fn orbit_camera(
         if dragging || scrolling {
             cam.tween = None;
         }
+        if keys.any_step() {
+            // From where a running glide is headed, so quick presses add up.
+            let base = cam.tween.map_or(cam.pose, |t| t.to);
+            let target = key_step(base, keys);
+            cam.tween = if env.theme.animations() {
+                Some(Tween {
+                    from: cam.pose,
+                    to: target,
+                    t0: now,
+                    dur: KEY_TWEEN_SECS,
+                })
+            } else {
+                cam.pose = target;
+                None
+            };
+        }
         if let Some(tween) = cam.tween {
             let t = ((now - tween.t0) as f32 / tween.dur).clamp(0.0, 1.0);
             cam.pose = lerp_pose(tween.from, tween.to, smoothstep(t));
@@ -762,7 +834,8 @@ pub(crate) fn orbit_camera(
         if *grabbed {
             if buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right) {
                 cam.pose.yaw -= motion.delta.x * 0.006;
-                cam.pose.pitch = (cam.pose.pitch + motion.delta.y * 0.006).clamp(-0.2, 1.45);
+                cam.pose.pitch =
+                    (cam.pose.pitch + motion.delta.y * 0.006).clamp(PITCH_MIN, PITCH_MAX);
             }
             if buttons.pressed(MouseButton::Middle) {
                 let right = transform.right();
@@ -772,10 +845,10 @@ pub(crate) fn orbit_camera(
             }
         }
         if viewport.hovered {
-            cam.pose.distance = (cam.pose.distance * (1.0 - lines * 0.1)).clamp(1.5, 20.0);
+            cam.pose.distance = (cam.pose.distance * (1.0 - lines * 0.1)).clamp(DIST_MIN, DIST_MAX);
         }
         let p = cam.pose;
-        let rot = Quat::from_euler(EulerRot::YXZ, p.yaw, -p.pitch, 0.0);
+        let rot = pose_rotation(&p);
         transform.translation = p.focus + rot * Vec3::new(0.0, 0.0, p.distance);
         transform.look_at(p.focus, Vec3::Y);
     }
@@ -791,8 +864,7 @@ fn view_pose(view: CameraView, eye_focus: Vec3) -> Pose {
     match view {
         CameraView::Front => preset(0.0, 0.15),
         CameraView::Side => preset(std::f32::consts::FRAC_PI_2, 0.15),
-        // 1.45 is the pitch clamp used when orbiting.
-        CameraView::Top => preset(0.0, 1.45),
+        CameraView::Top => preset(0.0, PITCH_MAX),
         CameraView::Eyes => Pose {
             yaw: 0.0,
             pitch: 0.6,
@@ -872,6 +944,80 @@ mod tests {
             distance: 3.0,
             focus: Vec3::ZERO,
         }
+    }
+
+    fn keys(orbit: (f32, f32), pan: (f32, f32), zoom: i32) -> CamKeys {
+        CamKeys {
+            orbit: Vec2::new(orbit.0, orbit.1),
+            pan: Vec2::new(pan.0, pan.1),
+            zoom,
+            home: false,
+        }
+    }
+
+    #[test]
+    fn no_keys_leave_the_pose_alone() {
+        assert_eq!(key_step(Pose::HOME, CamKeys::default()), Pose::HOME);
+        assert!(!CamKeys::default().any_step());
+        // Home alone is a preset, not a step.
+        let home = CamKeys {
+            home: true,
+            ..default()
+        };
+        assert!(!home.any_step());
+        assert_eq!(key_step(Pose::HOME, home), Pose::HOME);
+    }
+
+    #[test]
+    fn arrows_turn_by_a_fixed_step() {
+        let p = key_step(Pose::HOME, keys((2.0, -1.0), (0.0, 0.0), 0));
+        assert!((p.yaw - (Pose::HOME.yaw + 2.0 * KEY_TURN)).abs() < 1e-6);
+        assert!((p.pitch - (Pose::HOME.pitch - KEY_TURN)).abs() < 1e-6);
+        assert_eq!(
+            (p.distance, p.focus),
+            (Pose::HOME.distance, Pose::HOME.focus)
+        );
+    }
+
+    #[test]
+    fn pitch_stays_within_the_mouse_limits() {
+        let up = key_step(Pose::HOME, keys((0.0, 100.0), (0.0, 0.0), 0));
+        assert_eq!(up.pitch, PITCH_MAX);
+        let down = key_step(Pose::HOME, keys((0.0, -100.0), (0.0, 0.0), 0));
+        assert_eq!(down.pitch, PITCH_MIN);
+    }
+
+    #[test]
+    fn zoom_steps_and_clamps() {
+        let closer = key_step(Pose::HOME, keys((0.0, 0.0), (0.0, 0.0), 1));
+        assert!((closer.distance - Pose::HOME.distance * KEY_ZOOM).abs() < 1e-5);
+        let back = key_step(closer, keys((0.0, 0.0), (0.0, 0.0), -1));
+        assert!((back.distance - Pose::HOME.distance).abs() < 1e-4);
+        assert_eq!(
+            key_step(Pose::HOME, keys((0.0, 0.0), (0.0, 0.0), 100)).distance,
+            DIST_MIN
+        );
+        assert_eq!(
+            key_step(Pose::HOME, keys((0.0, 0.0), (0.0, 0.0), -100)).distance,
+            DIST_MAX
+        );
+    }
+
+    #[test]
+    fn pan_slides_along_the_screen() {
+        // Looking straight along -Z from the front: right is +X, up is +Y.
+        let front = Pose {
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 4.0,
+            focus: Vec3::ZERO,
+        };
+        let step = 4.0 * KEY_PAN;
+        let right = key_step(front, keys((0.0, 0.0), (1.0, 0.0), 0));
+        assert!(right.focus.distance(Vec3::new(step, 0.0, 0.0)) < 1e-5);
+        let up = key_step(front, keys((0.0, 0.0), (0.0, 1.0), 0));
+        assert!(up.focus.distance(Vec3::new(0.0, step, 0.0)) < 1e-5);
+        assert_eq!((right.yaw, right.pitch, right.distance), (0.0, 0.0, 4.0));
     }
 
     #[test]

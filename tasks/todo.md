@@ -36,7 +36,25 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
 - AccessKit is enabled per context when it is added, and only if its window already has an adapter. Windows are created in `about_to_wait` before the next update, so detached windows qualify; confirmed by reading a detached window's tree.
 - **Left for later:** a slider's number box has no name (egui names it from the slider's own text, which would move the visible "Speed" / "UI scale" / volume label); egui_dock's collapse and close-all buttons and its splitters are unnamed (ids not derivable; needs an egui_dock change); "Shortcuts" is both a toolbar button and a tab name while that tab is open.
 - Tree audit scripts (PowerShell + `UIAutomationClient`, built into Windows) list unnamed actionable elements and duplicate names; worth keeping for stage 6's checks.
-- [ ] Stage 3 — `feature/a11y-3d-keys`: focusable 3D view (orbit/pan/zoom/reset keys), keyboard boop, add part without dragging
+- [ ] **Stage 3 — `feature/a11y-3d-keys`** (stacked on #98): everything the mouse does in the 3D view, from the keyboard
+  - [x] 3D view takes focus (Tab after its tab, F6), named "3D view", focus ring; arrows orbit, Shift+arrows pan, + / − zoom, Home resets; same clamps as the mouse; tween or instant per Animations; no clash with `SHORTCUTS`
+  - [x] `Cmd::Boop` (B, palette, tooltip); Motion panel strength slider 0.3–2 g beside the direction combo; same `[sim] boop … g from …` log line as a click
+  - [x] Parts panel "Add <kind>" buttons place the part where a ray through the view's centre hits the droid (same anchoring as a drop) and select it
+  - [x] Unit tests: key → pose step and clamps, strength range, view centre (8 new; 121 in all)
+  - [x] README keyboard and camera sections
+  - [x] `build.ps1 -Test`, `cargo fmt --check`, `clippy --release --locked -D warnings`; 7 scenarios pass
+  - [x] Running app, keyboard only: reach the view, orbit/pan/zoom/reset; boop with a chosen direction and strength (firmware logs it); add an LED, nudge, delete, undo. UI Automation shows focus on "3D view"; captures before and after each key; Animations off jumps, on glides; B logged `[sim] boop 1.5 g from +Z` and the firmware saw it, then +Y picked in the combo with Tab; after the Parts fix, auto-save runs and nudge / add undo separately
+  - [x] Mouse still works: orbit drag, click boop, drag and drop
+  - [x] Commit, push, PR into `feature/a11y-tree`
+
+### Review (stage 3)
+- **The 3D view is a focus-only egui widget** (`Sense::focusable_noninteractive`) over the view's rect: no click or drag sense, so the mouse still reaches the scene and `ViewportRect::hovered` (worked out by layer) is unchanged. While focused it locks the arrow keys (`set_focus_lock_filter`) so egui doesn't move focus with them; Tab and Esc still leave. Keys are read with `count_and_consume_key`, Shift+arrows before arrows (a pattern without Shift matches Shift too), and passed to `orbit_camera` in `ViewportRect::keys`. AccessKit: role Canvas (UIA shows it as Image), name "3D view", the keys as its description.
+- **Key steps glide from the running glide's target**, so held keys and quick presses add up instead of restarting from wherever the camera is mid-glide. Home goes through the same path as the Reset preset.
+- **Parts treated any focused control as typing.** `sync_parts` used `wants_keyboard_input()`, which in egui 0.33 is true whenever anything has focus (the same trap stage 1 found in `read_cmds`). With the keyboard, auto-save never ran and every change after the first merged into one undo step. It now uses `ui::text_field_focused`.
+- **Add buttons say "Add led", "Add servo_part", …**, the file's kind names, as the old drag buttons did. Clicking or pressing Enter places at the centre; dragging still carries.
+- `ui::boop_logged` writes the `[sim] boop … g from …` line for both the click boop and B, so the two can't drift apart.
+- Not changed: egui's arrow keys move focus between controls by position, so inside an open combo list Tab is the reliable way down (Down jumps to the nearest control); and the two or three unnamed tab stops before each pane's controls are egui_dock's collapse / close-all buttons already listed in stage 2.
+- `clippy --all-targets` flags `manual_range_contains` in an existing `part_edit.rs` test (from #65); the required `clippy --release --locked -D warnings` is clean. Left alone as out of scope.
 - [ ] Stage 4 — `feature/a11y-announce`: live status line, sound captions, droid status text, plot table view
 - [ ] Stage 5 — `feature/a11y-visual`: WCAG contrast test, follow Windows high contrast / animations / text size, focus everywhere
 - [ ] Stage 6 — README Accessibility section; Narrator and Voice Access checks against the issue's "Done when"
