@@ -193,9 +193,11 @@ fn main() {
             &prefs,
         ))
         .insert_resource(audio::AudioMix::new(prefs.volume, prefs.muted))
-        .insert_resource(
-            theme::ActiveTheme::new(prefs.theme, prefs.ui_scale).with_animations(prefs.animations),
-        )
+        .insert_resource(theme::ActiveTheme::new(
+            prefs.theme,
+            prefs.ui_scale,
+            prefs.animations,
+        ))
         .insert_resource(overlay::Overlays::from_prefs(&prefs))
         .insert_resource(prefs)
         .add_plugins((
