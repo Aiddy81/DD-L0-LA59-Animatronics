@@ -5,6 +5,7 @@
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod a11y;
+mod announce;
 mod audio;
 mod capture;
 mod config;

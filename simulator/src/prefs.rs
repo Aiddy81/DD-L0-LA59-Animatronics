@@ -54,6 +54,8 @@ pub struct Prefs {
     /// Plot series that are unticked, by name ("Accel x"), so adding a
     /// series later doesn't shift the others.
     pub plot_hidden: Vec<String>,
+    /// The plot shows its values as a table instead of lines.
+    pub plot_table: bool,
     // The layouts are tables, so they stay last: TOML wants plain values first.
     /// The dock layout in use; `None` is the Default layout.
     pub layout: Option<Layout>,
@@ -93,6 +95,7 @@ impl Default for Prefs {
             show_sim: true,
             plot_window_s: 20.0,
             plot_hidden: Vec::new(),
+            plot_table: false,
             layout: None,
             layouts: BTreeMap::new(),
         }

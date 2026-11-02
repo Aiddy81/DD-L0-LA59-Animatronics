@@ -16,6 +16,7 @@ use bevy_egui::EguiContexts;
 use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine};
 
 use crate::a11y;
+use crate::announce::{self, Announcer, BehaviourWatch, Priority};
 use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::{PartCfg, PartKind, PartSource, SimConfig};
@@ -735,6 +736,9 @@ pub struct UiState {
     /// The exported layout files, re-listed at most once a second while the Import menu is open.
     layout_files: Vec<(String, PathBuf)>,
     layout_files_at: Option<Instant>,
+    /// The status bar's spoken line, and the behaviour changes it says.
+    announcer: Announcer,
+    behaviour: BehaviourWatch,
 }
 
 /// What the bottom panel shows: the console log, or a file on the simulated drive.
@@ -851,6 +855,8 @@ impl UiState {
             layout_name: String::new(),
             layout_files: Vec::new(),
             layout_files_at: None,
+            announcer: Announcer::default(),
+            behaviour: BehaviourWatch::default(),
         }
     }
 }
@@ -980,6 +986,7 @@ fn save_prefs(
         show_sim: ui.show_sim,
         plot_window_s: ui.plot.window_s,
         plot_hidden: ui.plot.hidden(),
+        plot_table: ui.plot.table,
         layout: Some(dock::snapshot(&dock, state.detached.clone())),
         layouts: saved.layouts.clone(),
     };
@@ -1094,11 +1101,15 @@ fn record_history(cfg: Res<SimConfig>, mut ui: ResMut<UiState>) {
             std::mem::take(&mut s.markers),
         )
     };
-    ui.markers.extend(
-        new_markers
-            .into_iter()
-            .map(|(kind, label)| Marker { t, kind, label }),
-    );
+    let now = f64::from(t);
+    for (kind, label) in new_markers {
+        if kind == MarkerKind::Restart {
+            ui.behaviour.reset();
+        }
+        let (text, priority) = announce::marker_text(kind, &label);
+        ui.announcer.push(text, priority, now);
+        ui.markers.push_back(Marker { t, kind, label });
+    }
     while ui
         .markers
         .front()
@@ -1621,7 +1632,7 @@ fn viewport_bar(
 }
 
 /// `text` with its first letter upper-cased, for menu entries.
-fn capitalised(text: &str) -> String {
+pub(crate) fn capitalised(text: &str) -> String {
     let mut chars = text.chars();
     chars
         .next()
@@ -1752,6 +1763,9 @@ fn panels(
     if let Some((seq, msg)) = traceback {
         if ui.seen_traceback != Some(seq) {
             ui.seen_traceback = Some(seq);
+            let now = ui.started.elapsed().as_secs_f64();
+            ui.announcer
+                .push(format!("Traceback: {msg}"), Priority::Error, now);
             captures
                 .toasts
                 .push(ToastKind::Error, format!("Traceback: {msg}"), Some(seq));
@@ -1905,11 +1919,21 @@ fn panels(
         .diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed());
+    let now = ui.started.elapsed().as_secs_f64();
+    let behaviour = {
+        let s = hw();
+        current_behaviour(s.behaviour_running.as_deref(), &s.fw_state.tasks)
+    };
+    if let Some(said) = ui.behaviour.update(now, &behaviour) {
+        ui.announcer.push(said, Priority::Info, now);
+    }
+    let said = ui.announcer.tick(now).to_owned();
     let status = egui::TopBottomPanel::bottom("status")
         .resizable(false)
         .show(ctx, |bar| {
             a11y::region(bar, "Status bar");
             bar.horizontal(|row| {
+                status_line(row, &said);
                 status_bar(
                     row,
                     host.0.is_running(),
@@ -2172,7 +2196,15 @@ fn panels(
     }
 
     let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
-    deploy_window(ctx, &mut ui.deploy, fw_dir);
+    if let Some(outcome) = deploy_window(ctx, &mut ui.deploy, fw_dir) {
+        let now = ui.started.elapsed().as_secs_f64();
+        match outcome {
+            Ok(msg) => ui.announcer.push(msg, Priority::Important, now),
+            Err(e) => ui
+                .announcer
+                .push(format!("Deploy failed: {e}"), Priority::Error, now),
+        }
+    }
 
     if let Some(seq) = captures.toasts.show(ctx, palette, status_height) {
         let filter = ui.log_filter.to_lowercase();
@@ -2562,7 +2594,7 @@ fn draw_pane(ui: &mut egui::Ui, pane: Pane, cx: &mut PaneCx) {
         // Measured by the dock's viewer; the 3D scene is rendered behind egui.
         Pane::Viewport => {}
         Pane::Motion => motion_panel(ui, cx.ui),
-        Pane::State => state_panel(ui, cx.palette),
+        Pane::State => state_panel(ui, cx.cfg, cx.parts, cx.palette),
         Pane::Pca => pca_panel(ui, cx.cfg, cx.parts, cx.palette),
         Pane::Board => board_panel(ui, cx.palette),
         Pane::Audio => {
@@ -3877,6 +3909,8 @@ struct PlotState {
     following: bool,
     visible: [bool; SERIES.len()],
     show_markers: bool,
+    /// Latest / min / max as text instead of the plots.
+    table: bool,
     /// The x range the plot showed last frame.
     view_x: (f64, f64),
 }
@@ -3893,6 +3927,7 @@ impl PlotState {
             following: true,
             visible: std::array::from_fn(|i| !prefs.plot_hidden.contains(&series_name(i))),
             show_markers: !prefs.plot_hidden.iter().any(|n| n == MARKERS_NAME),
+            table: prefs.plot_table,
             view_x: (-f64::from(window_s), 0.0),
         }
     }
@@ -4022,6 +4057,9 @@ fn plot_panel(
                 None
             };
         }
+        row.toggle_value(&mut state.table, "Table").on_hover_text(
+            "Show the latest, lowest and highest value of each ticked series as text,              instead of the plots",
+        );
         let reset = row.add_enabled(!state.following, egui::Button::new("Reset"));
         if a11y::name(reset, "Reset plot")
             .on_hover_text("Go back to following the window (or double-click a plot)")
@@ -4093,6 +4131,15 @@ fn plot_panel(
     } else {
         Vec::new()
     };
+    if state.table {
+        let in_window: Vec<&Sample> = shown
+            .iter()
+            .copied()
+            .filter(|s| (x0..=end).contains(&f64::from(s.t)))
+            .collect();
+        series_table(ui, state, &in_window);
+        return;
+    }
     let buckets = (ui.available_width() as usize).max(50);
 
     let clip = f64::from(limits.clip);
@@ -4179,6 +4226,69 @@ fn plot_panel(
         state.following = true;
     }
     readout(ui, state, history, hover_t, end);
+}
+
+/// Latest, lowest and highest value of one series over `samples`, skipping
+/// samples where it has none (a wing nothing drives).
+fn series_stats(samples: &[&Sample], get: fn(&Sample) -> Option<f32>) -> Option<(f32, f32, f32)> {
+    let mut values = samples.iter().filter_map(|s| get(s));
+    let first = values.next()?;
+    Some(values.fold((first, first, first), |(_, lo, hi), v| {
+        (v, lo.min(v), hi.max(v))
+    }))
+}
+
+/// One row of the plot table: the cells, and the row as one sentence for
+/// screen readers.
+fn series_row(i: usize, stats: Option<(f32, f32, f32)>) -> ([String; 3], String) {
+    let name = series_name(i);
+    let band = SERIES[i].band;
+    match stats {
+        Some((latest, lo, hi)) => {
+            let cells = [band.format(latest), band.format(lo), band.format(hi)];
+            let said = format!(
+                "{name}: latest {}, min {}, max {}",
+                cells[0], cells[1], cells[2]
+            );
+            (cells, said)
+        }
+        None => (
+            ["-".to_owned(), "-".to_owned(), "-".to_owned()],
+            format!("{name}: no value in view"),
+        ),
+    }
+}
+
+/// The plot as text: one row per ticked series over the samples in view.
+/// Each row's name cell is a Tab stop that reads the whole row.
+fn series_table(ui: &mut egui::Ui, state: &PlotState, samples: &[&Sample]) {
+    a11y::region(ui, "Plot table");
+    egui::Grid::new("plot_table")
+        .num_columns(4)
+        .spacing([16.0, 2.0])
+        .striped(true)
+        .show(ui, |grid| {
+            for heading in ["Series", "Latest", "Min", "Max"] {
+                grid.label(egui::RichText::new(heading).strong());
+            }
+            grid.end_row();
+            for (i, def) in SERIES.iter().enumerate() {
+                if !state.visible[i] {
+                    continue;
+                }
+                let (cells, said) = series_row(i, series_stats(samples, def.get));
+                let name = grid.add(
+                    egui::Label::new(series_name(i))
+                        .selectable(false)
+                        .sense(egui::Sense::focusable_noninteractive()),
+                );
+                a11y::says(&name, &said);
+                for cell in cells {
+                    grid.label(egui::RichText::new(cell).monospace());
+                }
+                grid.end_row();
+            }
+        });
 }
 
 /// The firmware's thresholds: it compares abs(z - rest) for the nudges and
@@ -4459,7 +4569,79 @@ fn countdown(
     ui.add(egui::ProgressBar::new(fraction as f32).text(format!("{text} {left:.1} s")))
 }
 
-fn state_panel(ui: &mut egui::Ui, palette: &Palette) {
+/// What the droid shows, read once for the State pane's Droid status.
+struct DroidStatus {
+    wings: [Option<f32>; 2],
+    main: Vec3,
+    small: Vec3,
+    white_duty: u16,
+    /// Each part's name and value, as the PCA9685 pane lists them.
+    parts: Vec<(String, String)>,
+}
+
+impl DroidStatus {
+    /// Locks hw() itself, so call it while no hw() guard is held.
+    fn read(cfg: &SimConfig, parts: &Parts) -> Self {
+        let wings = [
+            servo_angle(cfg, cfg.wing_right.channel),
+            servo_angle(cfg, cfg.wing_left.channel),
+        ];
+        let main = glow_rgb(cfg, GlowSource::MainEye);
+        let small = glow_rgb(cfg, GlowSource::SmallEye);
+        let s = hw();
+        Self {
+            wings,
+            main,
+            small,
+            white_duty: s.white_duty,
+            parts: parts
+                .0
+                .iter()
+                .map(|p| (p.name.clone(), part_value_text(p, s.parts.get(&p.name))))
+                .collect(),
+        }
+    }
+
+    /// One sentence per row, as shown and as read.
+    fn rows(&self) -> Vec<String> {
+        let angle =
+            |a: Option<f32>| a.map_or_else(|| "not driven".to_owned(), |a| format!("{a:.1}°"));
+        let mut rows = vec![
+            format!("Right wing {}", angle(self.wings[0])),
+            format!("Left wing {}", angle(self.wings[1])),
+            format!("Main eye {}", eye_rgb_text(self.main)),
+            format!("Small eye {}", eye_rgb_text(self.small)),
+            white_led_text(self.white_duty),
+        ];
+        rows.extend(
+            self.parts
+                .iter()
+                .map(|(name, value)| format!("{name}: {}", value.trim())),
+        );
+        rows
+    }
+}
+
+/// The droid's outputs as text, for anyone who can't see the 3D view. Each
+/// row is a Tab stop, so a screen reader reads it on the way through.
+fn droid_status(ui: &mut egui::Ui, status: &DroidStatus) {
+    egui::CollapsingHeader::new("Droid status")
+        .default_open(true)
+        .show(ui, |body| {
+            a11y::region(body, "Droid status");
+            for row in status.rows() {
+                body.add(
+                    egui::Label::new(row)
+                        .selectable(false)
+                        .sense(egui::Sense::focusable_noninteractive()),
+                );
+            }
+        });
+}
+
+fn state_panel(ui: &mut egui::Ui, cfg: &SimConfig, parts: &Parts, palette: &Palette) {
+    droid_status(ui, &DroidStatus::read(cfg, parts));
+    ui.separator();
     let (state, now) = {
         let s = hw();
         (s.fw_state.clone(), s.clock.now())
@@ -4602,6 +4784,29 @@ fn current_behaviour(running: Option<&str>, tasks: &[TaskState]) -> String {
 fn trim_speed(speed: f64) -> String {
     let text = format!("{speed:.1}");
     text.strip_suffix(".0").unwrap_or(&text).to_owned()
+}
+
+/// Width the spoken line may take before it is cut short on screen; the
+/// accessible name always has the whole message.
+const STATUS_LINE_WIDTH: f32 = 360.0;
+
+/// The latest event in words, first in the status bar. A polite live region:
+/// screen readers read each new message without moving focus. Under its own
+/// id so the node stays the same one from frame to frame.
+fn status_line(ui: &mut egui::Ui, said: &str) {
+    ui.push_id("status_line", |ui| {
+        ui.set_max_width(STATUS_LINE_WIDTH);
+        let resp = ui.add(egui::Label::new(egui::RichText::new(said).strong()).truncate());
+        a11y::live(&resp, said);
+        tip(
+            resp,
+            "The latest event, which screen readers read aloud. Past events are in the log.",
+            None,
+        );
+    });
+    if !said.is_empty() {
+        ui.separator();
+    }
 }
 
 /// One-row footer of live readouts, from the same sources as the panels.
@@ -4946,10 +5151,16 @@ fn start_deploy(fw_dir: &Path, drive: PathBuf, plan: Vec<deploy::Copy>) -> Deplo
     }
 }
 
-fn deploy_window(ctx: &egui::Context, dlg: &mut DeployDlg, fw_dir: &Path) {
+/// Draws the Deploy window. Returns the copy's outcome on the frame it finishes.
+fn deploy_window(
+    ctx: &egui::Context,
+    dlg: &mut DeployDlg,
+    fw_dir: &Path,
+) -> Option<Result<String, String>> {
     if matches!(dlg, DeployDlg::Closed) {
-        return;
+        return None;
     }
+    let mut finished = None;
     let mut next = None;
     let mut open = true;
     let mut window = egui::Window::new("Deploy to CIRCUITPY")
@@ -5007,7 +5218,11 @@ fn deploy_window(ctx: &egui::Context, dlg: &mut DeployDlg, fw_dir: &Path) {
                     });
                     ctx.request_repaint();
                 }
-                Some(Ok(msg)) | Some(Err(msg)) => next = Some(DeployDlg::Note(msg.clone())),
+                Some(outcome) => {
+                    let (Ok(msg) | Err(msg)) = outcome;
+                    next = Some(DeployDlg::Note(msg.clone()));
+                    finished = Some(outcome.clone());
+                }
             }
         }
     });
@@ -5016,6 +5231,7 @@ fn deploy_window(ctx: &egui::Context, dlg: &mut DeployDlg, fw_dir: &Path) {
     } else if !open {
         *dlg = DeployDlg::Closed;
     }
+    finished
 }
 
 #[cfg(test)]
@@ -5255,6 +5471,158 @@ mod part_panel_tests {
         assert_eq!(
             part_value_text(&ring, Some(&PartValue::Angle(42.0))),
             " 42.0°"
+        );
+    }
+}
+
+#[cfg(test)]
+mod text_view_tests {
+    use super::*;
+
+    fn sample(t: f32, wing_r: Option<f32>, accel_z: f32) -> Sample {
+        Sample {
+            t,
+            wings: [wing_r, Some(90.0)],
+            main: Vec3::ZERO,
+            small: Vec3::ZERO,
+            white: 0.0,
+            accel: [0.0, 0.0, accel_z],
+            rest_z: 0.0,
+            heap_kb: 0.0,
+        }
+    }
+
+    fn index(group: &str, short: &str) -> usize {
+        SERIES
+            .iter()
+            .position(|s| s.group == group && s.short == short)
+            .expect("series exists")
+    }
+
+    #[test]
+    fn stats_are_latest_min_max() {
+        let samples = [
+            sample(0.0, Some(60.0), 0.3),
+            sample(0.1, Some(50.0), -1.2),
+            sample(0.2, Some(65.0), 0.4),
+            sample(0.3, Some(55.0), 0.35),
+        ];
+        let refs: Vec<&Sample> = samples.iter().collect();
+        let wing = SERIES[index("Wings", "R")].get;
+        assert_eq!(series_stats(&refs, wing), Some((55.0, 50.0, 65.0)));
+        let z = SERIES[index("Accel", "z")].get;
+        assert_eq!(series_stats(&refs, z), Some((0.35, -1.2, 0.4)));
+    }
+
+    #[test]
+    fn stats_skip_gaps_and_empty_windows() {
+        let samples = [
+            sample(0.0, None, 0.0),
+            sample(0.1, Some(40.0), 0.0),
+            sample(0.2, None, 0.0),
+        ];
+        let refs: Vec<&Sample> = samples.iter().collect();
+        let wing = SERIES[index("Wings", "R")].get;
+        assert_eq!(series_stats(&refs, wing), Some((40.0, 40.0, 40.0)));
+        let none = [sample(0.0, None, 0.0)];
+        let refs: Vec<&Sample> = none.iter().collect();
+        assert_eq!(series_stats(&refs, wing), None);
+        assert_eq!(series_stats(&[], wing), None);
+    }
+
+    #[test]
+    fn table_rows_read_as_sentences() {
+        let i = index("Wings", "R");
+        let (cells, said) = series_row(i, Some((57.4, 50.0, 65.0)));
+        assert_eq!(cells, ["57°", "50°", "65°"]);
+        assert_eq!(said, "Wings R: latest 57°, min 50°, max 65°");
+        let (cells, said) = series_row(index("Main eye", "G"), None);
+        assert_eq!(cells, ["-", "-", "-"]);
+        assert_eq!(said, "Main eye G: no value in view");
+    }
+
+    #[test]
+    fn droid_status_rows_name_each_output() {
+        let status = DroidStatus {
+            wings: [Some(57.5), None],
+            main: Vec3::new(EYE_PEAK_DUTY, 0.0, EYE_PEAK_DUTY / 2.0),
+            small: Vec3::ZERO,
+            white_duty: 6553,
+            parts: vec![("tail".to_owned(), " 42.0°".to_owned())],
+        };
+        assert_eq!(
+            status.rows(),
+            [
+                "Right wing 57.5°",
+                "Left wing not driven",
+                "Main eye R 100%  G 0%  B 50% of peak",
+                "Small eye R 0%  G 0%  B 0% of peak",
+                "White LED duty 10.0%",
+                "tail: 42.0°",
+            ]
+        );
+    }
+
+    #[test]
+    fn status_line_is_a_polite_live_region() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut tree = None;
+        for _ in 0..2 {
+            let out = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|row| status_line(row, "Boop 1.5 g"));
+                });
+            });
+            tree = out.platform_output.accesskit_update;
+        }
+        let tree = tree.expect("AccessKit is on");
+        let live: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.live() == Some(egui::accesskit::Live::Polite))
+            .map(|(_, n)| n.value().map(str::to_owned))
+            .collect();
+        assert_eq!(live, [Some("Boop 1.5 g".to_owned())]);
+    }
+
+    /// Screen readers take a text label's name from its value.
+    fn label_values(mut draw: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut tree = None;
+        for _ in 0..2 {
+            let out = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, &mut draw);
+            });
+            tree = out.platform_output.accesskit_update;
+        }
+        tree.expect("AccessKit is on")
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.role() == egui::accesskit::Role::Label)
+            .filter_map(|(_, n)| n.value().map(str::to_owned))
+            .collect()
+    }
+
+    #[test]
+    fn an_empty_status_line_says_nothing() {
+        assert!(label_values(|ui| status_line(ui, "")).is_empty());
+    }
+
+    #[test]
+    fn table_rows_read_whole() {
+        let mut visible = PlotState::new(&Prefs::default());
+        visible.visible = [false; SERIES.len()];
+        visible.visible[index("Wings", "R")] = true;
+        let samples = [sample(0.0, Some(60.0), 0.0)];
+        let refs: Vec<&Sample> = samples.iter().collect();
+        let values = label_values(|ui| series_table(ui, &visible, &refs));
+        assert!(
+            values
+                .iter()
+                .any(|v| v == "Wings R: latest 60°, min 60°, max 60°"),
+            "{values:?}"
         );
     }
 }

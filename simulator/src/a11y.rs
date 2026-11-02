@@ -147,6 +147,27 @@ pub fn tab(resp: &egui::Response, title: &str) {
     }
 }
 
+/// What a screen reader reads for a text label, in place of what it shows.
+/// A label's spoken name is its AccessKit value, not its label.
+pub fn says(resp: &egui::Response, text: &str) {
+    resp.ctx
+        .accesskit_node_builder(resp.id, |node| node.set_value(text));
+}
+
+/// Makes the text label `resp` a polite live region saying `text`: screen
+/// readers read it when the text changes, without moving focus. No name while
+/// empty, so there is nothing to read.
+pub fn live(resp: &egui::Response, text: &str) {
+    resp.ctx.accesskit_node_builder(resp.id, |node| {
+        node.set_live(accesskit::Live::Polite);
+        if text.is_empty() {
+            node.clear_value();
+        } else {
+            node.set_value(text);
+        }
+    });
+}
+
 /// Marks `ui` as a named group, so a screen reader announces the panel or
 /// toolbar it is entering.
 pub fn region(ui: &egui::Ui, title: &str) {
