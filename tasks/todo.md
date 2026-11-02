@@ -67,7 +67,7 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
   - [x] Running app, UI Automation listener on LiveRegionChanged (the event Narrator reads): boop → "Boop 1.0 g. Sound: noseBoops", "Now nose boops"; 3 nudges → "Sound: angry. Now angry animation"; restart → "Restarted", "Now boot sequence"; each once, focus unchanged; the same message twice fires twice; Tab walks every Droid status row and table row with full sentences; log shows `[sim] Sound: angry.wav`
   - [ ] Narrator by ear: not done here (I can't hear it); the UIA events it reads were checked — user
   - [x] No behaviour change: click boop (firmware counted it), orbit drag, palette, View menu, Parts add + Ctrl+Z, detach State and Dock back
-  - [ ] Commit, push, PR into `feature/a11y-3d-keys`
+  - [x] Commit, push, PR into `feature/a11y-3d-keys` (#100)
 
 ### Review (stage 4)
 - **A text label's spoken name is its AccessKit value, not its label.** accesskit_windows takes the UIA name of a `Role::Label` node from `value` (egui puts a label's text there), so `a11y::label` did nothing on the table rows; Narrator read just "Wings R". New `a11y::says` sets the value; `a11y::live` does the same for the status line.
