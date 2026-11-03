@@ -16,7 +16,7 @@ use bevy_egui::EguiContexts;
 use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine};
 
 use crate::a11y;
-use crate::announce::{self, Announcer, BehaviourWatch, Priority};
+use crate::announce::{self, Announcer, BehaviourWatch, Priority, RunState, RunWatch};
 use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::{PartCfg, PartKind, PartSource, SimConfig};
@@ -579,7 +579,7 @@ const SHORTCUTS: &[Shortcut] = &[
     bound(
         "Window",
         "Ctrl+0",
-        "Reset UI scale to 100%",
+        "Reset UI scale (Windows text size; 100% in a detached window)",
         &[(CTRL, egui::Key::Num0)],
         Cmd::ScaleReset,
     ),
@@ -739,6 +739,7 @@ pub struct UiState {
     /// The status bar's spoken line, and the behaviour changes it says.
     announcer: Announcer,
     behaviour: BehaviourWatch,
+    run: RunWatch,
 }
 
 /// What the bottom panel shows: the console log, or a file on the simulated drive.
@@ -857,6 +858,7 @@ impl UiState {
             layout_files_at: None,
             announcer: Announcer::default(),
             behaviour: BehaviourWatch::default(),
+            run: RunWatch::default(),
         }
     }
 }
@@ -1920,10 +1922,16 @@ fn panels(
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed());
     let now = ui.started.elapsed().as_secs_f64();
-    let behaviour = {
+    let (behaviour, run) = {
         let s = hw();
-        current_behaviour(s.behaviour_running.as_deref(), &s.fw_state.tasks)
+        (
+            current_behaviour(s.behaviour_running.as_deref(), &s.fw_state.tasks),
+            run_state(host.0.is_running(), s.clock.is_paused(), s.skipping),
+        )
     };
+    if let Some(said) = ui.run.update(run) {
+        ui.announcer.push(said, Priority::Info, now);
+    }
     if let Some(said) = ui.behaviour.update(now, &behaviour) {
         ui.announcer.push(said, Priority::Info, now);
     }
@@ -4811,6 +4819,19 @@ fn status_line(ui: &mut egui::Ui, said: &str) {
     }
 }
 
+/// What the status bar shows and the status line says when it changes.
+fn run_state(running: bool, paused: bool, skipping: bool) -> RunState {
+    if !running {
+        RunState::Stopped
+    } else if skipping {
+        RunState::Skipping
+    } else if paused {
+        RunState::Paused
+    } else {
+        RunState::Running
+    }
+}
+
 /// One-row footer of live readouts, from the same sources as the panels.
 /// `hw()` is locked once and released before drawing.
 fn status_bar(ui: &mut egui::Ui, running: bool, fps: Option<f64>, focus: bool, palette: &Palette) {
@@ -4830,14 +4851,11 @@ fn status_bar(ui: &mut egui::Ui, running: bool, fps: Option<f64>, focus: bool, p
         )
     };
 
-    let (state, colour) = if !running {
-        ("stopped", None)
-    } else if skipping {
-        ("skipping", Some(palette.warn))
-    } else if paused {
-        ("paused", Some(palette.warn))
-    } else {
-        ("running", Some(palette.ok))
+    let (state, colour) = match run_state(running, paused, skipping) {
+        RunState::Stopped => ("stopped", None),
+        RunState::Skipping => ("skipping", Some(palette.warn)),
+        RunState::Paused => ("paused", Some(palette.warn)),
+        RunState::Running => ("running", Some(palette.ok)),
     };
     let text = match &scenario {
         Some(name) => format!("{state} · scenario {name}"),

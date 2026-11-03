@@ -174,6 +174,38 @@ impl BehaviourWatch {
     }
 }
 
+/// The run state the status bar shows, so Space (pause) and Skip are heard,
+/// not only seen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RunState {
+    Stopped,
+    Running,
+    Paused,
+    Skipping,
+}
+
+/// Says a change of run state. Starting a run says nothing here: "Restarted"
+/// comes from the restart marker.
+#[derive(Default)]
+pub struct RunWatch {
+    last: Option<RunState>,
+}
+
+impl RunWatch {
+    pub fn update(&mut self, state: RunState) -> Option<&'static str> {
+        let before = self.last.replace(state)?;
+        match (before, state) {
+            (a, b) if a == b => None,
+            (_, RunState::Paused) => Some("Paused"),
+            (_, RunState::Skipping) => Some("Skipping to the next event"),
+            (_, RunState::Stopped) => Some("Stopped"),
+            (RunState::Paused, RunState::Running) => Some("Resumed"),
+            (RunState::Skipping, RunState::Running) => Some("Skip ended"),
+            (RunState::Stopped, RunState::Running) | (RunState::Running, RunState::Running) => None,
+        }
+    }
+}
+
 /// What a plot marker says. Restarts matter most: everything after them is a
 /// new run.
 pub fn marker_text(kind: MarkerKind, label: &str) -> (String, Priority) {
@@ -200,6 +232,31 @@ fn sound_name(file: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_state_changes_are_said() {
+        let mut w = RunWatch::default();
+        assert_eq!(
+            w.update(RunState::Running),
+            None,
+            "the first frame says nothing"
+        );
+        assert_eq!(w.update(RunState::Running), None);
+        assert_eq!(w.update(RunState::Paused), Some("Paused"));
+        assert_eq!(w.update(RunState::Paused), None, "said once");
+        assert_eq!(w.update(RunState::Running), Some("Resumed"));
+        assert_eq!(
+            w.update(RunState::Skipping),
+            Some("Skipping to the next event")
+        );
+        assert_eq!(w.update(RunState::Running), Some("Skip ended"));
+        assert_eq!(w.update(RunState::Stopped), Some("Stopped"));
+        assert_eq!(
+            w.update(RunState::Running),
+            None,
+            "a restart is said by its marker"
+        );
+    }
 
     /// Ticks every 10 ms from `from` to `to`, returning each change of text.
     fn said(a: &mut Announcer, from: f64, to: f64) -> Vec<String> {
