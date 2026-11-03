@@ -13,8 +13,17 @@ Branch `feature/sim-linux` off `Documentation`. No packaging or release steps (#
 - [x] Linux in Docker: fmt, clippy `-D warnings`, 153 unit tests, all scenarios
 - [x] Bundle: 48 MB (was 269: libpython debug symbols, Tcl/Tk, pip); on clean Debian with no Python, ldd finds libpython via rpath; headless.py passes on the trimmed stdlib
 - [x] Windows: `build.ps1 -Test` 153 tests + scenarios; app starts as before
-- [ ] CI green; one Linux test failed on purpose turns `build-linux` red
-- [ ] PR into `Documentation`
+- [x] A deliberately failing Linux-only test (commit 86dc986) turned `build-linux` red with that test named; the Windows and firmware jobs stayed green. Reverted.
+- [ ] CI green after the revert
+- [x] PR #107 into `Documentation`
+- [ ] By a tester on Ubuntu Wayland and X11 (from the `ddl0-sim-linux` artifact): window and 3D view, sound, orbit and boop, hot reload, folder dialog, GNOME settings followed, deploy finds CIRCUITPY, tear-off panel, traceback opens editor
+
+### Review
+- Can't run the Linux GUI from this Windows machine; everything above the tester line was checked in Docker or CI.
+- python-build-standalone's `sysconfig` reports its build folder (`/install/lib`), so the link needs an explicit `-L`; its libpython ships with debug symbols (241 MB) and its terminfo has case-only name clashes that a Windows bind mount can't hold. All handled in `docker/build.sh`.
+- Setting `PYTHONHOME` would also reach programs the simulator launches; `pyhost::command` strips it for them.
+- Linux needs `libwayland-client` even on X11 (Bevy links it directly with the `wayland` feature); README says so.
+- Conflicts textually with #92's edits to `simulator.yml` (both add jobs); whichever merges second needs a trivial merge.
 
 # Simulator: choose the firmware folder — #105
 

@@ -404,10 +404,3 @@ mod tests {
         assert!(!t.drive().join("b.py").exists());
     }
 }
-
-// TEMPORARY: proves the build-linux job fails on a failing test. Reverted next.
-#[cfg(all(test, target_os = "linux"))]
-#[test]
-fn ci_must_go_red() {
-    panic!("deliberate failure to check build-linux turns red");
-}
