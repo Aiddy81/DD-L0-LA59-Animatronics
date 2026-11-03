@@ -1,0 +1,26 @@
+name: TEMP macOS sleep probe
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - name: Measure sleep accuracy
+        run: |
+          cat > /tmp/p.py <<'PY'
+          import time, selectors, os
+          def m(f, d, n=200):
+              t = time.perf_counter()
+              for _ in range(n): f(d)
+              return (time.perf_counter() - t) / n * 1000
+          sel = selectors.SelectSelector()
+          r, w = os.pipe(); sel.register(r, selectors.EVENT_READ)
+          for d in (0.0001, 0.0004, 0.001, 0.002, 0.005):
+              print(f"ask {d*1000:.1f} ms  sleep {m(time.sleep, d):.2f} ms  select {m(sel.select, d):.2f} ms")
+          PY
+          echo "== plain"; python3 /tmp/p.py
+          echo "== taskpolicy -l 0 -t 0"; taskpolicy -l 0 -t 0 python3 /tmp/p.py || true
+          echo "== taskpolicy -c utility? (check -B off)"; taskpolicy -B python3 /tmp/p.py || true
+          sysctl -n machdep.cpu.brand_string hw.ncpu

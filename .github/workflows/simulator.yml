@@ -103,26 +103,6 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.92.0
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: TEMPORARY sleep probe
-        continue-on-error: true
-        run: |
-          cat > /tmp/p.py <<'PY'
-          import time, selectors, os, sys
-          def m(f, d, n=200):
-              t = time.perf_counter()
-              for _ in range(n): f(d)
-              return (time.perf_counter() - t) / n * 1000
-          sel = selectors.SelectSelector()
-          r, w = os.pipe(); sel.register(r, selectors.EVENT_READ)
-          print(sys.version)
-          for d in (0.0001, 0.0004, 0.001, 0.002, 0.005, 0.0167):
-              print(f"ask {d*1000:.2f} ms  sleep {m(time.sleep, d):.2f} ms  select {m(sel.select, d):.2f} ms")
-          PY
-          echo "== plain"; python3 /tmp/p.py
-          echo "== taskpolicy -l 0 -t 0"; taskpolicy -l 0 -t 0 python3 /tmp/p.py || true
-          echo "== boot scenario plain"; python3 simulator/tests/headless.py --scenario boot | grep -E "scenario boot|Angry window" || true
-          echo "== boot scenario taskpolicy"; taskpolicy -l 0 -t 0 python3 simulator/tests/headless.py --scenario boot | grep -E "scenario boot|Angry window" || true
-          sysctl -n machdep.cpu.brand_string hw.ncpu
       - name: Install Rust 1.92 (rustup is on the runner)
         run: |
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal -c rustfmt,clippy
