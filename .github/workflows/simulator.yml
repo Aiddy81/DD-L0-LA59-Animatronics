@@ -19,8 +19,6 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
-      - name: TEMP fail on purpose (gate check)
-        run: exit 1
       - name: Run code.py against the simulator's hardware stand-ins
         run: python simulator/tests/headless.py
       - name: Drop-in shims (dist\shims\) override and add to the built-ins
