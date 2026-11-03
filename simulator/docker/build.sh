@@ -14,6 +14,10 @@
 #          run it from dist/, beside the Python and MinGW DLLs it needs.
 #          linux, macos: runs them here, against the bundled Python.
 #   OWNER=uid:gid hands dist/ to that user when done (the container is root).
+#   HEADLESS_SPEED=<n> runs the scenario checks at n virtual seconds per real
+#          second (headless.py's default is 40). Its clock is real time times
+#          n, so on a slow machine every scheduling delay grows n-fold; CI's
+#          macOS runner needs a lower n.
 # Ends by running code.py headless against every scenario; a failure exits 3,
 # after dist/ is staged, so the built simulator can be used to debug it.
 set -euo pipefail
@@ -148,7 +152,7 @@ echo "== Scenario checks (code.py headless)"
 # No __pycache__ in the mounted checkout (it would be root-owned).
 host_python=python3
 [ "$PLATFORM" = macos ] && host_python="$PY_MACOS/bin/python3"
-PYTHONDONTWRITEBYTECODE=1 "$host_python" tests/headless.py || {
+PYTHONDONTWRITEBYTECODE=1 "$host_python" tests/headless.py ${HEADLESS_SPEED:+--speed "$HEADLESS_SPEED"} || {
   echo "Scenario checks failed: see the FAIL lines above."
   exit 3
 }

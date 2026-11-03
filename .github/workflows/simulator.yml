@@ -117,11 +117,14 @@ jobs:
             .ci-cache/target
           key: sim-macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('simulator/Cargo.lock', 'simulator/docker/fetch-python-macos.sh') }}
           restore-keys: sim-macos-${{ runner.os }}-${{ runner.arch }}-
+      # The scenario checks' clock is real time x speed, and this virtual
+      # runner's scheduling delays at the default 40x pushed boot past its
+      # 40 s check (62-79 s here, 12.6 s on Linux). 8x runs the same checks.
       - name: Format, lint, build and run the unit tests
         working-directory: simulator
         run: |
           PLATFORM=macos PY_MACOS="$RUNNER_TEMP/pbs/python" CARGO_TARGET_DIR="$GITHUB_WORKSPACE/.ci-cache/target" \
-            CHECK=1 LOCKED=1 TEST=1 bash docker/build.sh
+            CHECK=1 LOCKED=1 TEST=1 HEADLESS_SPEED=8 bash docker/build.sh
       - name: Check the staged app starts its Python from dist/
         working-directory: simulator/dist
         run: |
