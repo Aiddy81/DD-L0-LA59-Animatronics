@@ -408,7 +408,8 @@ fn resolve(choice: ThemeChoice, os: &OsPrefs) -> ResolvedTheme {
 }
 
 /// Windows' text size (a percentage, 100–225) as a UI scale; missing or zero
-/// means unset.
+/// means unset. macOS has no such setting.
+#[cfg(any(windows, target_os = "linux", test))]
 fn text_scale(percent: Option<u32>) -> f32 {
     match percent {
         Some(p) if p > 0 => clamp_scale(p as f32 / 100.0),
