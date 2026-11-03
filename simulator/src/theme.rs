@@ -368,7 +368,7 @@ impl Plugin for ThemePlugin {
 }
 
 /// Re-resolves `System` when the OS flips between light and dark.
-fn follow_os_theme(mut events: EventReader<WindowThemeChanged>, mut theme: ResMut<ActiveTheme>) {
+fn follow_os_theme(mut events: MessageReader<WindowThemeChanged>, mut theme: ResMut<ActiveTheme>) {
     let Some(latest) = events.read().last() else {
         return;
     };
@@ -385,17 +385,21 @@ fn apply_theme(
         Entity,
         &mut EguiContext,
         &mut EguiContextSettings,
-        Option<&Detached>,
+        Option<&ChildOf>,
     )>,
+    detached: Query<&Detached>,
     theme: Res<ActiveTheme>,
     mut applied: Local<HashMap<Entity, (ResolvedTheme, f32, bool)>>,
 ) {
     // Windows that are gone must not keep a stale entry, or a reused entity id
     // would be taken for already themed.
     applied.retain(|entity, _| contexts.contains(*entity));
-    for (entity, mut context, mut settings, detached) in &mut contexts {
+    for (entity, mut context, mut settings, parent) in &mut contexts {
         // Every window has its own scale, so a detached one can be zoomed alone.
-        let scale = detached.map_or(theme.scale, |d| d.scale);
+        // A context lives on a camera; a detached window's camera is its child.
+        let scale = parent
+            .and_then(|p| detached.get(p.parent()).ok())
+            .map_or(theme.scale, |d| d.scale);
         let wanted = (theme.resolved, scale, theme.animations);
         if applied.get(&entity) == Some(&wanted) {
             continue;

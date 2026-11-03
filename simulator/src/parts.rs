@@ -435,12 +435,12 @@ pub fn shim_part_input(s: &mut HwState, name: &str) -> bool {
 
 /// glTF droids are ready once their scene has spawned, with its named nodes.
 fn mark_scene_ready(
-    ready: Trigger<SceneInstanceReady>,
+    ready: On<SceneInstanceReady>,
     roots: Query<(), With<DroidRoot>>,
     mut commands: Commands,
 ) {
-    if roots.contains(ready.target()) {
-        commands.entity(ready.target()).insert(ModelReady);
+    if roots.contains(ready.entity) {
+        commands.entity(ready.entity).insert(ModelReady);
     }
 }
 
@@ -544,7 +544,7 @@ fn spawn_part(
         // In edit mode a press selects the part (and may slide it) and stops
         // here, so it never reaches the boop on the droid's root.
         .observe(
-            move |mut press: Trigger<Pointer<Pressed>>,
+            move |mut press: On<Pointer<Press>>,
                   viewport: Res<ViewportRect>,
                   mut edit: ResMut<PartEdit>| {
                 if edit.editing && press.button == PointerButton::Primary && viewport.hovered {
@@ -657,7 +657,7 @@ fn spawn_part(
                 // under the pointer when the mouse button comes up.
                 // In edit mode the press goes on up to the part, which selects it.
                 .observe(
-                    move |mut press: Trigger<Pointer<Pressed>>,
+                    move |mut press: On<Pointer<Press>>,
                           viewport: Res<ViewportRect>,
                           edit: Res<PartEdit>,
                           mut held: ResMut<HeldButton>| {
@@ -671,7 +671,7 @@ fn spawn_part(
                         }
                     },
                 )
-                .observe(|mut click: Trigger<Pointer<Click>>| click.propagate(false));
+                .observe(|mut click: On<Pointer<Click>>| click.propagate(false));
         }
     }
 }

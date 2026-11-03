@@ -204,7 +204,7 @@ pub fn show<T: Clone>(ctx: &egui::Context, rows: &[Row<T>], palette: &Palette) -
     let mut close = escape;
 
     let width = WIDTH
-        .min(ctx.screen_rect().width() - 2.0 * MARGIN)
+        .min(ctx.content_rect().width() - 2.0 * MARGIN)
         .max(200.0);
     let frame = egui::Frame::popup(&ctx.style())
         .fill(palette.surface)

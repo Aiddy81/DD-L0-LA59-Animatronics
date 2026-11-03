@@ -2,13 +2,16 @@
 //! can drag, split and close. This module owns the layout and the 3D view's
 //! on-screen rectangle; what each panel draws stays in `ui.rs`.
 
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{CameraOutputMode, RenderTarget};
 use bevy::prelude::*;
-use bevy::render::camera::RenderTarget;
+use bevy::render::render_resource::BlendState;
 use bevy::window::{
     Monitor, MonitorSelection, PrimaryMonitor, PrimaryWindow, WindowCloseRequested, WindowPosition,
     WindowRef, WindowResolution,
 };
 use bevy_egui::egui;
+use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockState, NodeIndex, SurfaceIndex, TabStyle, TabViewer};
 use serde::{Deserialize, Serialize};
 
@@ -200,7 +203,7 @@ impl TearOff {
         // the pointer leaves the window egui has no position for it at all.
         let inside = ctx
             .input(|i| i.pointer.latest_pos())
-            .is_some_and(|pos| ctx.screen_rect().shrink(2.0).contains(pos));
+            .is_some_and(|pos| ctx.content_rect().shrink(2.0).contains(pos));
         let Some(pane) = dragging.filter(|p| *p != Pane::Viewport) else {
             // egui drops a drag as soon as the pointer leaves the window, so
             // the drag may end with the pointer already outside.
@@ -222,7 +225,7 @@ pub fn main_dock_id() -> egui::Id {
     egui::Id::new("dock_main")
 }
 
-/// The id egui_dock 0.16.0 gives the button of tab `t` in node `n` of surface
+/// The id egui_dock 0.18.0 gives the button of tab `t` in node `n` of surface
 /// `s` of the dock `dock`: the dock id, then surface, node and tab index. The
 /// crate is pinned with `=`, so the scheme can't change underneath this.
 pub fn tab_button_id(dock: egui::Id, s: usize, n: usize, t: usize) -> egui::Id {
@@ -269,11 +272,11 @@ pub fn step_tab(state: &mut DockState<Pane>, dir: i32) -> Option<egui::Id> {
         .collect();
     let len = i64::try_from(tabs.len()).ok().filter(|len| *len > 0)?;
     let current = state.focused_leaf().and_then(|(surface, node)| {
-        let egui_dock::Node::Leaf { active, .. } = &state[surface][node] else {
+        let egui_dock::Node::Leaf(leaf) = &state[surface][node] else {
             return None;
         };
         tabs.iter()
-            .position(|&at| at == (surface.0, node.0, active.0))
+            .position(|&at| at == (surface.0, node.0, leaf.active.0))
     });
     let next = match current {
         Some(at) => (i64::try_from(at).ok()? + i64::from(dir)).rem_euclid(len),
@@ -430,22 +433,74 @@ pub struct ViewportRect {
     pub ppp: f32,
 }
 
-/// A pane torn out into its own OS window. The window's egui context draws
-/// the pane; `scale` is that window's own UI scale.
+/// A pane torn out into its own OS window. The egui context that draws the
+/// pane lives on the window's camera, `ui_camera`; `scale` is that window's
+/// own UI scale.
 #[derive(Component)]
 pub struct Detached {
     pub pane: Pane,
     pub scale: f32,
+    pub ui_camera: Entity,
+}
+
+/// A window size in logical pixels, as the prefs and layouts store it.
+pub fn resolution(w: f32, h: f32) -> WindowResolution {
+    // Before the OS reports the monitor's scale, Bevy takes these as logical.
+    WindowResolution::new(w.round() as u32, h.round() as u32)
+}
+
+/// The main window's egui camera. egui draws through a camera, and the 3D
+/// camera won't do: it only covers the 3D view's rectangle and is switched off
+/// with that tab. This one covers the whole window and is drawn after the 3D
+/// view, blended over it, so the scene shows through where egui draws nothing.
+fn spawn_ui_camera(mut commands: Commands, mut egui: ResMut<bevy_egui::EguiGlobalSettings>) {
+    egui.auto_create_primary_context = false;
+    commands.spawn((
+        bevy_egui::PrimaryEguiContext,
+        Camera2d,
+        // Renders no meshes and is never used for picking.
+        RenderLayers::none(),
+        Camera {
+            order: 1,
+            // egui writes premultiplied alpha.
+            output_mode: CameraOutputMode::Write {
+                blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                clear_color: ClearColorConfig::None,
+            },
+            clear_color: ClearColorConfig::Custom(Color::NONE),
+            ..default()
+        },
+    ));
+}
+
+/// A detached window's camera that still needs its egui context; see
+/// `add_egui_contexts`.
+#[derive(Component)]
+struct WantsEgui;
+
+/// Gives new detached windows' cameras their egui context at the start of a
+/// frame, before bevy_egui sets contexts up and begins their pass. Windows are
+/// opened from `Update`; a context added there would be ended in `PostUpdate`
+/// without ever having begun, and egui panics on that (no fonts loaded yet).
+fn add_egui_contexts(mut commands: Commands, cameras: Query<Entity, With<WantsEgui>>) {
+    for camera in &cameras {
+        commands
+            .entity(camera)
+            .remove::<WantsEgui>()
+            // Single-pass like the main window's, so `ui::panels` can draw it in `Update`.
+            .insert(bevy_egui::EguiContext::default());
+    }
 }
 
 /// Opens an OS window for `place.pane`. `clear` is the colour its camera clears to:
 /// egui draws onto the window without clearing it first.
 pub fn spawn_detached(commands: &mut Commands, place: &DetachedSave, clear: Color) -> Entity {
+    let ui_camera = commands.spawn_empty().id();
     let window = commands
         .spawn((
             Window {
                 title: format!("DD-L0-LA59 \u{2014} {}", place.pane.title()),
-                resolution: WindowResolution::new(place.w, place.h),
+                resolution: resolution(place.w, place.h),
                 position: place
                     .x
                     .zip(place.y)
@@ -460,20 +515,25 @@ pub fn spawn_detached(commands: &mut Commands, place: &DetachedSave, clear: Colo
             Detached {
                 pane: place.pane,
                 scale: place.scale,
+                ui_camera,
             },
-            // The clear camera is a child; without these Bevy warns the hierarchy
+            // The camera is a child; without these Bevy warns the hierarchy
             // is inconsistent.
             Transform::default(),
             Visibility::default(),
         ))
         .id();
-    commands.entity(window).with_child((
+    commands.entity(ui_camera).insert((
         Camera2d,
         Camera {
             target: RenderTarget::Window(WindowRef::Entity(window)),
             clear_color: ClearColorConfig::Custom(clear),
             ..default()
         },
+        // Renders no meshes and is never used for picking.
+        RenderLayers::none(),
+        WantsEgui,
+        ChildOf(window),
     ));
     window
 }
@@ -523,7 +583,7 @@ pub fn snapshot(dock: &Dock, mut detached: Vec<DetachedSave>) -> Layout {
 }
 
 /// Where `state`'s floating windows were drawn, read from egui's memory:
-/// egui_dock 0.16 never records it in its own `WindowState`. The id is the one
+/// egui_dock 0.18 never records it in its own `WindowState`. The id is the one
 /// egui_dock gives its window areas (`format!("window {surface:?}")`). The
 /// size is the content size, as `set_size` takes, so a restore doesn't grow
 /// the window by its frame each time.
@@ -574,7 +634,7 @@ fn spawn_saved_windows(
     mut commands: Commands,
     prefs: Res<Prefs>,
     theme: Res<ActiveTheme>,
-    primary: Query<(), (With<PrimaryWindow>, With<bevy_egui::EguiContext>)>,
+    primary: Query<(), With<bevy_egui::PrimaryEguiContext>>,
     mut done: Local<bool>,
 ) {
     // Not at Startup: bevy_egui sets up each window's render node on the
@@ -776,12 +836,12 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
 
     // Asked to close by the user: with animations on the tab stays until its
     // fade-out is done (`PaneAction::Close`).
-    fn on_close(&mut self, tab: &mut Pane) -> bool {
+    fn on_close(&mut self, tab: &mut Pane) -> OnCloseResponse {
         if self.animate && *tab != Pane::Viewport {
             self.actions.push((*tab, PaneAction::Close));
-            false
+            OnCloseResponse::Ignore
         } else {
-            true
+            OnCloseResponse::Close
         }
     }
 
@@ -827,7 +887,7 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
     ) {
         if self.allowed_in_windows(tab) && ui.button("Detach to window").clicked() {
             self.actions.push((*tab, PaneAction::Detach));
-            ui.close_menu();
+            ui.close();
         }
     }
 }
@@ -835,12 +895,12 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
 /// The OS close button: quits for the main window, docks a detached pane back.
 /// Bevy's own close handling is off so a detached pane isn't just lost.
 fn close_windows(
-    mut requests: EventReader<WindowCloseRequested>,
+    mut requests: MessageReader<WindowCloseRequested>,
     mut commands: Commands,
     mut dock: ResMut<Dock>,
     primary: Query<(), With<PrimaryWindow>>,
     detached: Query<&Detached>,
-    mut exit: EventWriter<AppExit>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     for request in requests.read() {
         let window = request.window;
@@ -877,6 +937,11 @@ impl Plugin for DockPlugin {
             fades: Fades::default(),
         })
         .insert_resource(ViewportRect::default())
+        .add_systems(Startup, spawn_ui_camera)
+        .add_systems(
+            PreUpdate,
+            add_egui_contexts.before(bevy_egui::EguiPreUpdateSet::InitContexts),
+        )
         .add_systems(
             Update,
             (spawn_saved_windows, close_windows, keep_windows_on_screen),

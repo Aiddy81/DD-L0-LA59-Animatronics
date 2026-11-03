@@ -258,20 +258,16 @@ fn check_tree(tree: &mut Tree<Pane>) -> Result<usize, String> {
     let mut tabs = 0;
     for node in tree.iter_mut() {
         match node {
-            Node::Leaf {
-                tabs: leaf_tabs,
-                active,
-                ..
-            } => {
-                if leaf_tabs.is_empty() {
+            Node::Leaf(leaf) => {
+                if leaf.tabs.is_empty() {
                     return Err("a tab group is empty".into());
                 }
-                tabs += leaf_tabs.len();
-                active.0 = active.0.min(leaf_tabs.len() - 1);
+                tabs += leaf.tabs.len();
+                leaf.active.0 = leaf.active.0.min(leaf.tabs.len() - 1);
             }
-            Node::Horizontal { fraction, .. } | Node::Vertical { fraction, .. } => {
-                *fraction = if fraction.is_finite() {
-                    fraction.clamp(MIN_FRACTION, MAX_FRACTION)
+            Node::Horizontal(split) | Node::Vertical(split) => {
+                split.fraction = if split.fraction.is_finite() {
+                    split.fraction.clamp(MIN_FRACTION, MAX_FRACTION)
                 } else {
                     0.5
                 };
@@ -672,6 +668,56 @@ mod tests {
         let mut back: Layout = toml::from_str(&text).expect("parses");
         validate(&mut back).expect("valid");
         assert_eq!(l, back);
+    }
+
+    /// A layout as egui_dock 0.16 saved it (from a real prefs file, trimmed)
+    /// still loads: 0.18 turned the node variants into tuples around structs
+    /// with the same fields, which serde writes the same way.
+    #[test]
+    fn layouts_saved_by_egui_dock_0_16_load() {
+        let text = r#"
+detached = []
+floats = []
+
+[dock]
+focused_surface = 0
+
+[[dock.surfaces]]
+
+[dock.surfaces.Main]
+nodes = [{ Horizontal = { rect = { min = { x = 0.0, y = 28.0 }, max = { x = 2560.0, y = 1301.0 } }, fraction = 0.76, fully_collapsed = false, collapsed_leaf_count = 0 } }, { Leaf = { rect = { min = { x = 0.0, y = 28.0 }, max = { x = 1945.0, y = 1301.0 } }, viewport = { min = { x = 0.0, y = 52.0 }, max = { x = 1945.0, y = 1301.0 } }, tabs = ["viewport"], active = 0, scroll = 0.0, collapsed = false } }, { Leaf = { rect = { min = { x = 1946.0, y = 28.0 }, max = { x = 2560.0, y = 1301.0 } }, viewport = { min = { x = 1946.0, y = 59.5 }, max = { x = 2560.0, y = 1301.0 } }, tabs = ["state", "pca", "board"], active = 1, scroll = 0.0, collapsed = false } }]
+focused_node = 2
+collapsed = false
+collapsed_leaf_count = 0
+
+[dock.translations.tab_context_menu]
+close_button = "Close"
+eject_button = "Float"
+
+[dock.translations.leaf]
+close_button_disabled_tooltip = "This leaf contains non-closable tabs."
+close_all_button = "Close window"
+close_all_button_menu_hint = "Right click to close this window."
+close_all_button_modifier_hint = "Press modifier keys (Shift by default) to close this window."
+close_all_button_modifier_menu_hint = "Press modifier keys (Shift by default) or right click to close this window."
+close_all_button_disabled_tooltip = "This window contains non-closable tabs."
+minimize_button = "Minimize window"
+minimize_button_menu_hint = "Right click to minimize this window."
+minimize_button_modifier_hint = "Press modifier keys (Shift by default) to minimize this window."
+minimize_button_modifier_menu_hint = "Press modifier keys (Shift by default) or right click to minimize this window."
+"#;
+        let mut back: Layout = toml::from_str(text).expect("parses");
+        validate(&mut back).expect("valid");
+        assert_eq!(
+            panes(&back),
+            vec![Pane::Viewport, Pane::State, Pane::Pca, Pane::Board]
+        );
+        // The second group's open tab (PCA9685) is kept.
+        let (surface, node, _) = back.dock.find_tab(&Pane::State).expect("state tab");
+        let egui_dock::Node::Leaf(leaf) = &back.dock[surface][node] else {
+            panic!("tabs live in a leaf");
+        };
+        assert_eq!(leaf.active.0, 1);
     }
 
     /// Layouts saved before the Parts pane existed still load, without it.

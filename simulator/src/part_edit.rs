@@ -655,7 +655,7 @@ impl Surface<'_, '_> {
                     roots.contains(a).then_some((a, PartCfg::BODY))
                 }
             })?;
-        let m = globals.get(anchor_e).ok()?.compute_matrix();
+        let m = globals.get(anchor_e).ok()?.to_matrix();
         let normal = (Mat3::from_mat4(m).transpose() * hit.normal)
             .try_normalize()
             .unwrap_or(Vec3::Y);
@@ -761,8 +761,8 @@ fn sync_parts(
         }
     }
     let typing = contexts
-        .try_ctx_mut()
-        .is_some_and(|ctx| ctx.wants_keyboard_input());
+        .ctx_mut()
+        .is_ok_and(|ctx| ctx.wants_keyboard_input());
     let interacting = mouse.get_pressed().next().is_some() || typing;
     if edit.record(interacting) {
         let list = edit.cfgs();
@@ -808,7 +808,7 @@ fn draw_marks(
     let (Ok(window), Ok((camera, cam_transform))) = (windows.single(), cams.single()) else {
         return;
     };
-    let Some(ctx) = contexts.try_ctx_mut() else {
+    let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
     let cam_world = GlobalTransform::from(*cam_transform);
