@@ -28,10 +28,12 @@ pub struct Prefs {
     pub model_gltf: Option<bool>,
     pub room_light: RoomLight,
     pub theme: ThemeChoice,
-    /// egui zoom factor; kept inside theme::SCALE_MIN..=SCALE_MAX on load.
-    pub ui_scale: f32,
-    /// Smooth transitions (camera moves, panel fades).
-    pub animations: bool,
+    /// egui zoom factor, kept inside theme::SCALE_MIN..=SCALE_MAX on load;
+    /// `None` follows the Windows text size.
+    pub ui_scale: Option<f32>,
+    /// Smooth transitions (camera moves, panel fades); `None` follows the
+    /// Windows "Animation effects" setting.
+    pub animations: Option<bool>,
     pub strict: bool,
     pub board_speed: bool,
     pub servo_speed: bool,
@@ -78,8 +80,8 @@ impl Default for Prefs {
             model_gltf: None,
             room_light: RoomLight::default(),
             theme: ThemeChoice::default(),
-            ui_scale: 1.0,
-            animations: true,
+            ui_scale: None,
+            animations: None,
             strict: true,
             board_speed: true,
             servo_speed: true,
@@ -128,7 +130,7 @@ pub fn load(path: &Path) -> (Prefs, Option<String>) {
             None => return invalid(&e),
         },
     };
-    prefs.ui_scale = theme::clamp_scale(prefs.ui_scale);
+    prefs.ui_scale = prefs.ui_scale.map(theme::clamp_scale);
     prefs.window_width = clamp_window(prefs.window_width, Prefs::default().window_width);
     prefs.window_height = clamp_window(prefs.window_height, Prefs::default().window_height);
     check_layouts(&mut prefs, &mut notes);
@@ -203,20 +205,23 @@ mod tests {
     }
 
     #[test]
-    fn animations_default_on_and_round_trip() {
-        let (prefs, _) = load_text("anim-missing", "ui_scale = 1.5\n");
-        assert!(prefs.animations);
-        let (prefs, _) = load_text("anim-off", "animations = false\n");
-        assert!(!prefs.animations);
+    fn unsaved_scale_and_animations_follow_windows_and_round_trip() {
+        let (prefs, _) = load_text("anim-missing", "theme = \"dark\"\n");
+        assert_eq!((prefs.ui_scale, prefs.animations), (None, None));
+        let text = toml::to_string(&prefs).expect("serialises");
+        assert!(!text.contains("ui_scale") && !text.contains("animations"));
+        let (prefs, _) = load_text("anim-off", "animations = false\nui_scale = 9.0\n");
+        assert_eq!(prefs.animations, Some(false));
+        assert_eq!(prefs.ui_scale, Some(theme::SCALE_MAX));
         let text = toml::to_string(&prefs).expect("serialises");
         let (again, _) = load_text("anim-again", &text);
-        assert!(!again.animations);
+        assert_eq!(again.animations, Some(false));
     }
 
     #[test]
     fn an_unreadable_layout_keeps_the_other_settings() {
         let (prefs, warning) = load_text("layout", "ui_scale = 1.5\n[layout]\nbogus = 1\n");
-        assert_eq!(prefs.ui_scale, 1.5);
+        assert_eq!(prefs.ui_scale, Some(1.5));
         assert!(prefs.layout.is_none());
         assert!(warning.is_some());
     }

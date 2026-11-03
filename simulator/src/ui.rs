@@ -969,8 +969,8 @@ fn save_prefs(
         model_gltf: model.map(|m| m.use_gltf).or(saved.model_gltf),
         room_light: *room,
         theme: theme.choice,
-        ui_scale: theme.scale,
-        animations: theme.animations(),
+        ui_scale: theme.saved_scale(),
+        animations: theme.saved_animations(),
         strict,
         board_speed,
         servo_speed,
@@ -2443,6 +2443,8 @@ impl CmdCx<'_, '_, '_> {
                     _ => 1.0,
                 };
                 match scope {
+                    // Reset drops the picked scale, so the Windows text size applies again.
+                    Scope::Main if cmd == Cmd::ScaleReset => self.theme.reset_scale(),
                     Scope::Main => {
                         let next = step(self.theme.scale);
                         self.theme.set_scale(next);
@@ -3470,7 +3472,7 @@ fn appearance_controls(
         });
     tip(
         a11y::label(combo.response, "Theme"),
-        "Follow system tracks the Windows light/dark setting",
+        "Follow system tracks the Windows contrast theme and light/dark setting",
         None,
     );
 

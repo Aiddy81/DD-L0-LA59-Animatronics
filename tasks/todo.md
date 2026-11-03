@@ -74,7 +74,43 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
 - **Live regions fire on a name change only** (accesskit_windows 0.29 `adapter.rs`), so the same message twice would be silent. The announcer blanks the line for one frame before a repeat; an empty line has no value, so it raises nothing.
 - Events lag by up to the 1.5 s gap plus 0.25 s gathering; bursts read as one sentence. "Now settle" (the firmware's settle step between animations) is said too, since it is what the status bar shows.
 - **Found, not fixed (follow-up): the Lola glTF model crashes the app on Bevy 0.17** (`scene contains the unregistered type Transform`, bevy_scene `scene_spawner.rs:621`). A fresh prefs file defaults to Lola, so a clean `dist\` crashes at start; earlier stages tested with prefs set to the primitive model. Tested here with `model_gltf = false`.
-- [ ] Stage 5 — `feature/a11y-visual`: WCAG contrast test, follow Windows high contrast / animations / text size, focus everywhere
+- [ ] **Stage 5 — `feature/a11y-visual`** (stacked on #100): WCAG contrast test, follow Windows high contrast / animations / text size, focus everywhere
+  - [x] `theme.rs` contrast test: WCAG 2.2 ratios for every pair the applied egui visuals draw, in Light / Dark / High contrast: text, weak, disabled, link, warn, error, ok, muted and accent text on panel, window, field and striped rows; button text in every state; disabled button; selected text; 3:1 for focus ring, borders, selection and every plot line and marker. Prints every ratio (`ddl0-sim-tests every_theme --nocapture`)
+  - [x] Palette fixes, smallest that pass (table below); new `outline`, `selection`, `selected_text` tokens; weak and disabled text alpha 0.65
+  - [x] Red check: Light `muted` set to the panel colour → test failed ("Light: muted on panel 1.00 < 4.5"), reverted
+  - [x] Follow Windows (`windows-sys` feature `Win32_UI_Accessibility`, no version change): contrast theme (`SPI_GETHIGHCONTRAST`), Animation effects (`SPI_GETCLIENTAREAANIMATION`), text size (`TextScaleFactor`); read at start, on `WindowThemeChanged` and every 2 s. Pure, unit-tested mapping (`resolve`, `text_scale`, `ActiveTheme::with_os` / `set_os`); non-Windows reads defaults
+  - [x] Prefs: `ui_scale` and `animations` are `Option`; saved only once the user changes them, so they follow Windows until then. Ctrl+0 / Reset scale goes back to following the text size
+  - [x] Focus ring: unit test (Tab shows it, a click hides it); fixed the 3D view's left side being drawn off-window (ring now kept inside the window)
+  - [x] README Theme / UI scale / Animations / Remembered
+  - [x] `build.ps1 -Test` (145 passed, 7 scenarios), `cargo fmt --check`, `clippy --release --locked -D warnings`
+  - [x] Running app (Primitive model, fresh prefs): user flipped Windows contrast theme on → app went High contrast within 3 s, off → back to Dark; Animation effects off → camera view buttons jump (24–330 of 10 582 sampled pixels change, the droid's own motion), on → glide (1 393–5 544); saved prefs held only `theme`
+  - [x] Focus ring seen in all three themes on the 3D view (all four sides), dock tabs, toolbar buttons; in Dark also the palette search box (rows are marked by the selection fill, 3.11:1), Droid status rows, plot table rows and a detached Plot window
+  - [x] No behaviour change: click boop (`[sim] boop 0.7 g from +Z`, noseBoops), orbit drag, View menu, palette, detach + Dock back, Parts add (auto-saved) + Undo
+  - [ ] Not checked live: Windows text size (no change requested of the user; mapping unit-tested), a saved Light/Dark pick staying put while Windows flips (unit-tested)
+  - [x] Commit, push, PR into `feature/a11y-announce` (#102)
+
+### Review (stage 5)
+- **winit only sends `WindowThemeChanged` when its own light/dark verdict flips** (winit 0.30.13 `event_loop.rs` `WM_SETTINGCHANGE`; its verdict is `apps_dark && !high_contrast`). A contrast theme turned on while Windows is in light mode, Animation effects and text size raise no event, so the settings are also re-read every 2 s (three `SystemParametersInfoW` calls and two registry reads); `ActiveTheme` is written only when something changed.
+- **Contrast before → after** (WCAG 2.2; "before" computed with the same formula on the old palette):
+
+  | Pair | Light | Dark | High contrast |
+  |---|---|---|---|
+  | weak text on panel | 4.39 → 5.10 | 5.64 → 6.38 | 7.37 → 8.63 |
+  | disabled text on panel | 3.24 → 5.10 | 4.35 → 6.38 | 5.32 → 8.63 |
+  | warn on striped row (`9A6700` → `8C5E00`) | 4.17 → 4.62 | — | — |
+  | ok on striped row (`007A5A` → `007656`) | 4.37 → 4.61 | — | — |
+  | accent text on striped row (`0072B2` → `006CAA`) | 4.24 → 4.61 | — | — |
+  | button border on panel (`border` → new `outline`) | 1.54 → 3.12 | 1.49 → 3.52 | 21 |
+  | selection on panel (translucent accent → opaque `selection`) | 1.64 → 3.11 | 2.02 → 3.11 | 2.85 → 3.47 |
+  | selected text on selection | 9.5 → 5.00 | 6.6 → 5.31 (now white) | 7.36 → 6.06 |
+  | plot marker_motion (`B59B00` → `A08800`) | 2.74 → 3.49 | — | — |
+
+  Every other pair already passed. Separators (`border`) stay faint: they are decorative, and controls now carry the 3:1 edge.
+- **Dark selection had no tint that works with the normal text colour**: 3:1 against the panel needs luminance ≥ 0.139, 4.5:1 for `E6E7EA` text needs ≤ 0.137. Selected text is pure white in Dark and High contrast (`selected_text`), Light keeps its text colour.
+- **Disabled text now passes 4.5:1** (WCAG exempts it, but the issue asked): egui's 0.5 alpha → 0.65, still clearly dimmer than enabled text (5:1 against 15:1 in Light).
+- **The 3D view's focus ring lost its left side**: the view touches the window's left edge and the ring is drawn just outside the widget. `focus_ring` now keeps the ring inside the window.
+- Prefs from older builds already contain `ui_scale = 1.0` / `animations = true`, which count as saved choices and keep winning; the README says to delete the lines or press Ctrl+0.
+- Not changed: the status line is a live text region, not a Tab stop, so it has no ring by design (stage 4); egui_dock splitters use the faint `border` colour (draggable, but not needed to tell panes apart); the slider trail uses the selection fill against the rail (the handle carries the value and passes).
 - [ ] Stage 6 — README Accessibility section; Narrator and Voice Access checks against the issue's "Done when"
 
 # Simulator: unit tests in CI, servo-part limits in the app — #88
