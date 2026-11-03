@@ -1,3 +1,21 @@
+# Simulator: Linux x86_64 build — #93 part 1
+
+Branch `feature/sim-linux` off `Documentation`. No packaging or release steps (#92's branch owns those); macOS is part 2. Windows build and `build.ps1` unchanged.
+
+- [x] Bevy `x11` + `wayland` features; `Cargo.lock` only gains 13 crates, none changed
+- [x] Dev image: Linux -dev packages; python-build-standalone CPython 3.13.5 (`20250708`), SHA-256 pinned and cross-checked against GitHub's asset digest
+- [x] `docker/build.sh`: `PLATFORM=windows|linux` (default windows); Linux links `-L` the real libpython folder, rpath `$ORIGIN/python/lib`, runs unit tests in the container, stages `dist/ddl0-sim` + trimmed `dist/python/`; `OWNER` chowns `dist/`
+- [x] `pyhost::use_bundled_python` sets PYTHONHOME first thing in `main()` (before any thread); `pyhost::command` keeps it out of launched programs (editor, file manager, gsettings)
+- [x] `deploy.rs`: Linux/macOS mount points, `first_dir` unit-tested
+- [x] `theme.rs`: GNOME settings via `gsettings`, cached and refreshed on a background thread; parsing unit-tested
+- [x] `simulator/build.sh` host script (`--run --debug --test --rebuild-image`; macOS message)
+- [x] CI `build-linux` job, actions pinned to SHAs; README
+- [x] Linux in Docker: fmt, clippy `-D warnings`, 153 unit tests, all scenarios
+- [x] Bundle: 48 MB (was 269: libpython debug symbols, Tcl/Tk, pip); on clean Debian with no Python, ldd finds libpython via rpath; headless.py passes on the trimmed stdlib
+- [x] Windows: `build.ps1 -Test` 153 tests + scenarios; app starts as before
+- [ ] CI green; one Linux test failed on purpose turns `build-linux` red
+- [ ] PR into `Documentation`
+
 # Simulator: choose the firmware folder — #105
 
 Branch `feature/firmware-folder-picker` off `Documentation`. Decisions: native dialog via `rfd`; remember the choice, changeable any time; simulator files found from the exe; folder must hold `code.py`.
