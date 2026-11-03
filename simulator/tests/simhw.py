@@ -386,8 +386,13 @@ def charge(kind):
     _debt[0] += BOARD.get(kind, 0.0) / 1000.0
     real = _debt[0] / SPEED
     if real >= 0.001:
-        _debt[0] = 0.0
+        t = time.monotonic()
         time.sleep(real)
+        # Pay back what was really slept. A sleep that wakes late (CI's macOS
+        # VM oversleeps millisecond sleeps several-fold) then leaves the debt
+        # negative, so the next charges don't sleep; otherwise every charge
+        # would be stretched and boot took 5x as long there.
+        _debt[0] -= (time.monotonic() - t) * SPEED
 
 
 def set_heap(desktop_bytes):
