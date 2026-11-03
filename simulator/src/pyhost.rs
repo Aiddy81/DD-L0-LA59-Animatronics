@@ -154,6 +154,8 @@ mod simhw {
             .file_name()
             .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
         s.end_skip(&format!("{name} started"));
+        // A caption, so no sound is only heard.
+        s.push_line(format!("[sim] Sound: {name}"));
         s.mark(MarkerKind::Sound, name);
         s.audio.push(AudioCmd::Play {
             path,

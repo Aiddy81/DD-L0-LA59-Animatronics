@@ -55,7 +55,25 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
 - `ui::boop_logged` writes the `[sim] boop … g from …` line for both the click boop and B, so the two can't drift apart.
 - Not changed: egui's arrow keys move focus between controls by position, so inside an open combo list Tab is the reliable way down (Down jumps to the nearest control); and the two or three unnamed tab stops before each pane's controls are egui_dock's collapse / close-all buttons already listed in stage 2.
 - `clippy --all-targets` flags `manual_range_contains` in an existing `part_edit.rs` test (from #65); the required `clippy --release --locked -D warnings` is clean. Left alone as out of scope.
-- [ ] Stage 4 — `feature/a11y-announce`: live status line, sound captions, droid status text, plot table view
+- [ ] **Stage 4 — `feature/a11y-announce`** (stacked on #99): live status line, sound captions, droid status text, plot table view
+  - [x] `announce.rs`: queue, coalescing (one message per burst, repeats counted, at most 3 parts keeping the important and latest), 1.5 s rate limit, errors never dropped (FIFO, overflow counted), repeat blank frame, behaviour debounce; marker texts (11 unit tests)
+  - [x] Status bar status line: polite live region, fed by markers, behaviour changes, tracebacks, deploy outcomes
+  - [x] Sound captions: `[sim] Sound: <file>` log line per `play_wav`; announcer "Sound: <name>"; Audio pane "Now playing: <file>" was already text
+  - [x] State pane "Droid status": wings, eyes, white LED, parts; each row a Tab stop
+  - [x] Plot "Table" toggle (remembered): latest / min / max per ticked series over the view; each row's name cell reads the whole row
+  - [x] Unit tests: status line is a polite live region and empty says nothing; droid status rows; series stats (gaps, empty); table rows read whole (18 new, 139 in all)
+  - [x] README Simulator section
+  - [x] `build.ps1 -Test` (139 passed, 7 scenarios), `cargo fmt --check`, `clippy --release --locked -D warnings`
+  - [x] Running app, UI Automation listener on LiveRegionChanged (the event Narrator reads): boop → "Boop 1.0 g. Sound: noseBoops", "Now nose boops"; 3 nudges → "Sound: angry. Now angry animation"; restart → "Restarted", "Now boot sequence"; each once, focus unchanged; the same message twice fires twice; Tab walks every Droid status row and table row with full sentences; log shows `[sim] Sound: angry.wav`
+  - [ ] Narrator by ear: not done here (I can't hear it); the UIA events it reads were checked — user
+  - [x] No behaviour change: click boop (firmware counted it), orbit drag, palette, View menu, Parts add + Ctrl+Z, detach State and Dock back
+  - [x] Commit, push, PR into `feature/a11y-3d-keys` (#100)
+
+### Review (stage 4)
+- **A text label's spoken name is its AccessKit value, not its label.** accesskit_windows takes the UIA name of a `Role::Label` node from `value` (egui puts a label's text there), so `a11y::label` did nothing on the table rows; Narrator read just "Wings R". New `a11y::says` sets the value; `a11y::live` does the same for the status line.
+- **Live regions fire on a name change only** (accesskit_windows 0.29 `adapter.rs`), so the same message twice would be silent. The announcer blanks the line for one frame before a repeat; an empty line has no value, so it raises nothing.
+- Events lag by up to the 1.5 s gap plus 0.25 s gathering; bursts read as one sentence. "Now settle" (the firmware's settle step between animations) is said too, since it is what the status bar shows.
+- **Found, not fixed (follow-up): the Lola glTF model crashes the app on Bevy 0.17** (`scene contains the unregistered type Transform`, bevy_scene `scene_spawner.rs:621`). A fresh prefs file defaults to Lola, so a clean `dist\` crashes at start; earlier stages tested with prefs set to the primitive model. Tested here with `model_gltf = false`.
 - [ ] Stage 5 — `feature/a11y-visual`: WCAG contrast test, follow Windows high contrast / animations / text size, focus everywhere
 - [ ] Stage 6 — README Accessibility section; Narrator and Voice Access checks against the issue's "Done when"
 
