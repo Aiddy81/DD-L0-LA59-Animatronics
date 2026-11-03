@@ -1205,6 +1205,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn temporary_failing_macos_test() {
+        assert_eq!(1 + 1, 3, "deliberate failure: build-macos must go red");
+    }
+
+    #[test]
     fn macos_settings_parse_and_bad_ones_keep_defaults() {
         let os = parse_defaults(Some("Dark\n"), Some("1\n"), Some("1\n"));
         assert_eq!(
