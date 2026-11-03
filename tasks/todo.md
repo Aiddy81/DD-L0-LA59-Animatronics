@@ -134,6 +134,15 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
 - **Your own prefs file probably ignores Windows**: one written by a build before stage 5 has `ui_scale` and `animations`, so text size and Animation effects don't apply until those lines go (Ctrl+0 handles only the scale). A *Follow Windows* choice for Animations would remove the hand edit; proposed as a follow-up, not done here.
 - Synthetic Unicode (dictation) text into fields was fixed in stage 2 and not re-tested here.
 
+### Follow-up — Animations: follow Windows (`feature/animations-follow-windows`, stacked on #103)
+
+- [x] `ActiveTheme::reset_animations()` drops the saved choice (mirrors `reset_scale`); unit test `reset_animations_follows_windows_again`
+- [x] `Cmd::AnimationsReset`: palette row *Animations: follow Windows*, and a *Follow Windows* button beside the *Animations* checkbox in *⚙ View* (greyed out while nothing is saved)
+- [x] README: palette list, *Animations* bullet, older-prefs note, *Following Windows* bullet no longer say to edit the prefs file
+- [x] `build.ps1 -Test` (147 unit tests, scenarios pass); fmt and clippy `--release --locked -D warnings` clean in the container
+- [x] Running app, Primitive model: prefs `animations = false` with Windows' Animation effects on → checkbox off; palette *Animations: follow Windows* → checkbox on, button disabled, `animations` line gone from the prefs file (test prefs deleted afterwards)
+- [ ] Flipping Windows' Animation effects after the reset — user (system setting); covered by the unit test via `set_os`
+
 # Simulator: unit tests in CI, servo-part limits in the app — #88
 
 Branch: `feature/sim-tests-ci` off `Documentation`. The user approved the one `.github/workflows/simulator.yml` edit. Windows CI job chosen over Wine or Linux host tests: no image change, real Windows, same DLLs as the app.
