@@ -15,6 +15,7 @@ use bevy_egui::egui::{self, Color32, Stroke};
 use bevy_egui::EguiContexts;
 use egui_plot::{HLine, Line, LineStyle, Plot, PlotBounds, PlotPoint, Text, VLine};
 
+use crate::a11y;
 use crate::audio::{AudioMix, NowPlaying, Sounds};
 use crate::capture::{unix_secs, ViewControls};
 use crate::config::{PartCfg, PartKind, PartSource, SimConfig};
@@ -553,14 +554,16 @@ fn menu_button<'a, R>(
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
     if egui::containers::menu::is_in_menu(ui) {
-        return ui.menu_button(label, body);
+        let mut menu = ui.menu_button(label, body);
+        menu.response = a11y::tidy(menu.response);
+        return menu;
     }
     let config = egui::containers::menu::MenuConfig::new()
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
     let (resp, inner) = egui::containers::menu::MenuButton::new(label)
         .config(config)
         .ui(ui, body);
-    egui::InnerResponse::new(inner.map(|i| i.inner), resp)
+    egui::InnerResponse::new(inner.map(|i| i.inner), a11y::tidy(resp))
 }
 
 /// Hover text for a control. When `cmd` has a key binding in `SHORTCUTS` the
@@ -576,8 +579,10 @@ fn tip(resp: egui::Response, text: &str, cmd: Option<Cmd>) -> egui::Response {
         Some(keys) => format!("{text} ({keys})"),
         None => text.to_owned(),
     };
-    resp.on_hover_text(text.clone())
-        .on_disabled_hover_text(text)
+    a11y::tidy(
+        resp.on_hover_text(text.clone())
+            .on_disabled_hover_text(text),
+    )
 }
 
 /// What the controls and commands depend on, read fresh whenever it matters.
@@ -997,7 +1002,11 @@ fn eye_swatch(ui: &mut egui::Ui, duty_rgb: Vec3, outline: Color32) -> egui::Resp
         Stroke::new(1.0, outline),
         egui::StrokeKind::Inside,
     );
-    response.on_hover_text(eye_rgb_text(duty_rgb))
+    let text = eye_rgb_text(duty_rgb);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Eye colour: {text}"))
+    });
+    response.on_hover_text(text)
 }
 
 /// An eye's duty-cycle RGB as a fraction of the peak duty.
@@ -1406,7 +1415,7 @@ fn run_group(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>) {
 }
 
 fn speed_group(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>) {
-    row.label("Speed");
+    let label = row.label("Speed");
     let mut speed = hw().clock.speed;
     let can_set = cmd_enabled(Cmd::Speed(0), en);
     // Read back every frame so the slider follows presets and the end of a skip.
@@ -1417,7 +1426,7 @@ fn speed_group(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>) {
             .suffix("x"),
     );
     if tip(
-        slider,
+        slider.labelled_by(label.id),
         "How fast code.py's clock runs against real time (1x to 200x)",
         None,
     )
@@ -1462,11 +1471,13 @@ fn viewport_bar(
         label: &str,
         hint: &str,
         cmd: Cmd,
-    ) {
+    ) -> egui::Response {
         let resp = ui.add_enabled(cmd_enabled(cmd, en), egui::Button::new(label));
-        if tip(resp, hint, Some(cmd)).clicked() {
+        let resp = tip(resp, hint, Some(cmd));
+        if resp.clicked() {
             cmds.push(cmd);
         }
+        resp
     }
     ui.horizontal_wrapped(|ui| {
         for (label, view) in [
@@ -1491,7 +1502,8 @@ fn viewport_bar(
             "Close-up of the eyes",
             Cmd::Camera(CameraView::Eyes),
         );
-        button(
+        // The plot has a Reset too; Voice Access needs the two told apart.
+        let reset = button(
             ui,
             en,
             cmds,
@@ -1499,6 +1511,7 @@ fn viewport_bar(
             "Back to the starting view",
             Cmd::Camera(CameraView::Reset),
         );
+        a11y::name(reset, "Reset view");
         ui.separator();
         let light = menu_button(ui, "Light", |m| {
             for choice in RoomLight::ALL {
@@ -1654,7 +1667,10 @@ fn options_group(
 fn deploy_button(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>, short: bool) {
     let label = if short { "\u{2b06}" } else { "\u{2b06} Deploy" };
     if tip(
-        row.add_enabled(cmd_enabled(Cmd::Deploy, en), egui::Button::new(label)),
+        a11y::name(
+            row.add_enabled(cmd_enabled(Cmd::Deploy, en), egui::Button::new(label)),
+            "Deploy",
+        ),
         "Deploy to CIRCUITPY: copy the changed firmware files to the board (never lib/ or boot_out.txt)",
         None,
     )
@@ -1720,6 +1736,7 @@ fn panels(
     );
 
     egui::TopBottomPanel::top("toolbar").show(ctx, |bar| {
+        a11y::region(bar, "Toolbar");
         bar.horizontal(|row| {
             let gap = row.spacing().item_spacing.x * 3.0;
             let avail = row.available_width() - ui.right_width - gap;
@@ -1773,7 +1790,10 @@ fn panels(
             let right = row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |r| {
                 r.scope(|r| {
                     if tip(
-                        r.button(if crowded { "⌨" } else { "⌨ Shortcuts" }),
+                        a11y::name(
+                            r.button(if crowded { "⌨" } else { "⌨ Shortcuts" }),
+                            "Shortcuts",
+                        ),
                         "List every key and mouse control",
                         Some(Cmd::ToggleHelp),
                     )
@@ -1813,7 +1833,7 @@ fn panels(
                         )
                     });
                     tip(
-                        menu.response,
+                        a11y::name(menu.response, "View"),
                         "Panels, focus mode, theme and UI scale",
                         None,
                     );
@@ -1844,6 +1864,7 @@ fn panels(
     let status = egui::TopBottomPanel::bottom("status")
         .resizable(false)
         .show(ctx, |bar| {
+            a11y::region(bar, "Status bar");
             bar.horizontal(|row| {
                 status_bar(
                     row,
@@ -2030,7 +2051,7 @@ fn panels(
                     r.separator();
                     // Laid out right to left, so + comes first.
                     if tip(
-                        r.small_button("+"),
+                        a11y::name(r.small_button("+"), "Larger UI"),
                         "Larger UI in this window",
                         Some(Cmd::ScaleUp),
                     )
@@ -2039,7 +2060,10 @@ fn panels(
                         wcmds.push(Cmd::ScaleUp);
                     }
                     if tip(
-                        r.small_button(format!("{:.0}%", window.scale * 100.0)),
+                        a11y::name(
+                            r.small_button(format!("{:.0}%", window.scale * 100.0)),
+                            &format!("Reset UI scale, now {:.0}%", window.scale * 100.0),
+                        ),
                         "This window's UI scale; click to reset to 100%",
                         Some(Cmd::ScaleReset),
                     )
@@ -2048,7 +2072,7 @@ fn panels(
                         wcmds.push(Cmd::ScaleReset);
                     }
                     if tip(
-                        r.small_button("−"),
+                        a11y::name(r.small_button("−"), "Smaller UI"),
                         "Smaller UI in this window",
                         Some(Cmd::ScaleDown),
                     )
@@ -2480,6 +2504,8 @@ struct PaneCx<'a> {
 fn draw_pane(ui: &mut egui::Ui, pane: Pane, cx: &mut PaneCx) {
     let paths = cx.paths;
     let fw_dir = paths.code.parent().unwrap_or(Path::new("."));
+    // Docked or in its own window, the pane is announced by its title.
+    a11y::region(ui, pane.title());
     match pane {
         // Measured by the dock's viewer; the 3D scene is rendered behind egui.
         Pane::Viewport => {}
@@ -2748,10 +2774,13 @@ fn log_panel(
             return;
         }
         tip(
-            row.add(
-                egui::TextEdit::singleline(&mut ui.log_filter)
-                    .hint_text("search")
-                    .desired_width(180.0),
+            a11y::label(
+                row.add(
+                    egui::TextEdit::singleline(&mut ui.log_filter)
+                        .hint_text("search")
+                        .desired_width(180.0),
+                ),
+                "Search the log",
             ),
             "Show only the log lines containing this text",
             None,
@@ -2788,7 +2817,7 @@ fn log_panel(
             row.ctx().copy_text(text);
         }
         if tip(
-            row.button("Save"),
+            a11y::name(row.button("Save"), "Save log"),
             "Save the whole log to the captures folder next to the exe",
             None,
         )
@@ -3194,7 +3223,7 @@ fn layouts_menu(
     let mut action = None;
     let mut builtin = None;
     let folder = captures.paths.layouts.display().to_string();
-    m.menu_button("Layouts", |m| {
+    menu_button(m, "Layouts", |m| {
         for name in layout::BUILTINS {
             if m.button(name).clicked() {
                 builtin = Some(name);
@@ -3208,7 +3237,8 @@ fn layouts_menu(
                 if row.button(name).clicked() {
                     action = Some(LayoutAction::User(name.clone()));
                 }
-                if tip(row.small_button("✖"), "Delete this layout", None).clicked() {
+                let delete = a11y::name(row.small_button("✖"), &format!("Delete layout {name}"));
+                if tip(delete, "Delete this layout", None).clicked() {
                     action = Some(LayoutAction::Delete(name.clone()));
                 }
             });
@@ -3272,13 +3302,7 @@ fn layouts_menu(
             m.weak("No .layout.toml files yet");
         }
         for (name, path) in &ui.layout_files {
-            if tip(
-                m.button(format!("  {name}")),
-                "Load this layout file",
-                None,
-            )
-            .clicked()
-            {
+            if tip(m.button(format!("  {name}")), "Load this layout file", None).clicked() {
                 action = Some(LayoutAction::Import(path.clone()));
             }
         }
@@ -3335,7 +3359,7 @@ fn appearance_controls(
             }
         });
     tip(
-        combo.response,
+        a11y::label(combo.response, "Theme"),
         "Follow system tracks the Windows light/dark setting",
         None,
     );
@@ -3350,7 +3374,11 @@ fn appearance_controls(
         .suffix("%")
         .integer(),
     );
-    let slider = tip(slider, "Scale the whole interface", None);
+    let slider = tip(
+        a11y::label(slider, "UI scale"),
+        "Scale the whole interface",
+        None,
+    );
     let mut new_scale = None;
     if slider.dragged() {
         *scale_drag = Some(percent);
@@ -3433,7 +3461,11 @@ fn scenario_row(
                 list.selectable_value(&mut ui.scenario_choice, name.clone(), name);
             }
         });
-    tip(picker.response, "Which scenario Run scenario plays", None);
+    tip(
+        a11y::label(picker.response, "Scenario"),
+        "Which scenario Run scenario plays",
+        None,
+    );
     if row
         .button("Run scenario")
         .on_hover_text("Restart code.py and play the scenario against it")
@@ -3618,6 +3650,16 @@ enum Band {
 }
 
 impl Band {
+    /// The plot's accessible name.
+    fn title(self) -> &'static str {
+        match self {
+            Band::Wings => "Wing angles plot",
+            Band::Leds => "LED duty plot",
+            Band::Accel => "Acceleration plot",
+            Band::Heap => "Heap plot",
+        }
+    }
+
     fn format(self, v: f32) -> String {
         match self {
             Band::Wings => format!("{v:.0}\u{b0}"),
@@ -3877,7 +3919,7 @@ fn plot_panel(
     palette: &Palette,
 ) {
     ui.horizontal_wrapped(|row| {
-        egui::ComboBox::from_id_salt("plot_window")
+        let window = egui::ComboBox::from_id_salt("plot_window")
             .selected_text(window_label(state.window_s))
             .show_ui(row, |menu| {
                 for w in PLOT_WINDOWS {
@@ -3889,6 +3931,7 @@ fn plot_panel(
                     }
                 }
             });
+        a11y::label(window.response, "Time window");
         let mut frozen = state.frozen_at.is_some();
         if row
             .toggle_value(&mut frozen, "Freeze")
@@ -3901,8 +3944,8 @@ fn plot_panel(
                 None
             };
         }
-        if row
-            .add_enabled(!state.following, egui::Button::new("Reset"))
+        let reset = row.add_enabled(!state.following, egui::Button::new("Reset"));
+        if a11y::name(reset, "Reset plot")
             .on_hover_text("Go back to following the window (or double-click a plot)")
             .clicked()
         {
@@ -3930,10 +3973,12 @@ fn plot_panel(
                 grid.label(egui::RichText::new(*group).small());
                 grid.horizontal(|row| {
                     for (i, s) in SERIES.iter().enumerate().filter(|(_, s)| s.group == *group) {
-                        row.checkbox(
+                        let toggle = row.checkbox(
                             &mut state.visible[i],
                             egui::RichText::new(s.short).color((s.color)(palette)),
                         );
+                        // "main eye R", not one of several "R"s.
+                        a11y::label(toggle, &series_name(i));
                     }
                 });
                 if (n + 1) % per_row == 0 {
@@ -4035,7 +4080,8 @@ fn plot_panel(
                     .map(|c| c.x)
             });
         hover_t = hover_t.or(response.inner);
-        reset |= response.response.double_clicked();
+        let plot = a11y::label(response.response, band.title());
+        reset |= plot.double_clicked();
         let b = response.transform.bounds();
         if n == 0 {
             state.view_x = (b.min()[0], b.max()[0]);
@@ -4296,19 +4342,20 @@ fn settings_panel(
                             let mut value = edit.or(saved).unwrap_or(0);
                             // Big values (seconds in hours) would take forever at 1 per pixel.
                             let speed = (value.abs() as f64 / 200.0).max(1.0);
-                            let changed = grid
-                                .add(egui::DragValue::new(&mut value).speed(speed))
+                            let field = grid.add(egui::DragValue::new(&mut value).speed(speed));
+                            let changed = a11y::label(field, &t.key)
                                 .on_hover_text(&help)
                                 .changed();
                             if changed {
                                 state.set(t, value);
                             }
                             grid.label(default);
-                            let reset = grid
-                                .add_enabled(
-                                    t.default.is_some_and(|d| d != value),
-                                    egui::Button::new("Reset").small(),
-                                )
+                            let reset = grid.add_enabled(
+                                t.default.is_some_and(|d| d != value),
+                                egui::Button::new("Reset").small(),
+                            );
+                            // Every row has one, so the key keeps "click Reset X" unique.
+                            let reset = a11y::name(reset, &format!("Reset {}", t.key))
                                 .on_hover_text("Back to the default in config.py")
                                 .clicked();
                             if let (true, Some(d)) = (reset, t.default) {
@@ -4673,7 +4720,10 @@ fn audio_panel(ui: &mut egui::Ui, audio: &mut AudioUi, fw_dir: &Path, palette: &
     let (mute_changed, volume_changed) = ui
         .horizontal(|row| {
             let mute = row.checkbox(&mut muted, "Mute");
-            let volume = row.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %"));
+            let volume = a11y::label(
+                row.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %")),
+                "Volume",
+            );
             (mute.changed(), volume.changed())
         })
         .inner;
@@ -4970,6 +5020,109 @@ mod table_tests {
         for name in layout::BUILTINS {
             assert!(has(Cmd::Layout(name)), "{name}");
         }
+    }
+}
+
+/// Names screen readers read and Voice Access matches ("click Restart").
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::tests::named_nodes;
+    use bevy_egui::egui::accesskit::Role;
+
+    /// The roles people activate by name.
+    const SAYABLE: [Role; 4] = [
+        Role::Button,
+        Role::CheckBox,
+        Role::RadioButton,
+        Role::ListBoxOption,
+    ];
+
+    fn enabled(running: bool, paused: bool) -> Enabled {
+        Enabled {
+            running,
+            paused,
+            skipping: false,
+            deploying: false,
+            gltf_available: true,
+            detached_window: false,
+            focus_mode: false,
+            panel_focused: false,
+        }
+    }
+
+    fn row_nodes(mut draw: impl FnMut(&mut egui::Ui)) -> Vec<(Role, String)> {
+        named_nodes(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.horizontal(|row| draw(row));
+            });
+        })
+    }
+
+    /// Every sayable control in `nodes` has a name, it doesn't start with a
+    /// glyph, and no two share it.
+    fn assert_sayable(group: &str, nodes: &[(Role, String)]) {
+        let mut seen: Vec<&str> = Vec::new();
+        for (role, name) in nodes.iter().filter(|(r, _)| SAYABLE.contains(r)) {
+            assert!(!name.trim().is_empty(), "{group}: a {role:?} has no name");
+            assert_eq!(
+                a11y::spoken(name),
+                name,
+                "{group}: {name:?} starts with a glyph"
+            );
+            assert!(!seen.contains(&name.as_str()), "{group}: {name:?} twice");
+            seen.push(name);
+        }
+        assert!(!seen.is_empty(), "{group}: no named controls");
+    }
+
+    #[test]
+    fn toolbar_groups_have_sayable_names() {
+        let mut cmds = Vec::new();
+        for (running, paused) in [(false, false), (true, false), (true, true)] {
+            let en = enabled(running, paused);
+            let run = row_nodes(|row| run_group(row, &en, &mut cmds));
+            assert_sayable("Run", &run);
+            assert!(run.iter().any(|(_, n)| n == "Stop"), "{run:?}");
+        }
+        let en = enabled(true, false);
+        assert_sayable("Speed", &row_nodes(|row| speed_group(row, &en, &mut cmds)));
+        let options = row_nodes(|row| {
+            options_group(row, &en, true, Some(true), Path::new("."), &mut cmds);
+        });
+        assert_sayable("Options", &options);
+        // Crowded, the Deploy button is only an arrow.
+        let deploy = row_nodes(|row| deploy_button(row, &en, &mut cmds, true));
+        assert!(
+            deploy.contains(&(Role::Button, "Deploy".into())),
+            "{deploy:?}"
+        );
+    }
+
+    #[test]
+    fn palette_rows_have_sayable_names() {
+        let rows: Vec<palette::Row<()>> = SHORTCUTS
+            .iter()
+            .filter(|row| row.cmd.is_some())
+            .map(|row| palette::Row {
+                group: row.group,
+                label: row.label().into_owned(),
+                keys: row.keys,
+                enabled: true,
+                checked: None,
+                item: (),
+            })
+            .collect();
+        let nodes = named_nodes(|ctx| {
+            palette::open(ctx);
+            palette::show(ctx, &rows, crate::theme::test_palette());
+        });
+        assert_sayable("Palette", &nodes);
+        let options = nodes
+            .iter()
+            .filter(|(r, _)| *r == Role::ListBoxOption)
+            .count();
+        assert_eq!(options, rows.len());
     }
 }
 
