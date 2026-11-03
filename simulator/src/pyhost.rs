@@ -351,7 +351,7 @@ mod simhw {
 /// A part call's name argument. A name longer than any part's is cut, so it
 /// can't grow the warning set; a non-string warns and gives `None`.
 fn part_name(name: &Bound<'_, PyAny>, call: &str) -> Option<String> {
-    match name.downcast::<PyString>() {
+    match name.cast::<PyString>() {
         Ok(text) => Some(
             text.to_string_lossy()
                 .chars()
@@ -369,7 +369,7 @@ fn part_name(name: &Bound<'_, PyAny>, call: &str) -> Option<String> {
 /// which code.py can beat. Waits for that (once a run, about a frame), with
 /// the GIL released.
 fn wait_for_parts(py: Python<'_>) {
-    py.allow_threads(|| {
+    py.detach(|| {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             {
@@ -398,7 +398,7 @@ fn rgb(item: &Bound<'_, PyAny>) -> Option<[f64; 3]> {
 /// A `set_part` value: a bool (checked first, as Python's `True` is also an
 /// int), a number, or `(r, g, b)`.
 fn shim_value(value: &Bound<'_, PyAny>) -> Result<ShimValue, &'static str> {
-    if let Ok(on) = value.downcast::<PyBool>() {
+    if let Ok(on) = value.cast::<PyBool>() {
         return Ok(ShimValue::On(on.is_true()));
     }
     if let Ok(x) = value.extract::<f64>() {
@@ -471,7 +471,7 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
 /// Must run before anything touches Python.
 pub fn init_python() {
     pyo3::append_to_inittab!(simhw);
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 }
 
 pub struct PyHost {
@@ -572,7 +572,7 @@ fn scenario_dict<'py>(py: Python<'py>, run: &ScenarioRun) -> PyResult<Bound<'py,
 }
 
 fn run_code(path: &Path, shim_dir: &Path, fs_dir: &Path, scenario: Option<&ScenarioRun>) {
-    let result = Python::with_gil(|py| -> PyResult<()> {
+    let result = Python::attach(|py| -> PyResult<()> {
         let runtime = PyModule::from_code(
             py,
             &std::ffi::CString::new(RUNTIME)?,
