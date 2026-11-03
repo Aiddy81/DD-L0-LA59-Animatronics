@@ -466,7 +466,7 @@ GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. I
 
 A `build-linux` job builds the Linux simulator in the same image (`PLATFORM=linux` for `docker/build.sh`), with rustfmt and clippy, runs the Rust unit tests and the scenario checks there, and attaches the built `ddl0-sim-linux` folder to the run. Locally on Linux, `./simulator/build.sh --test` does the same.
 
-A `build-macos` job does the same natively on an Apple Silicon runner (`macos-14`, `PLATFORM=macos`, Rust 1.92 through rustup), checks that the binary loads libpython through `@rpath` and is signed, and attaches `ddl0-sim-macos-arm64`. `package` waits for every build job.
+A `build-macos` job builds natively on an Apple Silicon runner (`macos-14`, `PLATFORM=macos`, Rust 1.92 through rustup) with rustfmt, clippy and the Rust unit tests, checks that the binary loads libpython through `@rpath` and is signed, and attaches `ddl0-sim-macos-arm64`. It skips the scenario checks (`SCENARIOS=0`): that runner is a VM whose sleeps run 5-10x long, too slow for their real-time clock, and they're the same Python the other jobs check. On a real Mac, `./simulator/build.sh --test` runs them. `package` waits for every build job.
 
 ### Releasing
 

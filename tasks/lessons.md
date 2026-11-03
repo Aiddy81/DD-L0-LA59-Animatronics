@@ -19,3 +19,7 @@
 ## Simulator UI (PR 5 of #80, Oct 2026)
 
 - **Overlay pointers were off and I hadn't noticed (the user did).** Two causes: an engine call's coordinate space assumed rather than read (`world_to_viewport` already includes the viewport offset), and anchors taken from node origins (a wing's hinge) instead of what is drawn. Rule: check a projection against a point with a known screen position (the camera's look-at point is the view's centre) before trusting it, and anchor labels on the visible geometry, then zoom into the capture to confirm each pointer touches its part.
+
+## macOS build (#93 part 2, Nov 2026)
+
+- **Measure on the machine before fixing a timing failure.** The scenario checks failed only on CI's macOS runner; I changed the speed and then the harness's sleep accounting, and neither helped, because both were guesses. A one-step probe showed the runner VM sleeps 5-10x long. Rule: when timing differs on one machine, time `sleep`/`select` there first, then decide.
