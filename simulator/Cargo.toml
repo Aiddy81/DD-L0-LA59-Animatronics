@@ -47,6 +47,9 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 # Rewrites parts.toml in place, keeping its comments and order (0.22 is the one toml 0.8 already uses).
 toml_edit = "=0.22.27"
+# The native folder picker for choosing the firmware folder (#105). On Windows it
+# only adds windows-sys 0.61, already in the tree; its defaults are Linux backends (#93).
+rfd = "=0.17.2"
 
 # Volume-label lookup for the one-click deploy, the OS light/dark setting and the
 # pointer position for tearing a panel off into its own window. 0.61.2 is already in the tree via winit.

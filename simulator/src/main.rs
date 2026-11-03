@@ -62,35 +62,16 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// `ddl0-sim.exe [path\to\code.py]`; otherwise walk up from the exe to
-    /// the repo that contains PropMaker_Feather/code.py.
-    fn discover() -> Result<Self, String> {
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(Path::to_path_buf))
-            .unwrap_or_else(|| PathBuf::from("."));
-        let code = match std::env::args_os().nth(1) {
-            Some(arg) => PathBuf::from(arg),
-            None => exe_dir
-                .ancestors()
-                .map(|dir| dir.join("PropMaker_Feather").join("code.py"))
-                .find(|p| p.is_file())
-                .ok_or_else(|| {
-                    format!(
-                        "could not find PropMaker_Feather/code.py above {}",
-                        exe_dir.display()
-                    )
-                })?,
-        };
-        let code = std::fs::canonicalize(&code).map_err(|e| format!("{}: {e}", code.display()))?;
-        let code = strip_verbatim(code);
-        let repo = code
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
-        let simulator = repo.join("simulator");
-        Ok(Self {
+    /// The simulator's own files are found from the exe, so the firmware can
+    /// live anywhere. `code` is the firmware's code.py, if one was found.
+    fn new(exe_dir: &Path, code: PathBuf) -> Self {
+        // The exe lives in simulator/dist; a copy elsewhere falls back to its parent.
+        let simulator = exe_dir
+            .ancestors()
+            .map(|dir| dir.join("simulator"))
+            .find(|dir| dir.join("assets").is_dir())
+            .unwrap_or_else(|| exe_dir.parent().unwrap_or(exe_dir).to_path_buf());
+        Self {
             code,
             assets: simulator.join("assets"),
             captures: exe_dir.join("captures"),
@@ -99,8 +80,78 @@ impl Paths {
             fs: exe_dir.join("fs"),
             layouts: exe_dir.join("layouts"),
             simulator,
-        })
+        }
     }
+
+    /// The firmware folder: the one code.py is in.
+    pub fn fw_dir(&self) -> &Path {
+        self.code.parent().unwrap_or(Path::new("."))
+    }
+}
+
+/// The code.py inside `dir`, or why `dir` can't be the firmware folder.
+pub fn firmware_code_path(dir: &Path) -> Result<PathBuf, String> {
+    let code = dir.join("code.py");
+    if !code.is_file() {
+        return Err(format!("No code.py in {}", dir.display()));
+    }
+    std::fs::canonicalize(&code)
+        .map(strip_verbatim)
+        .map_err(|e| format!("{}: {e}", code.display()))
+}
+
+/// Where code.py is, first match wins: `ddl0-sim.exe [path\to\code.py]`, the
+/// folder saved in the prefs (if it still has code.py), then
+/// PropMaker_Feather/code.py in a folder above the exe.
+fn find_firmware(exe_dir: &Path, saved: Option<&Path>) -> Result<Option<PathBuf>, String> {
+    if let Some(arg) = std::env::args_os().nth(1) {
+        let code = PathBuf::from(arg);
+        return std::fs::canonicalize(&code)
+            .map(|c| Some(strip_verbatim(c)))
+            .map_err(|e| format!("{}: {e}", code.display()));
+    }
+    if let Some(code) = saved.and_then(|dir| firmware_code_path(dir).ok()) {
+        return Ok(Some(code));
+    }
+    Ok(exe_dir
+        .ancestors()
+        .map(|dir| dir.join("PropMaker_Feather"))
+        .find_map(|dir| firmware_code_path(&dir).ok()))
+}
+
+/// Asks for the firmware folder until one with code.py is picked; `None` if
+/// the user cancels. Runs before the app window exists, so blocking is fine.
+fn ask_for_firmware(exe_dir: &Path) -> Option<PathBuf> {
+    let mut start = exe_dir.to_path_buf();
+    loop {
+        let dir = rfd::FileDialog::new()
+            .set_title("Choose the firmware folder (the one with code.py)")
+            .set_directory(&start)
+            .pick_folder()?;
+        match firmware_code_path(&dir) {
+            Ok(code) => return Some(code),
+            Err(e) => {
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title("DD-L0-LA59 Simulator")
+                    .set_description(e)
+                    .show();
+                start = dir;
+            }
+        }
+    }
+}
+
+/// Shows a startup error. The release exe has no console, so eprintln alone
+/// would vanish.
+fn fail(msg: &str) -> ! {
+    eprintln!("ddl0-sim: {msg}");
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("DD-L0-LA59 Simulator")
+        .set_description(msg)
+        .show();
+    std::process::exit(2);
 }
 
 /// canonicalize() returns `\\?\C:\...` on Windows, which Python's
@@ -113,13 +164,35 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
 }
 
 fn main() {
-    let paths = match Paths::discover() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("ddl0-sim: {e}");
-            std::process::exit(2);
-        }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    // The prefs come first: they may say where the firmware is.
+    let mut paths = Paths::new(&exe_dir, PathBuf::new());
+    let (mut prefs, prefs_warning) = prefs::load(&paths.prefs);
+    if let Some(w) = prefs_warning {
+        hw().push_line(w);
+    }
+    paths.code = match find_firmware(&exe_dir, prefs.firmware_dir.as_deref()) {
+        Ok(Some(code)) => code,
+        Ok(None) => match ask_for_firmware(&exe_dir) {
+            Some(code) => {
+                // Saved now: save_prefs only writes what changed while running.
+                prefs.firmware_dir = code.parent().map(Path::to_path_buf);
+                if let Err(e) = prefs.save(&paths.prefs) {
+                    hw().push_line(format!("[sim] could not save preferences: {e}"));
+                }
+                code
+            }
+            None => fail(&format!(
+                "No firmware folder chosen, and no PropMaker_Feather/code.py above {}.",
+                exe_dir.display()
+            )),
+        },
+        Err(e) => fail(&e),
     };
+    hw().push_line(format!("[sim] firmware: {}", paths.fw_dir().display()));
     let sim_toml = paths.simulator.join("sim.toml");
     let (cfg, cfg_warning) = SimConfig::load(&sim_toml);
     let sim_toml_mtime = ui::file_mtime(&sim_toml);
@@ -127,10 +200,6 @@ fn main() {
         hw().push_line(w);
     }
     hw().board = cfg.board.clone();
-    let (prefs, prefs_warning) = prefs::load(&paths.prefs);
-    if let Some(w) = prefs_warning {
-        hw().push_line(w);
-    }
     {
         let mut s = hw();
         s.strict = prefs.strict;
@@ -214,4 +283,61 @@ fn main() {
             overlay::OverlayPlugin,
         ))
         .run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scratch folder, removed again when dropped.
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn new(name: &str) -> Self {
+            let p = std::env::temp_dir().join(format!("ddl0-fw-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Tmp(p)
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn firmware_folder_needs_code_py() {
+        let t = Tmp::new("empty");
+        let err = firmware_code_path(&t.0).unwrap_err();
+        assert!(err.starts_with("No code.py in"), "{err}");
+    }
+
+    #[test]
+    fn code_py_must_be_a_file() {
+        let t = Tmp::new("dir");
+        std::fs::create_dir(t.0.join("code.py")).unwrap();
+        assert!(firmware_code_path(&t.0).is_err());
+    }
+
+    #[test]
+    fn firmware_folder_gives_plain_code_path() {
+        let t = Tmp::new("ok");
+        std::fs::write(t.0.join("code.py"), "").unwrap();
+        let code = firmware_code_path(&t.0).unwrap();
+        assert_eq!(code.file_name().unwrap(), "code.py");
+        // No \?\ prefix, which tracebacks would print.
+        assert!(!code.to_string_lossy().starts_with(r"\?\"), "{code:?}");
+        assert!(code.is_file());
+    }
+
+    #[test]
+    fn simulator_files_found_above_the_exe() {
+        let t = Tmp::new("layout");
+        let dist = t.0.join("simulator").join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::create_dir_all(t.0.join("simulator").join("assets")).unwrap();
+        let paths = Paths::new(&dist, PathBuf::from("elsewhere/code.py"));
+        assert_eq!(paths.simulator, t.0.join("simulator"));
+        assert_eq!(paths.fw_dir(), Path::new("elsewhere"));
+    }
 }

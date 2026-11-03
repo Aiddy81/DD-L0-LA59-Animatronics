@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -230,6 +230,8 @@ enum Cmd {
     /// True for the Lola glTF model, false for the primitive shapes.
     Model(bool),
     Deploy,
+    /// Open the folder dialog to pick the firmware folder.
+    ChooseFirmware,
     TogglePane(Pane),
     Theme(ThemeChoice),
     /// A built-in layout, by name.
@@ -354,6 +356,7 @@ const SHORTCUTS: &[Shortcut] = &[
         Cmd::Idle,
     ),
     action("Run", "Deploy to CIRCUITPY", Cmd::Deploy),
+    action("Run", "Choose the firmware folder", Cmd::ChooseFirmware),
     // Before the plain-letter keys below, so Ctrl+S is never also S (shake).
     bound(
         "Parts",
@@ -639,6 +642,8 @@ struct Enabled {
     paused: bool,
     skipping: bool,
     deploying: bool,
+    /// The firmware folder dialog is open.
+    picking: bool,
     gltf_available: bool,
     /// The command comes from a detached panel window, not the main one.
     detached_window: bool,
@@ -650,6 +655,7 @@ struct Enabled {
 fn read_enabled(
     host: &PyHost,
     deploy: &DeployDlg,
+    picking: bool,
     gltf_available: bool,
     dock: &mut Dock,
     detached_window: bool,
@@ -663,6 +669,7 @@ fn read_enabled(
         paused,
         skipping,
         deploying: matches!(deploy, DeployDlg::Running(_)),
+        picking,
         gltf_available,
         detached_window,
         focus_mode: dock.focus.is_some(),
@@ -678,6 +685,8 @@ fn cmd_enabled(cmd: Cmd, en: &Enabled) -> bool {
         Cmd::Step | Cmd::StepShort => en.paused,
         Cmd::Speed(_) => !en.skipping,
         Cmd::Deploy => !en.deploying,
+        // Not mid-copy: the deploy is reading the current folder.
+        Cmd::ChooseFirmware => !en.picking && !en.deploying,
         Cmd::Model(true) => en.gltf_available,
         Cmd::Focus => !en.detached_window,
         Cmd::FloatPanel | Cmd::DetachPanel | Cmd::ClosePanel => {
@@ -725,6 +734,9 @@ pub struct UiState {
     drive_file: DriveFile,
     /// The Shortcuts window; not saved to prefs.
     deploy: DeployDlg,
+    /// The open firmware folder dialog's answer: the folder, or `None` if cancelled.
+    /// In a Mutex because a resource must be Sync and a Receiver isn't.
+    firmware_pick: Option<Mutex<mpsc::Receiver<Option<PathBuf>>>>,
     /// UI scale (percent) while its slider is being dragged. Zooming the UI
     /// under the cursor mid-drag would move the slider away from it, so the
     /// scale is applied on release.
@@ -852,6 +864,7 @@ impl UiState {
             log_highlight: None,
             drive_file: DriveFile::default(),
             deploy: DeployDlg::Closed,
+            firmware_pick: None,
             scale_drag: None,
             group_widths: [0.0; TOOLBAR_GROUPS],
             menu_widths: [DEFAULT_MENU_WIDTH; TOOLBAR_GROUPS],
@@ -876,7 +889,13 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (record_history, hot_reload, panels.in_set(UiSet)).chain(),
+            (
+                record_history,
+                apply_firmware_pick,
+                hot_reload,
+                panels.in_set(UiSet),
+            )
+                .chain(),
         )
         .add_systems(Last, (stop_on_exit, save_prefs));
     }
@@ -992,6 +1011,7 @@ fn save_prefs(
         plot_window_s: ui.plot.window_s,
         plot_hidden: ui.plot.hidden(),
         plot_table: ui.plot.table,
+        firmware_dir: saved.firmware_dir.clone(),
         layout: Some(dock::snapshot(&dock, state.detached.clone())),
         layouts: saved.layouts.clone(),
     };
@@ -1196,6 +1216,75 @@ fn run_scenario(host: &mut PyHost, cfg: &SimConfig, paths: &crate::Paths, name: 
     });
 }
 
+/// Opens the native folder dialog on its own thread, so the app keeps drawing
+/// while it's up; `apply_firmware_pick` reads the answer.
+fn open_firmware_pick(start: &Path) -> Option<Mutex<mpsc::Receiver<Option<PathBuf>>>> {
+    let (tx, rx) = mpsc::channel();
+    let start = start.to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("firmware-pick".into())
+        .spawn(move || {
+            let dir = rfd::FileDialog::new()
+                .set_title("Choose the firmware folder (the one with code.py)")
+                .set_directory(&start)
+                .pick_folder();
+            // The app may have closed meanwhile; nothing is waiting then.
+            let _ = tx.send(dir);
+        });
+    match spawned {
+        Ok(_) => Some(Mutex::new(rx)),
+        Err(e) => {
+            hw().push_line(format!("[sim] cannot open the folder dialog: {e}"));
+            None
+        }
+    }
+}
+
+/// Switches to the folder picked in the dialog: code.py restarts from there
+/// and the choice is saved. A folder without code.py changes nothing.
+fn apply_firmware_pick(
+    mut ui: ResMut<UiState>,
+    mut host: ResMut<Host>,
+    mut paths: ResMut<crate::Paths>,
+    mut prefs: ResMut<Prefs>,
+    mut toasts: ResMut<Toasts>,
+) {
+    let Some(rx) = ui.firmware_pick.as_ref() else {
+        return;
+    };
+    let received = rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv();
+    let picked = match received {
+        Ok(picked) => picked,
+        Err(mpsc::TryRecvError::Empty) => return,
+        Err(mpsc::TryRecvError::Disconnected) => None,
+    };
+    ui.firmware_pick = None;
+    let Some(dir) = picked else {
+        return;
+    };
+    let code = match crate::firmware_code_path(&dir) {
+        Ok(code) => code,
+        Err(e) => {
+            toasts.push(ToastKind::Error, e, None);
+            return;
+        }
+    };
+    if code == paths.code {
+        return;
+    }
+    host.0.set_code_path(code.clone());
+    paths.code = code;
+    let dir = paths.fw_dir().to_path_buf();
+    hw().push_line(format!("[sim] firmware: {}", dir.display()));
+    // A copied folder can keep the old files' times, so nothing is assumed
+    // to carry over from the previous folder.
+    ui.code_mtime = firmware_mtime(&paths.code);
+    ui.settings = SettingsState::default();
+    host.0.start();
+    toasts.push(ToastKind::Ok, format!("Firmware: {}", dir.display()), None);
+    prefs.firmware_dir = Some(dir);
+}
+
 fn hot_reload(
     mut ui: ResMut<UiState>,
     mut host: ResMut<Host>,
@@ -1210,9 +1299,7 @@ fn hot_reload(
     ui.last_check = Instant::now();
     reload_sim_toml(&mut ui, &mut cfg, &paths.simulator.join("sim.toml"));
     ui.scenarios = list_scenarios(&paths.simulator.join("scenarios"));
-    if let Some(dir) = paths.code.parent() {
-        ui.settings.refresh(dir);
-    }
+    ui.settings.refresh(paths.fw_dir());
     let mtime = firmware_mtime(host.0.code_path());
     let shims = shims_mtime(host.0.shim_dir());
     // parts.rs reads the parts file again when the restart begins.
@@ -1740,6 +1827,40 @@ fn deploy_button(row: &mut egui::Ui, en: &Enabled, cmds: &mut Vec<Cmd>, short: b
     }
 }
 
+/// Beside Deploy: which folder runs as the firmware, and a click to change it.
+fn firmware_button(
+    row: &mut egui::Ui,
+    en: &Enabled,
+    fw_dir: &Path,
+    cmds: &mut Vec<Cmd>,
+    short: bool,
+) {
+    let label = if short {
+        "\u{1f5c1}"
+    } else {
+        "\u{1f5c1} Firmware"
+    };
+    let text = format!(
+        "Choose the firmware folder (the one with code.py). Now: {}",
+        fw_dir.display()
+    );
+    if tip(
+        a11y::name(
+            row.add_enabled(
+                cmd_enabled(Cmd::ChooseFirmware, en),
+                egui::Button::new(label),
+            ),
+            "Firmware folder",
+        ),
+        &text,
+        None,
+    )
+    .clicked()
+    {
+        cmds.push(Cmd::ChooseFirmware);
+    }
+}
+
 fn panels(
     mut contexts: EguiContexts,
     mut ui: ResMut<UiState>,
@@ -1793,6 +1914,7 @@ fn panels(
     let en = read_enabled(
         &host.0,
         &ui.deploy,
+        ui.firmware_pick.is_some(),
         gltf_available,
         &mut captures.dock,
         false,
@@ -1907,6 +2029,7 @@ fn panels(
                     }
                     // Right to left, so this lands just left of View.
                     deploy_button(r, &en, &mut cmds, crowded);
+                    firmware_button(r, &en, captures.paths.fw_dir(), &mut cmds, crowded);
                 })
                 .response
                 .rect
@@ -2207,7 +2330,7 @@ fn panels(
         theme::focus_ring(&wctx, palette);
     }
 
-    let fw_dir = captures.paths.code.parent().unwrap_or(Path::new("."));
+    let fw_dir = captures.paths.fw_dir();
     if let Some(outcome) = deploy_window(ctx, &mut ui.deploy, fw_dir) {
         let now = ui.started.elapsed().as_secs_f64();
         match outcome {
@@ -2285,6 +2408,7 @@ impl CmdCx<'_, '_, '_> {
         read_enabled(
             &self.host.0,
             &self.ui.deploy,
+            self.ui.firmware_pick.is_some(),
             gltf_available,
             self.dock,
             detached_window,
@@ -2399,8 +2523,11 @@ impl CmdCx<'_, '_, '_> {
                 }
             }
             Cmd::Deploy => {
-                let fw_dir = self.paths.code.parent().unwrap_or(Path::new("."));
+                let fw_dir = self.paths.fw_dir();
                 self.ui.deploy = open_deploy(fw_dir);
+            }
+            Cmd::ChooseFirmware => {
+                self.ui.firmware_pick = open_firmware_pick(self.paths.fw_dir());
             }
             Cmd::TogglePane(pane) => {
                 let fade = self.fade_now();
@@ -2602,7 +2729,7 @@ struct PaneCx<'a> {
 /// Draws one dock tab's body.
 fn draw_pane(ui: &mut egui::Ui, pane: Pane, cx: &mut PaneCx) {
     let paths = cx.paths;
-    let fw_dir = paths.code.parent().unwrap_or(Path::new("."));
+    let fw_dir = paths.fw_dir();
     // Docked or in its own window, the pane is announced by its title.
     a11y::region(ui, pane.title());
     match pane {
@@ -2875,7 +3002,7 @@ fn log_panel(
     paths: &crate::Paths,
     palette: &Palette,
 ) {
-    let fw_dir = paths.code.parent().unwrap_or(Path::new("."));
+    let fw_dir = paths.fw_dir();
     let fs_dir = &paths.fs;
     bottom.horizontal(|row| {
         for (tab, label) in [
@@ -5396,6 +5523,7 @@ mod a11y_tests {
             paused,
             skipping: false,
             deploying: false,
+            picking: false,
             gltf_available: true,
             detached_window: false,
             focus_mode: false,

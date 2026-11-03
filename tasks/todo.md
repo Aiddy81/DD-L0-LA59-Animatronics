@@ -1,3 +1,22 @@
+# Simulator: choose the firmware folder — #105
+
+Branch `feature/firmware-folder-picker` off `Documentation`. Decisions: native dialog via `rfd`; remember the choice, changeable any time; simulator files found from the exe; folder must hold `code.py`.
+
+- [x] Issue #105 logged
+- [x] `rfd =0.17.2` (windows-sys 0.61, already in the tree; lockfile only gains entries)
+- [x] `main.rs`: simulator files from the exe; firmware order CLI arg → saved folder → walk-up → folder dialog; startup errors shown in a message box (release exe has no console)
+- [x] `prefs.firmware_dir`; `firmware_code_path` validation + 4 unit tests
+- [x] Toolbar *Firmware* button + palette action; dialog on its own thread; switch restarts code.py, resets settings, rescans sounds, saves the pref; bad folder → error toast
+- [x] `build.ps1 -Test`: 151 unit tests, all scenarios pass; `cargo fmt`, `clippy --release -D warnings` clean
+- [x] Running app (via UI Automation): button named "Firmware folder" opens the dialog; cancel leaves things unchanged and re-enables it; default launch finds PropMaker_Feather; saved folder outside the repo runs that copy; saved folder deleted → falls back
+- [ ] By hand: pick a folder in the dialog (with and without code.py), the no-firmware startup dialog, and that the folder glyph renders
+- [x] README updated
+- [ ] Commit, push, PR into `Documentation`
+
+### Review
+- The Windows folder dialog's Folder field isn't in the UI Automation tree, so picking through it couldn't be automated; the switch code is covered by the saved-folder path (same validation) but not the live pick.
+- `clippy --all-targets` fails on an existing test in `part_edit.rs:1528` (`manual_range_contains`), not part of this change.
+
 # Simulator: accessibility — #94
 
 Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit integration is off in 0.34 and back on in 0.38). Each stage is its own branch off `Documentation` and its own PR. Plan: screen-reader tree and names, keyboard 3D view, announcements and text alternatives, contrast and Windows settings, docs.
