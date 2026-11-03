@@ -448,9 +448,97 @@ fn read_os() -> OsPrefs {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn read_os() -> OsPrefs {
     OsPrefs::default()
+}
+
+/// The GNOME settings, as last read. `gsettings` is a subprocess, too slow
+/// for the frame loop that polls this, so the first call (at startup) reads
+/// it directly and then a background thread keeps the copy current.
+#[cfg(target_os = "linux")]
+fn read_os() -> OsPrefs {
+    use std::sync::{Mutex, OnceLock};
+    static LATEST: OnceLock<Mutex<OsPrefs>> = OnceLock::new();
+    let mut found = false;
+    let latest = LATEST.get_or_init(|| {
+        let (os, any) = read_gsettings();
+        found = any;
+        Mutex::new(os)
+    });
+    // No GNOME settings at all (another desktop): nothing to follow.
+    if found {
+        let poll = move || loop {
+            std::thread::sleep(std::time::Duration::from_secs_f64(OS_POLL_S));
+            let (os, _) = read_gsettings();
+            if let Ok(mut l) = latest.lock() {
+                *l = os;
+            }
+        };
+        // Without the thread the startup values just stay.
+        let _ = std::thread::Builder::new()
+            .name("os-settings".into())
+            .spawn(poll);
+    }
+    latest.lock().map(|l| *l).unwrap_or_default()
+}
+
+/// The GNOME settings, and whether any of them could be read.
+#[cfg(target_os = "linux")]
+fn read_gsettings() -> (OsPrefs, bool) {
+    fn get(schema: &str, key: &str) -> Option<String> {
+        let out = crate::pyhost::command("gsettings")
+            .args(["get", schema, key])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+    const UI: &str = "org.gnome.desktop.interface";
+    let values = [
+        get(UI, "color-scheme"),
+        get("org.gnome.desktop.a11y.interface", "high-contrast"),
+        get(UI, "enable-animations"),
+        get(UI, "text-scaling-factor"),
+    ];
+    let [scheme, contrast, animations, scale] = values.each_ref().map(Option::as_deref);
+    let any = values.iter().any(Option::is_some);
+    (parse_gsettings(scheme, contrast, animations, scale), any)
+}
+
+/// GNOME's settings as `gsettings get` prints them; one that is missing or
+/// unrecognised keeps its default.
+#[cfg(any(target_os = "linux", test))]
+fn parse_gsettings(
+    color_scheme: Option<&str>,
+    high_contrast: Option<&str>,
+    animations: Option<&str>,
+    text_scaling: Option<&str>,
+) -> OsPrefs {
+    let defaults = OsPrefs::default();
+    let flag = |v: Option<&str>| match v.map(str::trim) {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    };
+    let dark = match color_scheme.map(str::trim) {
+        Some("'prefer-dark'") => Some(true),
+        // 'default' is GNOME's light look.
+        Some("'prefer-light'" | "'default'") => Some(false),
+        _ => None,
+    };
+    let percent = text_scaling
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|f| f.is_finite() && *f > 0.0)
+        .map(|f| (f * 100.0).round() as u32);
+    OsPrefs {
+        dark: dark.unwrap_or(defaults.dark),
+        high_contrast: flag(high_contrast).unwrap_or(defaults.high_contrast),
+        animations: flag(animations).unwrap_or(defaults.animations),
+        text_scale: text_scale(percent),
+    }
 }
 
 /// Whether a Windows contrast theme is on.
@@ -1019,6 +1107,35 @@ mod tests {
         assert_eq!(text_scale(Some(125)), 1.25);
         assert_eq!(text_scale(Some(225)), SCALE_MAX);
         assert_eq!(text_scale(Some(50)), SCALE_MIN);
+    }
+
+    #[test]
+    fn gnome_settings_parse_and_bad_ones_keep_defaults() {
+        let os = parse_gsettings(
+            Some("'prefer-light'\n"),
+            Some("true\n"),
+            Some("false\n"),
+            Some("1.25\n"),
+        );
+        assert_eq!(
+            os,
+            OsPrefs {
+                dark: false,
+                high_contrast: true,
+                animations: false,
+                text_scale: 1.25,
+            }
+        );
+        assert!(!parse_gsettings(Some("'default'"), None, None, None).dark);
+        assert!(parse_gsettings(Some("'prefer-dark'"), None, None, None).dark);
+        assert_eq!(parse_gsettings(None, None, None, None), OsPrefs::default());
+        assert_eq!(
+            parse_gsettings(Some("'odd'"), Some("1"), Some(""), Some("NaN")),
+            OsPrefs::default()
+        );
+        let scale = |v| parse_gsettings(None, None, None, Some(v)).text_scale;
+        assert_eq!(scale("-2.0"), 1.0);
+        assert_eq!(scale("5.0"), SCALE_MAX);
     }
 
     #[test]

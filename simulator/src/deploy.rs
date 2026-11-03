@@ -209,9 +209,33 @@ pub fn find_circuitpy() -> Option<PathBuf> {
     found
 }
 
+/// Where the desktop mounts a volume labelled CIRCUITPY, if one is plugged in.
 #[cfg(not(windows))]
 pub fn find_circuitpy() -> Option<PathBuf> {
-    None
+    first_dir(&circuitpy_roots())
+}
+
+#[cfg(target_os = "macos")]
+fn circuitpy_roots() -> Vec<PathBuf> {
+    vec![PathBuf::from("/Volumes/CIRCUITPY")]
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn circuitpy_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(user) = std::env::var_os("USER").filter(|u| !u.is_empty()) {
+        // udisks2: /media/<user> on Debian and Ubuntu, /run/media/<user> on Fedora and Arch.
+        roots.push(Path::new("/media").join(&user).join("CIRCUITPY"));
+        roots.push(Path::new("/run/media").join(&user).join("CIRCUITPY"));
+    }
+    roots.push(PathBuf::from("/media/CIRCUITPY"));
+    roots
+}
+
+/// The first of `roots` that is a folder.
+#[cfg(any(not(windows), test))]
+fn first_dir(roots: &[PathBuf]) -> Option<PathBuf> {
+    roots.iter().find(|p| p.is_dir()).cloned()
 }
 
 #[cfg(test)]
@@ -252,6 +276,16 @@ mod tests {
 
     fn rels(p: &[Copy]) -> Vec<&str> {
         p.iter().map(|c| c.rel.as_str()).collect()
+    }
+
+    #[test]
+    fn circuitpy_is_the_first_mount_point_that_is_a_folder() {
+        let t = Tmp::new();
+        let missing = t.0.join("missing");
+        put(&t.0, "file", "");
+        assert_eq!(first_dir(&[]), None);
+        assert_eq!(first_dir(&[missing.clone(), t.0.join("file")]), None);
+        assert_eq!(first_dir(&[missing, t.drive(), t.fw()]), Some(t.drive()));
     }
 
     #[test]

@@ -34,6 +34,9 @@ bevy = { version = "=0.17.3", default-features = false, features = [
     "ktx2",
     "zstd_rust",
     "wav",
+    # Window backends for Linux (#93); no effect on Windows.
+    "x11",
+    "wayland",
 ] }
 # manage_clipboard lets ctx.copy_text reach the OS clipboard (the log panel's Copy button).
 # accesskit gives screen readers and Voice Access the egui tree (#94).

@@ -1,3 +1,30 @@
+# Simulator: Linux x86_64 build — #93 part 1
+
+Branch `feature/sim-linux` off `Documentation`. No packaging or release steps (#92's branch owns those); macOS is part 2. Windows build and `build.ps1` unchanged.
+
+- [x] Bevy `x11` + `wayland` features; `Cargo.lock` only gains 13 crates, none changed
+- [x] Dev image: Linux -dev packages; python-build-standalone CPython 3.13.5 (`20250708`), SHA-256 pinned and cross-checked against GitHub's asset digest
+- [x] `docker/build.sh`: `PLATFORM=windows|linux` (default windows); Linux links `-L` the real libpython folder, rpath `$ORIGIN/python/lib`, runs unit tests in the container, stages `dist/ddl0-sim` + trimmed `dist/python/`; `OWNER` chowns `dist/`
+- [x] `pyhost::use_bundled_python` sets PYTHONHOME first thing in `main()` (before any thread); `pyhost::command` keeps it out of launched programs (editor, file manager, gsettings)
+- [x] `deploy.rs`: Linux/macOS mount points, `first_dir` unit-tested
+- [x] `theme.rs`: GNOME settings via `gsettings`, cached and refreshed on a background thread; parsing unit-tested
+- [x] `simulator/build.sh` host script (`--run --debug --test --rebuild-image`; macOS message)
+- [x] CI `build-linux` job, actions pinned to SHAs; README
+- [x] Linux in Docker: fmt, clippy `-D warnings`, 153 unit tests, all scenarios
+- [x] Bundle: 48 MB (was 269: libpython debug symbols, Tcl/Tk, pip); on clean Debian with no Python, ldd finds libpython via rpath; headless.py passes on the trimmed stdlib
+- [x] Windows: `build.ps1 -Test` 153 tests + scenarios; app starts as before
+- [x] A deliberately failing Linux-only test (commit 86dc986) turned `build-linux` red with that test named; the Windows and firmware jobs stayed green. Reverted.
+- [ ] CI green after the revert
+- [x] PR #107 into `Documentation`
+- [ ] By a tester on Ubuntu Wayland and X11 (from the `ddl0-sim-linux` artifact): window and 3D view, sound, orbit and boop, hot reload, folder dialog, GNOME settings followed, deploy finds CIRCUITPY, tear-off panel, traceback opens editor
+
+### Review
+- Can't run the Linux GUI from this Windows machine; everything above the tester line was checked in Docker or CI.
+- python-build-standalone's `sysconfig` reports its build folder (`/install/lib`), so the link needs an explicit `-L`; its libpython ships with debug symbols (241 MB) and its terminfo has case-only name clashes that a Windows bind mount can't hold. All handled in `docker/build.sh`.
+- Setting `PYTHONHOME` would also reach programs the simulator launches; `pyhost::command` strips it for them.
+- Linux needs `libwayland-client` even on X11 (Bevy links it directly with the `wayland` feature); README says so.
+- #108 (#92) merged first; merging `Documentation` in kept both its `package`/`release` jobs and `build-linux`. Linux isn't wired into `package`/`release` yet (stage 3).
+
 # CI: a GitHub release on every merge to `main` — #92
 
 Branch `feature/release-on-main` off `Documentation`, Windows asset only (Linux/macOS come with #93). Owner confirmed releases come from `main` only; #92 is the approval to change `.github/`. Decisions: release on every push to `main`; CalVer tags `vYYYY.MM.DD(.N)`; zip keeps the repo layout; notes built from merge commits; no `CHANGELOG.md`.

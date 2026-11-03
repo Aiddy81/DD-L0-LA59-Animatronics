@@ -57,6 +57,42 @@ jobs:
           path: simulator/dist/
           retention-days: 14
 
+  # Native Linux build in the same image. The unit tests run inside it, so
+  # there's no separate Linux test job.
+  build-linux:
+    name: Simulator build and unit tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build the dev image
+        run: docker build -t ddl0-sim-dev simulator/docker
+      - name: Restore cargo cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            .ci-cache/registry
+            .ci-cache/target
+          key: sim-linux-${{ runner.os }}-${{ hashFiles('simulator/Cargo.lock', 'simulator/docker/Dockerfile') }}
+          restore-keys: sim-linux-${{ runner.os }}-
+      - name: Format, lint, build and run the unit tests
+        run: |
+          mkdir -p .ci-cache/registry .ci-cache/target
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$PWD/.ci-cache/registry:/usr/local/cargo/registry" \
+            -v "$PWD/.ci-cache/target:/target" \
+            -e CARGO_TARGET_DIR=/target -e PLATFORM=linux -e CHECK=1 -e LOCKED=1 -e TEST=1 \
+            -e "OWNER=$(id -u):$(id -g)" \
+            -w /workspace/simulator ddl0-sim-dev bash docker/build.sh
+          sudo chown -R "$(id -u):$(id -g)" .ci-cache
+      - name: Upload the simulator
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ddl0-sim-linux
+          path: simulator/dist/
+          retention-days: 14
+
   # The tests are a Windows exe (cross-compiled like the app), so they run on
   # Windows, from the built dist/ beside the Python and MinGW DLLs.
   unit-tests:

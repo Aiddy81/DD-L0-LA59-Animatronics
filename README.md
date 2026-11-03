@@ -97,7 +97,7 @@ Place these files in `PropMaker_Feather/sounds/` with the exact names above. You
 
 ## Simulator
 
-`simulator/` is a Windows desktop app that runs `PropMaker_Feather/code.py` (with its modules and `settings.toml`) **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
+`simulator/` is a desktop app for Windows and Linux (x86_64) that runs `PropMaker_Feather/code.py` (with its modules and `settings.toml`) **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
 
 ### Download the simulator
 
@@ -121,6 +121,26 @@ Needs Docker Desktop only; nothing is installed on the host.
 ```
 
 The first build takes a while. Output goes to `simulator\dist\`, a self-contained folder with the bundled Python. Run `simulator\dist\ddl0-sim.exe` directly after that. It runs the first firmware it finds, in this order: a `code.py` path given as its first argument; the folder last chosen with *🗁 Firmware* (if it still has `code.py`); `PropMaker_Feather\code.py` in a folder above the exe. If none is found it asks for the folder rather than exiting. The simulator's own files (3D assets, `sim.toml`, `parts.toml`, scenarios) always come from the `simulator\` folder above the exe, so the firmware can live anywhere, such as a copy, another checkout or the CIRCUITPY drive.
+
+#### On Linux
+
+Needs Docker only (your user must be allowed to run it); the build happens in the same image.
+
+```bash
+./simulator/build.sh --run
+```
+
+`--debug` builds the debug profile, `--test` also runs the Rust unit tests and `--rebuild-image` rebuilds the dev image. Output goes to `simulator/dist/`: the `ddl0-sim` binary and a bundled CPython in `dist/python/`, so no Python is needed on the host. After that, run `simulator/dist/ddl0-sim` directly; it finds firmware the same way as on Windows.
+
+The machine running it needs:
+
+- a Vulkan driver: Mesa (`mesa-vulkan-drivers` on Debian and Ubuntu) or your GPU vendor's driver;
+- an X11 or Wayland desktop, with `libwayland-client` (needed even on X11), `libxkbcommon` and ALSA (`libasound2`), which desktop installs already have;
+- an XDG desktop portal (`xdg-desktop-portal` plus your desktop's backend) for the *🗁 Firmware* folder dialog.
+
+A `ddl0-sim-linux` build is attached to every CI run. GitHub's download is a zip, which drops the execute bit: run `chmod +x ddl0-sim` in the unzipped folder first, and put the folder at `simulator/dist/` in a checkout (it loads `simulator/assets`, `sim.toml` and the scenarios from the folder above it).
+
+Known limits on Linux: a panel torn off into its own window opens at the default position rather than under the pointer, and *Follow system* reads GNOME's settings (dark style, high contrast, animations, text scaling factor) through `gsettings`; on other desktops the app's defaults apply. macOS is part 2 of #93.
 
 ### Using it
 
@@ -164,7 +184,7 @@ The first build takes a while. Output goes to `simulator\dist\`, a self-containe
   - The 3D view itself takes focus: F6 to its tab, then Tab. While it is focused (the ring goes round the whole view) the arrow keys orbit the camera, Shift+arrows pan, + and − zoom, and Home goes back to the starting view; Tab or Esc leaves. Screen readers call it "3D view".
   - Everything else the mouse does in the view has a key or a control: *B* boops the droid (see Motion below), and the Parts panel's *Add* buttons place parts (see [Placing parts with the mouse](#placing-parts-with-the-mouse)).  See [Accessibility](#accessibility) for screen readers, Voice Access and the full key list.
 - **Audio** (panel): what's playing, with a level meter, and a *Stop* button. *Mute* and the volume slider change only the simulator's output; the firmware's own mixer level still applies. Below that is every WAV in `PropMaker_Feather/sounds/` with its format and a *Play* button (played in the simulator only; `code.py` doesn't see it). A file the board couldn't play is flagged in red: not PCM, not 8- or 16-bit, or a sample rate, channel count or bit depth that differs from the `audiomixer.Mixer` in `hardware.py`. So is any `play_wav("x.wav")` in the firmware whose file isn't there, with the file and line that asks for it.
-- **Deploy to CIRCUITPY** (*⬆ Deploy*, at the right of the toolbar): finds the board's drive by its `CIRCUITPY` label, lists the files that are new or changed (compared byte for byte) and copies them after you confirm. It copies the top-level `.py` files, `settings.toml`, `behaviours/` and `sounds/`; it never touches `lib/` or `boot_out.txt`, and never deletes anything on the board. `code.py` goes last, so the board restarts once with every file in place. Each copied file is logged as `[sim] deployed ...`. While log mode is on the drive is read-only to the computer, so turn it off first (see [Logging on the robot](#logging-on-the-robot)).
+- **Deploy to CIRCUITPY** (*⬆ Deploy*, at the right of the toolbar): finds the board's drive by its `CIRCUITPY` label (on Linux, where the desktop mounts it: `/media/$USER/CIRCUITPY`, `/run/media/$USER/CIRCUITPY` or `/media/CIRCUITPY`), lists the files that are new or changed (compared byte for byte) and copies them after you confirm. It copies the top-level `.py` files, `settings.toml`, `behaviours/` and `sounds/`; it never touches `lib/` or `boot_out.txt`, and never deletes anything on the board. `code.py` goes last, so the board restarts once with every file in place. Each copied file is logged as `[sim] deployed ...`. While log mode is on the drive is read-only to the computer, so turn it off first (see [Logging on the robot](#logging-on-the-robot)).
 - **3D view toolbar**: a small bar in the top-right corner of the 3D view holds the camera views (*Front*, *Side*, *Top*, *Eyes*, a close-up of the eyes, and *Reset*, the start-up view), *Light*, *📷 Screenshot*, *⏺ Record* and *Overlays*. It stays there in focus mode. Clicks on the bar or its menus never boop the droid or turn the camera. Tab reaches its buttons like any other control, and every one of them is also in the command palette.
 - **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom. From the keyboard, with the 3D view focused: arrows orbit (5° a press; up looks down from higher), Shift+arrows pan, + / − zoom, Home resets; holding a key keeps it moving, within the same limits as the mouse. With *Animations* on each key step glides briefly, and off it jumps. A view button glides the camera to that view in about half a second; dragging or scrolling during the glide takes over from where it is.
 - **Overlays** (*Overlays* in the 3D view's toolbar, or type `overlay` in the command palette): readouts drawn on the model, each switched on its own.
@@ -243,7 +263,7 @@ To reach the **3D view**, press F6 until its tab is active, then Tab; a ring goe
 #### Known limits
 
 - Tested with Narrator only through UI Automation (the events it reads), not by ear; NVDA, JAWS and Dragon are untested. Voice Access has been checked through the same calls it makes, not by voice.
-- Windows only: macOS (VoiceOver) and Linux (Orca) depend on #93.
+- Screen readers are tested on Windows only. The Linux build exposes the same AccessKit tree, but Orca is untested; macOS (VoiceOver) depends on part 2 of #93.
 - The dock's collapse and close-all buttons, its tab-bar scroll bars and the dividers between panels have no names (each panel's own *Close* button and the command palette do the same jobs), and a slider's number box is unnamed (its slider is named).
 - After Del deletes a part, focus goes back to the window; press F6 to return to a panel.
 - The status line is a live region, not a Tab stop. Read older events in the Log panel.
@@ -395,6 +415,8 @@ The tests for `settings.rs`, `wav.rs` and `deploy.rs` need only `rustc`, so they
 `simulator\build.ps1` runs `headless.py` in the dev image as its last step, so a firmware change that breaks a behaviour fails the build. The failing checks and scenarios are listed as `FAIL` lines. The simulator is still built in `simulator\dist\`, so you can open it to see what went wrong.
 
 GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run. When everything passes, a `package` job packs the build into the release zips (see [Releasing](#releasing)) and attaches them to the run as `ddl0-release-preview`, so packaging is checked on every PR.
+
+A `build-linux` job builds the Linux simulator in the same image (`PLATFORM=linux` for `docker/build.sh`), with rustfmt and clippy, runs the Rust unit tests and the scenario checks there, and attaches the built `ddl0-sim-linux` folder to the run. Locally on Linux, `./simulator/build.sh --test` does the same.
 
 ### Releasing
 

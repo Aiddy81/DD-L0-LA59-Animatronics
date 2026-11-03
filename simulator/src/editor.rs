@@ -2,7 +2,8 @@
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use crate::pyhost::command;
 
 /// The `(path, line)` of a `File "...", line N` traceback entry, if `text` has one.
 fn parse_location(text: &str) -> Option<(&str, u32)> {
@@ -89,13 +90,13 @@ pub fn open_in_editor(command: &str, file: &Path, line: u32) -> Result<(), Strin
 }
 
 fn spawn(prog: &str, rest: &[String]) -> Result<(), String> {
-    let mut result = Command::new(prog).args(rest).spawn();
+    let mut result = command(prog).args(rest).spawn();
     // VS Code's launcher is code.cmd, which CreateProcess won't find as "code".
     if cfg!(windows)
         && Path::new(prog).extension().is_none()
         && matches!(&result, Err(e) if e.kind() == ErrorKind::NotFound)
     {
-        result = Command::new(format!("{prog}.cmd")).args(rest).spawn();
+        result = command(format!("{prog}.cmd")).args(rest).spawn();
     }
     // A GUI launcher: not waited on.
     result.map(drop).map_err(|e| format!("{prog}: {e}"))
@@ -106,14 +107,14 @@ fn spawn(prog: &str, rest: &[String]) -> Result<(), String> {
 fn reveal(file: &Path) -> Result<(), String> {
     let mut cmd;
     if cfg!(windows) {
-        cmd = Command::new("explorer");
+        cmd = command("explorer");
         // explorer exits nonzero even on success, so only the spawn is checked.
         cmd.arg(format!("/select,{}", file.display()));
     } else if cfg!(target_os = "macos") {
-        cmd = Command::new("open");
+        cmd = command("open");
         cmd.arg("-R").arg(file);
     } else {
-        cmd = Command::new("xdg-open");
+        cmd = command("xdg-open");
         cmd.arg(file.parent().unwrap_or(file));
     }
     cmd.spawn()
