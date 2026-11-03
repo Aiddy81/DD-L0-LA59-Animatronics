@@ -1205,10 +1205,7 @@ mod tests {
 
     #[test]
     fn macos_settings_parse_and_bad_ones_keep_defaults() {
-        let os = parse_defaults(Some("Dark
-"), Some("1
-"), Some("1
-"));
+        let os = parse_defaults(Some("Dark\n"), Some("1\n"), Some("1\n"));
         assert_eq!(
             os,
             OsPrefs {
