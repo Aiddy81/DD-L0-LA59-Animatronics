@@ -99,6 +99,19 @@ Place these files in `PropMaker_Feather/sounds/` with the exact names above. You
 
 `simulator/` is a Windows desktop app that runs `PropMaker_Feather/code.py` (with its modules and `settings.toml`) **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
 
+### Download the simulator
+
+Every update to `main` is published as a release, with the Windows simulator ready to run: no Docker, Rust or Python needed.
+
+1. Download `ddl0-sim-windows-<version>.zip` from the [latest release](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/releases/latest).
+2. Unzip it anywhere and run `simulator\dist\ddl0-sim.exe` inside it. The zip also holds the firmware (`PropMaker_Feather\`), which the simulator finds on its own.
+
+The exe isn't code-signed, so Windows SmartScreen may warn the first time: choose *More info* → *Run anyway*. To check the download, compare its SHA-256 with the one in the release notes or `SHA256SUMS`:
+
+```powershell
+Get-FileHash .\ddl0-sim-windows-<version>.zip -Algorithm SHA256
+```
+
 ### Build and run
 
 Needs Docker Desktop only; nothing is installed on the host.
@@ -381,7 +394,27 @@ The tests for `settings.rs`, `wav.rs` and `deploy.rs` need only `rustc`, so they
 
 `simulator\build.ps1` runs `headless.py` in the dev image as its last step, so a firmware change that breaks a behaviour fails the build. The failing checks and scenarios are listed as `FAIL` lines. The simulator is still built in `simulator\dist\`, so you can open it to see what went wrong.
 
-GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run.
+GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run. When everything passes, a `package` job packs the build into the release zips (see [Releasing](#releasing)) and attaches them to the run as `ddl0-release-preview`, so packaging is checked on every PR.
+
+### Releasing
+
+Releases are automatic: every push to `main` (a merged `Documentation → main` PR) publishes a GitHub release once every CI job on that commit has passed. If any job fails, nothing is released. Docs-only merges are released too, since `main` only moves through reviewed merges and each one is what runs on the robot.
+
+- **Tags** are dates: `vYYYY.MM.DD` (UTC), then `vYYYY.MM.DD.2`, `.3` for later releases the same day. A tag is never reused or moved; the hand-made `v1.0.0` stays as it is.
+- **Notes** list every PR merged since the previous tag, grouped by branch prefix (`feature/` Features, `bugfix/` Fixes, `docs/` Docs, `ci/` CI, anything else Other), with title, link, author and the issues each closed, then any commits that came in outside a PR. They're built by `.github/scripts/release_notes.py` from the merge commits, because PRs reach `main` through `Documentation`, so GitHub's own generated notes would list just the one `Documentation → main` PR.
+- **Assets**, built by `simulator/release/package.sh` from tracked files only:
+  - `ddl0-sim-windows-<version>.zip`: the repo layout the app expects: `PropMaker_Feather/`, `simulator/` (assets, shims, scenarios, docs, `sim.toml`, `parts.example.toml`) and `simulator/dist/` (exe, bundled Python, MinGW DLLs), plus `README.md` and `LICENSE`. It leaves out the unit-test exe and anything the app saves beside the exe (prefs, captures, `fs/`, layouts, drop-in shims).
+  - `ddl0-firmware-<version>.zip`: the contents of `PropMaker_Feather/`, to copy to the root of CIRCUITPY.
+  - `SHA256SUMS`, also shown as a table in the notes.
+
+  The sound files aren't in the repo, so neither zip has `sounds/`: add your own as described in [Setup & Usage](#setup--usage).
+- The `release` job is the only one with write access (`contents: write`), uses only `GITHUB_TOKEN`, and runs one at a time, so two quick merges can't claim the same tag. Every action is pinned to a commit SHA.
+
+To try the packaging locally, run it in the dev image after a build, from the repo root (it reads tracked files with `git archive`, so commit first):
+
+```powershell
+docker run --rm -v "${PWD}:/workspace" -w /workspace ddl0-sim-dev bash -c "git config --global --add safe.directory /workspace && bash simulator/release/package.sh windows dev-test release-out"
+```
 
 ### The 3D model
 

@@ -1,3 +1,26 @@
+# CI: a GitHub release on every merge to `main` — #92
+
+Branch `feature/release-on-main` off `Documentation`, Windows asset only (Linux/macOS come with #93). Owner confirmed releases come from `main` only; #92 is the approval to change `.github/`. Decisions: release on every push to `main`; CalVer tags `vYYYY.MM.DD(.N)`; zip keeps the repo layout; notes built from merge commits; no `CHANGELOG.md`.
+
+- [x] `simulator/release/package.sh <platform> <version> [out]`: app zip (repo layout, tracked files via `git archive`, `dist/` minus tests exe and user data), firmware zip, `SHA256SUMS`; checks the layout and fails if it's wrong
+- [x] `.github/scripts/release_notes.py`: PR merges since the previous tag grouped by branch prefix, one read-only GraphQL call for title/author/closed issues, integration PRs (`Documentation`/`dev`/`main`) skipped, loose commits listed, SHA-256 table
+- [x] `simulator.yml`: actions pinned to SHAs; `package` job (every run, needs all checks, uploads `ddl0-release-preview`); `release` job (push to `main` only, `contents: write`, `concurrency: release`, tag chosen inside the lock)
+- [x] Local run in `ddl0-sim-dev` from a clean clone: zips have the right layout, planted prefs/captures/shims and a local `log.txt` left out, `sha256sum -c` OK, unknown platform rejected
+- [x] Notes on a simulated `Documentation → main` merge onto `v1.0.0`: 50 PRs in Features/Fixes/Docs/Other, integration PR skipped, nothing from before `v1.0.0`; no-token fallback works
+- [x] README: Download the simulator, Releasing, Tests and CI updated
+- [x] Branch CI green, `ddl0-release-preview` checked (104 files, layout OK, no tests exe or user data, `sha256sum -c` OK), `release` skipped
+- [x] Failure gate: with the firmware job failing on purpose, `package` and `release` were skipped (run 41581821891); temporary commit reverted
+- [x] PR #108 into `Documentation`
+- [ ] After merge to `main` (owner): first release created; zip runs on a clean Windows PC
+
+### Review
+- PR data comes from one GraphQL call via `urllib` rather than `gh pr view` per PR: same fields, one request, and it runs in the dev image where `gh` isn't installed.
+- The tag is chosen in `release` (inside `concurrency: release`), not `package`, so two quick merges can't pick the same one; `package` names its preview `dev-<sha>`.
+- `v1.0.0` isn't in `Documentation`'s history, only `main`'s, so notes were checked on a simulated merge onto `v1.0.0`.
+- Sounds are gitignored, so no asset has `sounds/` (README says so).
+- `package.sh` needs a real git checkout: inside Docker, a worktree's `.git` file points at a Windows path.
+- #107 (Linux) also edits `simulator.yml`; whichever merges second rebases (note left for that session).
+
 # Simulator: choose the firmware folder — #105
 
 Branch `feature/firmware-folder-picker` off `Documentation`. Decisions: native dialog via `rfd`; remember the choice, changeable any time; simulator files found from the exe; folder must hold `code.py`.
