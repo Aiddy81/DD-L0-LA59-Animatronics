@@ -118,7 +118,7 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
   - [x] `build.ps1 -Test` (145 before the fix), then Docker with `CHECK=1`: fmt, clippy `--release --locked -D warnings`, 7 scenarios pass, 146 unit tests from `dist\`
   - [x] Running app, Primitive model, fresh prefs (no prefs file existed in this worktree's `dist\`; the test one was deleted afterwards), keyboard input only, UI Automation for what Narrator reads
   - [ ] Narrator by ear, Voice Access by voice, NVDA, Accessibility Insights FastPass — user (host installs not made)
-  - [ ] Commit, push, PR into `feature/a11y-visual`
+  - [x] Commit, push, PR into `feature/a11y-visual` (#103)
 
 ### Review (stage 6) — "Done when"
 
