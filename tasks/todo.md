@@ -111,7 +111,28 @@ Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit int
 - **The 3D view's focus ring lost its left side**: the view touches the window's left edge and the ring is drawn just outside the widget. `focus_ring` now keeps the ring inside the window.
 - Prefs from older builds already contain `ui_scale = 1.0` / `animations = true`, which count as saved choices and keep winning; the README says to delete the lines or press Ctrl+0.
 - Not changed: the status line is a live text region, not a Tab stop, so it has no ring by design (stage 4); egui_dock splitters use the faint `border` colour (draggable, but not needed to tell panes apart); the slider trail uses the selection fill against the rail (the handle carries the value and passes).
-- [ ] Stage 6 — README Accessibility section; Narrator and Voice Access checks against the issue's "Done when"
+- [ ] **Stage 6 — `docs/accessibility`** (stacked on #102): README Accessibility section; acceptance check of the issue's "Done when"
+  - [x] README `### Accessibility` (screen readers, Voice Access, keyboard table checked against `SHORTCUTS`, visuals and following Windows, known limits); every claim checked in the source; links to the existing bullets instead of repeating them
+  - [x] Small fixes: README shortcuts bullet missed B; Ctrl+0 only resets the scale (a saved `animations` must be deleted from the prefs file, said in three places now); `SHORTCUTS` Ctrl+0 label said "to 100%", now "Windows text size; 100% in a detached window"
+  - [x] Gap found and fixed: Space / Skip / Stop said nothing to a screen reader. `announce::RunWatch` says *Paused*, *Resumed*, *Skipping to the next event*, *Skip ended*, *Stopped* from the status bar's run state (`ui::run_state`, now shared with the status bar text); 1 new unit test; live: Space → *Paused* then *Resumed*, F → *Skipping to the next event*, R → *Restarted. Skip ended*
+  - [x] `build.ps1 -Test` (145 before the fix), then Docker with `CHECK=1`: fmt, clippy `--release --locked -D warnings`, 7 scenarios pass, 146 unit tests from `dist\`
+  - [x] Running app, Primitive model, fresh prefs (no prefs file existed in this worktree's `dist\`; the test one was deleted afterwards), keyboard input only, UI Automation for what Narrator reads
+  - [ ] Narrator by ear, Voice Access by voice, NVDA, Accessibility Insights FastPass — user (host installs not made)
+  - [ ] Commit, push, PR into `feature/a11y-visual`
+
+### Review (stage 6) — "Done when"
+
+| Item | Result |
+|---|---|
+| Narrator / NVDA: start, pause, restart, nudge, boop, change speed, open panels, read the log, hear behaviour changes, no mouse | **Pass through UI Automation, needs the user by ear.** Keys only: R → *Restarted*, *Now boot sequence*; N → *Nudge. Sound: noseBoops. Now nose boops*; B → *Boop 1.0 g. Sound: noseBoops. Now nose boops*; N N N → *Sound: angry … Now angry animation*; Space → *Paused* / *Resumed* (after the fix; before it, silent); palette "10x" → status bar *10x*; F6 visits all 13 panels by name; log lines are UIA Text (`[sim] Sound: noseBoops.wav`, `[sim] boop 1.0 g from +Z`), readable in scan mode. NVDA untested (not installed) |
+| Voice Access: every toolbar and panel control by name, no overlays | **Tree passes, needs the user by voice.** 91 actionable controls, no duplicate names; unnamed: egui_dock's collapse / close-all buttons, tab-bar scroll bars and dividers, the Speed slider's number box (all known since stage 2; each has a named alternative) |
+| Everything the mouse does in the 3D view from the keyboard, incl. placing and editing parts | **Pass.** F6 + Tab → focus "3D view" with ring; arrows orbit, + zoom, Shift+arrows pan, Home resets (captures); B boops; Parts: Add led (placed and auto-saved), list row, *Turn left 15 degrees* ×2 and *Move X plus* change `rot_deg` / `pos` in the file, Del removes it, Ctrl+Z brings it back. Focus drops to the window after Del (documented) |
+| Contrast ≥ 4.5:1 in all themes; focus always visible; animations follow reduce motion | **Pass.** Contrast: stage 5's unit test (every pair, three themes). Focus ring seen in Light (3D view tab), High contrast (Close Plot), Dark (dock collapse button). Animations on: 3 279 of 10 582 sampled pixels change during the Side glide; off: 99 (jump). Following Windows' Animation effects was checked live in stage 5 |
+| Accessibility Insights FastPass finds no critical issues | **Needs the user** (host install) |
+| README documents accessibility features and shortcuts | **Pass** (this PR) |
+
+- **Your own prefs file probably ignores Windows**: one written by a build before stage 5 has `ui_scale` and `animations`, so text size and Animation effects don't apply until those lines go (Ctrl+0 handles only the scale). A *Follow Windows* choice for Animations would remove the hand edit; proposed as a follow-up, not done here.
+- Synthetic Unicode (dictation) text into fields was fixed in stage 2 and not re-tested here.
 
 # Simulator: unit tests in CI, servo-part limits in the app — #88
 
