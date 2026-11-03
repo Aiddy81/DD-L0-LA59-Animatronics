@@ -1,6 +1,9 @@
 //! Runs `code.py` on an embedded CPython interpreter, on its own thread.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -436,6 +439,33 @@ pub struct ScenarioRun {
     pub text: String,
     pub servo: (f32, f32, f32),
     pub channels: Vec<(String, usize)>,
+}
+
+/// Set when `use_bundled_python` pointed PYTHONHOME at the bundled Python.
+static BUNDLED_HOME: AtomicBool = AtomicBool::new(false);
+
+/// Points Python at the copy staged in `<exe_dir>/python` (the Linux build;
+/// the Windows embeddable Python finds its files beside the exe on its own).
+/// A PYTHONHOME the user set wins. Must run before any other thread starts:
+/// changing the environment while another thread reads it is undefined
+/// behaviour on Unix.
+pub fn use_bundled_python(exe_dir: &Path) {
+    let home = exe_dir.join("python");
+    if cfg!(not(windows)) && home.is_dir() && std::env::var_os("PYTHONHOME").is_none() {
+        std::env::set_var("PYTHONHOME", home);
+        BUNDLED_HOME.store(true, Ordering::Relaxed);
+    }
+}
+
+/// A `Command` for launching another program. It doesn't inherit the
+/// PYTHONHOME set by `use_bundled_python`, which would point that program's
+/// own Python at the simulator's stdlib.
+pub fn command(program: impl AsRef<OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    if BUNDLED_HOME.load(Ordering::Relaxed) {
+        cmd.env_remove("PYTHONHOME");
+    }
+    cmd
 }
 
 /// Must run before anything touches Python.

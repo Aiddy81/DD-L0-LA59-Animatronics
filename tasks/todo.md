@@ -20,6 +20,84 @@ Branch `docs/wiki` off `Documentation`. Decisions (owner): pages live in `wiki/`
 - Working screenshots used to find buttons showed the whole desktop; the owner flagged it. None of those are in `wiki/`; every wiki image was checked to show only the app window (lesson added).
 - The attention animation can't be interrupted (only the trench run aborts on `ANIMATION_NUDGE_Z_MG`); the wiki says so, the setting's comment in `settings.toml` is broader than the code.
 
+# Simulator: macOS Apple Silicon build, all platforms in releases — #93 part 2
+
+Branch `feature/sim-macos` off `Documentation` (has #107 Linux and #108 releases). #92/#93 are the approval to change `.github/`. Windows build and `build.ps1` unchanged.
+
+- [x] `theme.rs`: macOS dark mode (`defaults read -g AppleInterfaceStyle`), *Increase contrast* and *Reduce motion* (`com.apple.universalaccess`) on the background thread Linux uses; parsing unit-tested (unset key = its default, unreadable = app default)
+- [x] `deploy.rs` already looks at `/Volumes/CIRCUITPY` on macOS (from #107)
+- [x] `docker/fetch-python-macos.sh`: python-build-standalone 3.13.5 `20250708` `aarch64-apple-darwin` install_only, SHA-256 pinned, cross-checked against GitHub's asset digest; one pin shared by CI and `build.sh`
+- [x] `docker/build.sh`: `PLATFORM=macos` runs natively; `-L` + rpath `@executable_path/python/lib`; tests with `DYLD_LIBRARY_PATH`; stages trimmed `dist/python/`; `otool -L` check, repoint libpython to `@rpath` with `install_name_tool` if needed, `strip -S`, ad-hoc `codesign -s - -f`, `codesign -v`
+- [x] `simulator/build.sh`: macOS branch (Apple Silicon only; says what's missing: Xcode CLT, rustup, Rust 1.92.0; installs nothing)
+- [x] CI `build-macos` on `macos-14`: Rust 1.92.0 via rustup, fmt, clippy `-D warnings`, unit tests, rpath/sign check (scenario checks skipped, `SCENARIOS=0`: see review), uploads `ddl0-sim-macos-arm64`; no new actions (existing pinned SHAs)
+- [x] `package.sh`: `linux` / `macos-arm64` tar.gz (only the exe executable, owner root), optional dist-dir argument, layout check reads tar too, `SHA256SUMS` over every archive
+- [x] `package` needs every build job and packs all three; `release` attaches zip + tar.gz + `SHA256SUMS`
+- [x] README: per-platform download/run/build, Gatekeeper note, Intel unsupported, CI and Releasing
+- [x] CI green on Windows, Linux and macOS (run 41595437517)
+- [x] A deliberately failing macOS-only test turned `build-macos` red naming it (run 41597260442); Windows/Linux green, `package` skipped; reverted
+- [x] `ddl0-release-preview`: Windows zip (104 entries), Linux tar.gz (693), macOS tar.gz (718), firmware zip, `SHA256SUMS`; `sha256sum -c` OK; repo layout; exe `0755` in both tar.gz; no tests exe, prefs, captures, fs, layouts, shims or `assets/src`
+- [x] `.\simulator\build.ps1 -Test` passes on Windows (154 tests, scenarios)
+- [x] PR into `Documentation`
+- [ ] By a tester on an Apple Silicon Mac (from the preview's tar.gz): Gatekeeper steps, window and 3D view, sound, orbit and boop, hot reload, folder dialog, Follow system (dark / contrast / reduce motion), deploy finds CIRCUITPY, tear-off panel, traceback opens editor, boot with *Board speed* on takes about as long as on Windows, `./simulator/build.sh --test` from a checkout (runs the scenario checks CI skips)
+
+### Review
+- Can't run a Mac here: everything above the tester line was checked in CI (macOS runner) or locally (Windows, dev image).
+- python-build-standalone's macOS libpython: CI's `otool -L` check confirms the exe ends up naming `@rpath/libpython3.13.dylib`, with `LC_RPATH @executable_path/python/lib`, both re-signed ad hoc and `codesign -v` clean.
+- Scenario checks on CI's macOS runner: boot took 60-80 virtual s (12.6 on Linux). Lowering the speed and changing the harness's sleep accounting didn't help (both reverted); a probe step then measured the runner (Apple M1 Virtual) sleeping 5-10x long (16.7 ms took ~87 ms), with `taskpolicy` no better. The harness clock is real time x 40, so the job skips those checks; they're the same Python the firmware and Linux jobs run. Lesson added.
+- The app's own board-speed sleeps (`hw.rs` `charge`) have the same pattern; fine on real Macs (and Windows today), so left alone; the tester checks boot length.
+- `package.sh` takes the build folder as a 4th argument, so CI downloads each platform into `builds/<platform>` and packs them all into one `release-out/`; `SHA256SUMS` covers every archive there.
+- One pin for the macOS Python (`docker/fetch-python-macos.sh`), shared by CI and `build.sh`; on a Mac it downloads into `simulator/.python-macos/` (gitignored), which is a build input, not an install.
+
+# Simulator: Linux x86_64 build — #93 part 1
+
+Branch `feature/sim-linux` off `Documentation`. No packaging or release steps (#92's branch owns those); macOS is part 2. Windows build and `build.ps1` unchanged.
+
+- [x] Bevy `x11` + `wayland` features; `Cargo.lock` only gains 13 crates, none changed
+- [x] Dev image: Linux -dev packages; python-build-standalone CPython 3.13.5 (`20250708`), SHA-256 pinned and cross-checked against GitHub's asset digest
+- [x] `docker/build.sh`: `PLATFORM=windows|linux` (default windows); Linux links `-L` the real libpython folder, rpath `$ORIGIN/python/lib`, runs unit tests in the container, stages `dist/ddl0-sim` + trimmed `dist/python/`; `OWNER` chowns `dist/`
+- [x] `pyhost::use_bundled_python` sets PYTHONHOME first thing in `main()` (before any thread); `pyhost::command` keeps it out of launched programs (editor, file manager, gsettings)
+- [x] `deploy.rs`: Linux/macOS mount points, `first_dir` unit-tested
+- [x] `theme.rs`: GNOME settings via `gsettings`, cached and refreshed on a background thread; parsing unit-tested
+- [x] `simulator/build.sh` host script (`--run --debug --test --rebuild-image`; macOS message)
+- [x] CI `build-linux` job, actions pinned to SHAs; README
+- [x] Linux in Docker: fmt, clippy `-D warnings`, 153 unit tests, all scenarios
+- [x] Bundle: 48 MB (was 269: libpython debug symbols, Tcl/Tk, pip); on clean Debian with no Python, ldd finds libpython via rpath; headless.py passes on the trimmed stdlib
+- [x] Windows: `build.ps1 -Test` 153 tests + scenarios; app starts as before
+- [x] A deliberately failing Linux-only test (commit 86dc986) turned `build-linux` red with that test named; the Windows and firmware jobs stayed green. Reverted.
+- [ ] CI green after the revert
+- [x] PR #107 into `Documentation`
+- [ ] By a tester on Ubuntu Wayland and X11 (from the `ddl0-sim-linux` artifact): window and 3D view, sound, orbit and boop, hot reload, folder dialog, GNOME settings followed, deploy finds CIRCUITPY, tear-off panel, traceback opens editor
+
+### Review
+- Can't run the Linux GUI from this Windows machine; everything above the tester line was checked in Docker or CI.
+- python-build-standalone's `sysconfig` reports its build folder (`/install/lib`), so the link needs an explicit `-L`; its libpython ships with debug symbols (241 MB) and its terminfo has case-only name clashes that a Windows bind mount can't hold. All handled in `docker/build.sh`.
+- Setting `PYTHONHOME` would also reach programs the simulator launches; `pyhost::command` strips it for them.
+- Linux needs `libwayland-client` even on X11 (Bevy links it directly with the `wayland` feature); README says so.
+- #108 (#92) merged first; merging `Documentation` in kept both its `package`/`release` jobs and `build-linux`. Linux isn't wired into `package`/`release` yet (stage 3).
+
+# CI: a GitHub release on every merge to `main` — #92
+
+Branch `feature/release-on-main` off `Documentation`, Windows asset only (Linux/macOS come with #93). Owner confirmed releases come from `main` only; #92 is the approval to change `.github/`. Decisions: release on every push to `main`; CalVer tags `vYYYY.MM.DD(.N)`; zip keeps the repo layout; notes built from merge commits; no `CHANGELOG.md`.
+
+- [x] `simulator/release/package.sh <platform> <version> [out]`: app zip (repo layout, tracked files via `git archive`, `dist/` minus tests exe and user data), firmware zip, `SHA256SUMS`; checks the layout and fails if it's wrong
+- [x] `.github/scripts/release_notes.py`: PR merges since the previous tag grouped by branch prefix, one read-only GraphQL call for title/author/closed issues, integration PRs (`Documentation`/`dev`/`main`) skipped, loose commits listed, SHA-256 table
+- [x] `simulator.yml`: actions pinned to SHAs; `package` job (every run, needs all checks, uploads `ddl0-release-preview`); `release` job (push to `main` only, `contents: write`, `concurrency: release`, tag chosen inside the lock)
+- [x] Local run in `ddl0-sim-dev` from a clean clone: zips have the right layout, planted prefs/captures/shims and a local `log.txt` left out, `sha256sum -c` OK, unknown platform rejected
+- [x] Notes on a simulated `Documentation → main` merge onto `v1.0.0`: 50 PRs in Features/Fixes/Docs/Other, integration PR skipped, nothing from before `v1.0.0`; no-token fallback works
+- [x] README: Download the simulator, Releasing, Tests and CI updated
+- [x] Branch CI green, `ddl0-release-preview` checked (104 files, layout OK, no tests exe or user data, `sha256sum -c` OK), `release` skipped
+- [x] Failure gate: with the firmware job failing on purpose, `package` and `release` were skipped (run 41581821891); temporary commit reverted
+- [x] PR #108 into `Documentation`
+- [ ] After merge to `main` (owner): first release created; zip runs on a clean Windows PC
+
+### Review
+- PR data comes from one GraphQL call via `urllib` rather than `gh pr view` per PR: same fields, one request, and it runs in the dev image where `gh` isn't installed.
+- The tag is chosen in `release` (inside `concurrency: release`), not `package`, so two quick merges can't pick the same one; `package` names its preview `dev-<sha>`.
+- `v1.0.0` isn't in `Documentation`'s history, only `main`'s, so notes were checked on a simulated merge onto `v1.0.0`.
+- Sounds are gitignored, so no asset has `sounds/` (README says so).
+- `package.sh` needs a real git checkout: inside Docker, a worktree's `.git` file points at a Windows path.
+- #107 (Linux) also edits `simulator.yml`; whichever merges second rebases (note left for that session).
+
 # Simulator: choose the firmware folder — #105
 
 Branch `feature/firmware-folder-picker` off `Documentation`. Decisions: native dialog via `rfd`; remember the choice, changeable any time; simulator files found from the exe; folder must hold `code.py`.

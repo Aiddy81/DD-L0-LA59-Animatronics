@@ -168,6 +168,8 @@ fn main() {
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
+    // Before anything that may start a thread (the folder dialog, Bevy).
+    pyhost::use_bundled_python(&exe_dir);
     // The prefs come first: they may say where the firmware is.
     let mut paths = Paths::new(&exe_dir, PathBuf::new());
     let (mut prefs, prefs_warning) = prefs::load(&paths.prefs);
