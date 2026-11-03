@@ -2,7 +2,7 @@
 //! window size, the toolbar toggles and the model and room-light choices.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,9 @@ pub struct Prefs {
     pub plot_hidden: Vec<String>,
     /// The plot shows its values as a table instead of lines.
     pub plot_table: bool,
+    /// The firmware folder the user chose; `None` finds PropMaker_Feather
+    /// above the exe. A command-line code.py wins over it.
+    pub firmware_dir: Option<PathBuf>,
     // The layouts are tables, so they stay last: TOML wants plain values first.
     /// The dock layout in use; `None` is the Default layout.
     pub layout: Option<Layout>,
@@ -98,6 +101,7 @@ impl Default for Prefs {
             plot_window_s: 20.0,
             plot_hidden: Vec::new(),
             plot_table: false,
+            firmware_dir: None,
             layout: None,
             layouts: BTreeMap::new(),
         }

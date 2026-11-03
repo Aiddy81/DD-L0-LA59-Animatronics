@@ -466,6 +466,11 @@ impl PyHost {
         &self.code_path
     }
 
+    /// Runs a different code.py from the next `start`.
+    pub fn set_code_path(&mut self, code_path: PathBuf) {
+        self.code_path = code_path;
+    }
+
     pub fn shim_dir(&self) -> &Path {
         &self.shim_dir
     }

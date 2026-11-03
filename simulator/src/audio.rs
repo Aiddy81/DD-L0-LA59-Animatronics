@@ -311,11 +311,13 @@ fn rescan_sounds(mut sounds: ResMut<Sounds>, paths: Res<crate::Paths>) {
     let stale = sounds
         .scanned_at
         .is_none_or(|t| t.elapsed() >= RESCAN_EVERY)
-        || mixer != sounds.scanned_mixer;
+        || mixer != sounds.scanned_mixer
+        // A different firmware folder was chosen.
+        || paths.is_changed();
     if !stale {
         return;
     }
-    let dir = paths.code.parent().unwrap_or(Path::new("."));
+    let dir = paths.fw_dir();
     sounds.scan = scan_sounds(dir, mixer);
     sounds.scanned_at = Some(Instant::now());
     sounds.scanned_mixer = mixer;
