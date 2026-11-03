@@ -351,6 +351,12 @@ impl ActiveTheme {
         self.scale_chosen = false;
     }
 
+    /// Drops the picked animations setting, so it follows Windows' Animation effects again.
+    pub fn reset_animations(&mut self) {
+        self.animations = self.os.animations;
+        self.animations_chosen = false;
+    }
+
     fn set_os(&mut self, os: OsPrefs) {
         self.os = os;
         if !self.scale_chosen {
@@ -1057,6 +1063,31 @@ mod tests {
         assert_eq!(fresh.saved_scale(), Some(1.8));
         fresh.reset_scale();
         assert_eq!((fresh.scale, fresh.saved_scale()), (1.25, None));
+    }
+
+    #[test]
+    fn reset_animations_follows_windows_again() {
+        let windows = OsPrefs {
+            dark: false,
+            high_contrast: false,
+            animations: false,
+            text_scale: 1.0,
+        };
+        // A choice saved by an earlier run, or picked in the app.
+        let mut theme = ActiveTheme::with_os(ThemeChoice::System, None, Some(true), windows);
+        theme.set_os(windows);
+        assert!(theme.animations());
+
+        theme.reset_animations();
+        assert!(!theme.animations());
+        assert_eq!(theme.saved_animations(), None);
+
+        theme.set_os(OsPrefs {
+            animations: true,
+            ..windows
+        });
+        assert!(theme.animations());
+        assert_eq!(theme.saved_animations(), None);
     }
 
     /// Whether `focus_ring` painted its accent ring this pass.

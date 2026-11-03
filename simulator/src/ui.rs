@@ -225,6 +225,8 @@ enum Cmd {
     Overlay(Overlay),
     /// Smooth transitions on or off.
     Animations,
+    /// Forget the picked animations setting and follow Windows' Animation effects.
+    AnimationsReset,
     /// True for the Lola glTF model, false for the primitive shapes.
     Model(bool),
     Deploy,
@@ -473,6 +475,7 @@ const SHORTCUTS: &[Shortcut] = &[
         Cmd::Overlay(Overlay::Accel),
     ),
     action("View", "Animations", Cmd::Animations),
+    action("View", "Animations: follow Windows", Cmd::AnimationsReset),
     action("Options", "Use the Lola model", Cmd::Model(true)),
     action("Options", "Use the primitive model", Cmd::Model(false)),
     action("Panel", "", Cmd::TogglePane(Pane::Motion)),
@@ -1889,6 +1892,7 @@ fn panels(
                             theme.scale,
                             &mut ui.scale_drag,
                             theme.animations(),
+                            theme.saved_animations().is_some(),
                             &mut cmds,
                         )
                     });
@@ -2385,6 +2389,7 @@ impl CmdCx<'_, '_, '_> {
                 let on = !self.theme.animations();
                 self.theme.set_animations(on);
             }
+            Cmd::AnimationsReset => self.theme.reset_animations(),
             Cmd::Model(use_gltf) => {
                 // Only touch the resource on a real change, so the model isn't rebuilt every frame.
                 if let Some(model) = self.model.as_mut() {
@@ -3467,6 +3472,7 @@ fn appearance_controls(
     scale: f32,
     scale_drag: &mut Option<f32>,
     animations: bool,
+    animations_chosen: bool,
     cmds: &mut Vec<Cmd>,
 ) -> Option<f32> {
     row.label("Theme");
@@ -3525,6 +3531,19 @@ fn appearance_controls(
     .changed()
     {
         cmds.push(Cmd::Animations);
+    }
+    // Only offered once a choice is saved; until then it already follows Windows.
+    if tip(
+        a11y::name(
+            row.add_enabled(animations_chosen, egui::Button::new("Follow Windows")),
+            "Animations: follow Windows",
+        ),
+        "Animations follow Windows' Animation effects again",
+        Some(Cmd::AnimationsReset),
+    )
+    .clicked()
+    {
+        cmds.push(Cmd::AnimationsReset);
     }
     if picked != choice {
         cmds.push(Cmd::Theme(picked));
