@@ -1,7 +1,8 @@
 //! Placing and editing parts in the app (#65 stage 4). The Parts panel lists
 //! the four kinds; one dragged onto the droid lands on the surface under the
-//! pointer. With "Edit parts" on, clicking a part selects it (never a boop)
-//! and dragging it slides it over the surface. Every change is one undo step
+//! pointer, and its Add button puts one where the centre of the 3D view
+//! meets the droid, for the keyboard. With "Edit parts" on, clicking a part
+//! selects it (never a boop) and dragging it slides it over the surface. Every change is one undo step
 //! and is written back to `simulator/parts.toml`, keeping the file's comments,
 //! order and any entries the app didn't load.
 
@@ -22,7 +23,7 @@ use crate::a11y;
 use crate::config::{PartCfg, PartKind, PartShape, PixelLayout};
 use crate::dock::ViewportRect;
 use crate::hw::hw;
-use crate::overlay::to_egui;
+use crate::overlay::{from_egui, to_egui};
 use crate::parts::{part_kinds, Part, Parts, PartsFileText, MAX_PARTS, PARTS_FILE};
 use crate::prefs::Prefs;
 use crate::scene::{DroidRoot, OrbitCam, Side, Wing};
@@ -105,6 +106,8 @@ pub struct PartEdit {
     queue: Vec<PartCmd>,
     /// A kind being dragged from the panel.
     carrying: Option<PartKind>,
+    /// A kind to add where the centre of the 3D view meets the droid.
+    add_at_centre: Option<PartKind>,
     slide: Option<Slide>,
     /// Where a carried part would land.
     preview: Option<Spot>,
@@ -609,11 +612,23 @@ impl Surface<'_, '_> {
         self.windows.single().ok()?.cursor_position()
     }
 
-    /// The droid's surface under the pointer, in the space of the node a part
-    /// dropped there sits on: a wing if it's on one, else the droid itself.
-    /// Parts are see-through to this, so a part can slide over another.
+    /// The centre of the 3D view, in the window's logical pixels.
+    fn view_centre(&self, viewport: &ViewportRect) -> Option<Vec2> {
+        let rect = viewport.rect?;
+        let scale = self.windows.single().ok()?.scale_factor();
+        Some(from_egui(rect.center(), scale, viewport.ppp))
+    }
+
     fn under_cursor(&mut self) -> Option<Spot> {
         let cursor = self.cursor()?;
+        self.at(cursor)
+    }
+
+    /// The droid's surface at `cursor` (window logical pixels), in the space
+    /// of the node a part dropped there sits on: a wing if it's on one, else
+    /// the droid itself. Parts are see-through to this, so a part can slide
+    /// over another.
+    fn at(&mut self, cursor: Vec2) -> Option<Spot> {
         let (camera, transform) = self.cams.single().ok()?;
         // Its Transform is this frame's; its GlobalTransform a frame behind.
         let ray = camera
@@ -678,6 +693,19 @@ fn place_parts(
     mut surface: Surface,
 ) {
     edit.preview = None;
+    if let Some(kind) = edit.add_at_centre.take() {
+        let spot = surface
+            .view_centre(&viewport)
+            .ok_or("the 3D view is hidden")
+            .and_then(|centre| {
+                surface
+                    .at(centre)
+                    .ok_or("the centre of the 3D view isn't on the droid; turn or pan the camera")
+            });
+        if let Err(e) = spot.and_then(|spot| edit.add(kind, &spot).map_err(|_| "too many parts")) {
+            hw().push_line(format!("[sim] {} not added: {e}", kind.name()));
+        }
+    }
     if let Some(kind) = edit.carrying {
         let spot = viewport.hovered.then(|| surface.under_cursor()).flatten();
         if mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left) {
@@ -761,9 +789,11 @@ fn sync_parts(
             }
         }
     }
+    // Only typing in a field counts: a focused button (keyboard use) must not
+    // hold back auto-save or merge every later change into one undo step.
     let typing = contexts
         .ctx_mut()
-        .is_ok_and(|ctx| ctx.wants_keyboard_input());
+        .is_ok_and(|ctx| crate::ui::text_field_focused(ctx));
     let interacting = mouse.get_pressed().next().is_some() || typing;
     if edit.record(interacting) {
         let list = edit.cfgs();
@@ -938,13 +968,19 @@ pub fn panel(ui: &mut egui::Ui, edit: &mut PartEdit, palette: &Palette) {
         }
     });
     ui.separator();
-    ui.label("Drag onto the droid:");
+    ui.label("Add at the centre of the 3D view, or drag onto the droid:");
     ui.horizontal_wrapped(|row| {
         for kind in KINDS {
-            let button = egui::Button::new(kind.name()).sense(egui::Sense::click_and_drag());
-            let r = row.add(button).on_hover_text(kind_help(kind));
+            let text = format!("Add {}", kind.name());
+            let button = egui::Button::new(text).sense(egui::Sense::click_and_drag());
+            let r = row.add(button).on_hover_text(format!(
+                "{}. Press to place one where the centre of the 3D view meets the droid, or drag it onto the droid",
+                kind_help(kind)
+            ));
             if r.drag_started() {
                 edit.carrying = Some(kind);
+            } else if r.clicked() {
+                edit.add_at_centre = Some(kind);
             }
         }
     });

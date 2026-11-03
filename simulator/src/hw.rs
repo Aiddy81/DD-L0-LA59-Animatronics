@@ -145,6 +145,8 @@ pub struct HwState {
     /// Unit direction that Nudge, Hard shake and a head click push in, added to
     /// `accel_g`.
     pub nudge_dir: [f32; 3],
+    /// How hard the Boop command (B) knocks, in g.
+    pub boop_g: f32,
     /// One-shot readings returned before falling back to `accel_g`.
     pub accel_pulses: VecDeque<[f32; 3]>,
     /// The latest reading the firmware got, after the sensor's range clipping.
@@ -220,6 +222,7 @@ impl HwState {
             runs: 0,
             accel_g: [0.0, 0.0, 1.0],
             nudge_dir: [0.0, 0.0, 1.0],
+            boop_g: 1.0,
             accel_pulses: VecDeque::new(),
             last_accel: [0.0, 0.0, 1.0],
             accel_range_g: 4.0,
@@ -257,11 +260,11 @@ impl HwState {
     }
 
     /// Clears everything a fresh run of `code.py` should not inherit. The held
-    /// accelerometer value, its nudge direction and clock speed are user settings, so they survive.
+    /// accelerometer value, its nudge direction, boop strength and clock speed are user settings, so they survive.
     /// A skip is not: the new run starts at 1x.
     pub fn reset_for_run(&mut self) {
         let accel = self.accel_g;
-        let nudge_dir = self.nudge_dir;
+        let (nudge_dir, boop_g) = (self.nudge_dir, self.boop_g);
         let speed = if self.skipping { 1.0 } else { self.clock.speed };
         let strict = self.strict;
         let board_speed = self.board_speed;
@@ -275,6 +278,7 @@ impl HwState {
         self.runs = runs;
         self.accel_g = accel;
         self.nudge_dir = nudge_dir;
+        self.boop_g = boop_g;
         self.clock.speed = speed;
         self.strict = strict;
         self.board_speed = board_speed;

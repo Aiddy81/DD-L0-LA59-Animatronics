@@ -124,6 +124,23 @@ pub fn boop(dir: [f32; 3], delta: f32) {
     push_reading(dir, delta, format!("boop {delta:.1} g"));
 }
 
+/// A boop, logged as `[sim] boop … g from …` like a head click.
+pub fn boop_logged(dir: [f32; 3], delta: f32) {
+    boop(dir, delta);
+    hw().push_line(format!(
+        "[sim] boop {delta:.1} g from {}",
+        nearest_direction(dir)
+    ));
+}
+
+/// A boop strength kept in the range a head click reaches.
+pub fn boop_g(g: f32) -> f32 {
+    if g.is_nan() {
+        return NUDGE_DELTA_G;
+    }
+    g.clamp(NUDGE_DELTA_G, SHAKE_DELTA_G)
+}
+
 pub fn nudge(dir: [f32; 3]) {
     push_reading(dir, NUDGE_DELTA_G, "nudge".to_owned());
 }
@@ -184,6 +201,8 @@ enum Cmd {
     Idle,
     Nudge,
     Shake,
+    /// A boop at the Motion panel's direction and strength.
+    Boop,
     ToggleHelp,
     CloseHelp,
     Focus,
@@ -371,6 +390,11 @@ const SHORTCUTS: &[Shortcut] = &[
         "Drag a kind from the Parts panel",
         "Place a part on the droid",
     ),
+    info(
+        "Parts",
+        "Add led (or another kind) in the Parts panel",
+        "Place a part where the centre of the 3D view meets the droid",
+    ),
     bound(
         "Motion",
         "N",
@@ -384,6 +408,13 @@ const SHORTCUTS: &[Shortcut] = &[
         "Hard shake",
         &[(NO_MODS, egui::Key::S)],
         Cmd::Shake,
+    ),
+    bound(
+        "Motion",
+        "B",
+        "Boop at the Motion panel's direction and strength",
+        &[(NO_MODS, egui::Key::B)],
+        Cmd::Boop,
     ),
     info(
         "Motion",
@@ -405,6 +436,19 @@ const SHORTCUTS: &[Shortcut] = &[
     info("Camera", "Left or right drag", "Orbit"),
     info("Camera", "Middle drag", "Pan"),
     info("Camera", "Scroll", "Zoom"),
+    info(
+        "Camera",
+        "Tab or F6 to the 3D view",
+        "Give the 3D view the keys below",
+    ),
+    info("Camera", "Arrows (3D view focused)", "Orbit"),
+    info("Camera", "Shift+arrows (3D view focused)", "Pan"),
+    info("Camera", "+ / - (3D view focused)", "Zoom"),
+    info(
+        "Camera",
+        "Home (3D view focused)",
+        "Back to the starting view",
+    ),
     action("Light", "", Cmd::Light(RoomLight::Bright)),
     action("Light", "", Cmd::Light(RoomLight::Dim)),
     action("Light", "", Cmd::Light(RoomLight::Dark)),
@@ -1880,6 +1924,7 @@ fn panels(
     // Cleared first: the dock sets them only if the 3D view's tab is showing.
     captures.viewport.rect = None;
     captures.viewport.hovered = false;
+    captures.viewport.keys = default();
     // The sound list is only re-scanned while the Audio tab is showing.
     audio.sounds.wanted = false;
     let mut cx = PaneCx {
@@ -2237,6 +2282,13 @@ impl CmdCx<'_, '_, '_> {
             Cmd::Shake => {
                 let dir = hw().nudge_dir;
                 shake(dir);
+            }
+            Cmd::Boop => {
+                let (dir, g) = {
+                    let s = hw();
+                    (s.nudge_dir, boop_g(s.boop_g))
+                };
+                boop_logged(dir, g);
             }
             Cmd::ToggleHelp => {
                 let fade = self.fade_now();
@@ -2604,6 +2656,32 @@ fn motion_panel(side: &mut egui::Ui, state: &mut UiState) {
         .on_hover_text(
             "The firmware reads only z, so \u{b1}X/\u{b1}Y nudges are ignored, as on the robot",
         );
+    side.horizontal_wrapped(|row| {
+        let mut g = hw().boop_g;
+        if tip(
+            row.add(
+                egui::Slider::new(&mut g, NUDGE_DELTA_G..=SHAKE_DELTA_G)
+                    .step_by(0.1)
+                    .text("boop strength (g)"),
+            ),
+            "How hard Boop (B) knocks, in the chosen direction: 0.3 g is a nudge, 2 g a hard knock, like a short or long click on the droid",
+            None,
+        )
+        .changed()
+        {
+            hw().boop_g = boop_g(g);
+        }
+        if tip(
+            row.button("Boop"),
+            "One reading this strength past the held value, in the chosen direction, logged like a click on the droid",
+            Some(Cmd::Boop),
+        )
+        .clicked()
+        {
+            let dir = hw().nudge_dir;
+            boop_logged(dir, boop_g(g));
+        }
+    });
     let mut held = hw().accel_g;
     let mut changed = false;
     for (value, label) in held
@@ -3026,7 +3104,7 @@ fn toggle_pane(
 /// Whether the widget with keyboard focus is a text field (a DragValue being
 /// typed into counts). Not `wants_keyboard_input`: in egui 0.33 that is true
 /// for any focused widget, so tabbing to a button would turn every key off.
-fn text_field_focused(ctx: &egui::Context) -> bool {
+pub(crate) fn text_field_focused(ctx: &egui::Context) -> bool {
     ctx.memory(|m| m.focused())
         .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
 }
@@ -4982,6 +5060,25 @@ mod status_tests {
 #[cfg(test)]
 mod table_tests {
     use super::*;
+
+    #[test]
+    fn boop_strength_stays_in_the_click_range() {
+        assert_eq!(boop_g(0.0), NUDGE_DELTA_G);
+        assert_eq!(boop_g(-5.0), NUDGE_DELTA_G);
+        assert_eq!(boop_g(f32::NAN), NUDGE_DELTA_G);
+        assert_eq!(boop_g(1.0), 1.0);
+        assert_eq!(boop_g(9.0), SHAKE_DELTA_G);
+        assert_eq!(boop_g(f32::INFINITY), SHAKE_DELTA_G);
+        // From a fresh state: `hw()` is shared with other tests and is a lock.
+        let default = crate::hw::HwState::new().boop_g;
+        assert_eq!(boop_g(default), default, "the default is in range");
+    }
+
+    #[test]
+    fn boop_has_a_key() {
+        let row = SHORTCUTS.iter().find(|r| r.cmd == Some(Cmd::Boop));
+        assert!(row.is_some_and(|r| r.keys == "B" && !r.binds.is_empty()));
+    }
 
     #[test]
     fn no_two_rows_share_a_bind() {

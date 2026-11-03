@@ -431,6 +431,51 @@ pub struct ViewportRect {
     pub hovered: bool,
     /// Pixels per point, to convert `rect` to physical pixels.
     pub ppp: f32,
+    /// Camera keys pressed while the view had keyboard focus.
+    pub keys: crate::scene::CamKeys,
+}
+
+/// The focusable widget over the 3D view that takes the camera keys.
+fn view_keys_id() -> egui::Id {
+    egui::Id::new("viewport_keys")
+}
+
+/// Reads the camera keys while the 3D view has keyboard focus. Arrows are
+/// locked to it (so they don't move focus to another control); Tab and Esc
+/// still leave. None of these keys is in the shortcut table.
+fn read_view_keys(ui: &egui::Ui, focused: bool) -> crate::scene::CamKeys {
+    use egui::{Key, Modifiers};
+    let mut keys = crate::scene::CamKeys::default();
+    if !focused {
+        return keys;
+    }
+    ui.memory_mut(|m| {
+        m.set_focus_lock_filter(
+            view_keys_id(),
+            egui::EventFilter {
+                tab: false,
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                escape: false,
+            },
+        );
+    });
+    ui.input_mut(|inp| {
+        let mut count = |mods, key| inp.count_and_consume_key(mods, key) as f32;
+        // Shift first: a pattern without Shift also matches Shift+key.
+        let s = Modifiers::SHIFT;
+        keys.pan.x = count(s, Key::ArrowRight) - count(s, Key::ArrowLeft);
+        keys.pan.y = count(s, Key::ArrowUp) - count(s, Key::ArrowDown);
+        let n = Modifiers::NONE;
+        keys.orbit.x = count(n, Key::ArrowRight) - count(n, Key::ArrowLeft);
+        keys.orbit.y = count(n, Key::ArrowUp) - count(n, Key::ArrowDown);
+        // `+` arrives as Shift+Equals (keys are mapped by position), or as
+        // Plus from the number pad.
+        let zoom_in = count(n, Key::Equals) + count(n, Key::Plus);
+        keys.zoom = (zoom_in - count(n, Key::Minus)) as i32;
+        keys.home = count(n, Key::Home) > 0.0;
+    });
+    keys
 }
 
 /// A pane torn out into its own OS window. The egui context that draws the
@@ -811,6 +856,19 @@ impl<F: FnMut(&mut egui::Ui, Pane)> TabViewer for Viewer<'_, F> {
                 rect.contains(pos) && ctx.layer_id_at(pos) == Some(ui.layer_id())
             });
             self.viewport.ppp = ui.ctx().pixels_per_point();
+            // Focus only, no click or drag: the mouse still reaches the scene
+            // underneath, and Tab stops here right after the view's tab.
+            let view = ui.interact(
+                rect,
+                view_keys_id(),
+                egui::Sense::focusable_noninteractive(),
+            );
+            crate::a11y::canvas(
+                &view,
+                Pane::Viewport.title(),
+                "Arrows orbit, Shift and arrows pan, plus and minus zoom, Home resets",
+            );
+            self.viewport.keys = read_view_keys(ui, view.has_focus());
             // Its own layer, so the hover test above (and the boop and orbit
             // that depend on it) is false over the bar and its open menus.
             let bar = &mut *self.bar;

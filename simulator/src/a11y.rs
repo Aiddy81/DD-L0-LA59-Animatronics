@@ -102,6 +102,16 @@ pub fn label(resp: egui::Response, text: &str) -> egui::Response {
     resp
 }
 
+/// Names a drawing area that takes keys (the 3D view), with how to use it
+/// as its description, which screen readers read after the name.
+pub fn canvas(resp: &egui::Response, name: &str, description: &str) {
+    resp.ctx.accesskit_node_builder(resp.id, |node| {
+        node.set_role(accesskit::Role::Canvas);
+        node.set_label(name);
+        node.set_description(description);
+    });
+}
+
 /// Drops the leading emoji from the name egui gave a control, so speech
 /// commands match what people read. Leaves names that are only a glyph alone;
 /// those get `name`.
