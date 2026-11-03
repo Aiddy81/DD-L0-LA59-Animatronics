@@ -14,6 +14,8 @@
 #          run it from dist/, beside the Python and MinGW DLLs it needs.
 #          linux, macos: runs them here, against the bundled Python.
 #   OWNER=uid:gid hands dist/ to that user when done (the container is root).
+#   SCENARIOS=0 skips the scenario checks below (CI's macOS runner, whose
+#          sleeps run 5-10x long, can't keep their real-time clock).
 # Ends by running code.py headless against every scenario; a failure exits 3,
 # after dist/ is staged, so the built simulator can be used to debug it.
 set -euo pipefail
@@ -144,6 +146,10 @@ else
   done
 fi
 
+if [ "${SCENARIOS:-1}" = 0 ]; then
+  echo "== Scenario checks skipped (SCENARIOS=0)"
+  exit 0
+fi
 echo "== Scenario checks (code.py headless)"
 # No __pycache__ in the mounted checkout (it would be root-owned).
 host_python=python3

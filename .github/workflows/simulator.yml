@@ -117,11 +117,15 @@ jobs:
             .ci-cache/target
           key: sim-macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('simulator/Cargo.lock', 'simulator/docker/fetch-python-macos.sh') }}
           restore-keys: sim-macos-${{ runner.os }}-${{ runner.arch }}-
+      # No scenario checks here: this runner is a VM whose sleeps run 5-10x
+      # long (16.7 ms took ~87 ms when measured), and their clock is real
+      # time x 40, so boot never finishes in time. They're platform-
+      # independent Python and run in the firmware and Linux jobs.
       - name: Format, lint, build and run the unit tests
         working-directory: simulator
         run: |
           PLATFORM=macos PY_MACOS="$RUNNER_TEMP/pbs/python" CARGO_TARGET_DIR="$GITHUB_WORKSPACE/.ci-cache/target" \
-            CHECK=1 LOCKED=1 TEST=1 bash docker/build.sh
+            CHECK=1 LOCKED=1 TEST=1 SCENARIOS=0 bash docker/build.sh
       - name: Check the staged app starts its Python from dist/
         working-directory: simulator/dist
         run: |
