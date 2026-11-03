@@ -1,0 +1,26 @@
+# Boot: the droid wakes up, lights its eyes and moves both wings.
+# Times are virtual seconds since code.py started (imports included, which
+# take a few virtual seconds at high speed, so the limits are generous).
+description = "Boot sequence runs to the end and drives the wings and eyes"
+
+[[expect]]
+log = "Boot sequence complete!"
+by = 40.0
+
+[[expect]]
+name = "main eye lights up"
+led = "main_r"
+above = 0.1
+by = 40.0
+
+[[expect]]
+name = "right wing raised during boot (<= 20°)"
+wing = "right"
+below = 20.0
+by = 40.0
+
+[[expect]]
+name = "left wing driven"
+wing = "left"
+above = 0.0
+by = 40.0

@@ -1,0 +1,784 @@
+# Project wiki — #95
+
+Branch `docs/wiki` off `Documentation`. Decisions (owner): pages live in `wiki/`, reviewed by PR and published to the GitHub wiki by a workflow; I capture the simulator screenshots, the owner adds hardware photos.
+
+- [x] Issue #95 read; wiki enabled but no wiki repo yet (needs one page saved on github.com first)
+- [x] `.github/workflows/wiki-sync.yml`: on `wiki/**` changes to `main` (and by hand), rsync `wiki/` into `<repo>.wiki.git` with `GITHUB_TOKEN`; checkout pinned by SHA
+- [x] 34 pages + `_Sidebar.md` / `_Footer.md`: Start here, Using the simulator, Building the robot, Changing behaviour, Adding hardware, For developers, Reference
+- [x] Every how-to: You'll need / Time, numbered steps, "It should look like this", "Something went wrong?", "More detail (for tinkerers)"
+- [x] Facts checked against the code (settings, behaviours, sounds, channel map, build switches, UI labels)
+- [x] 25 screenshots/GIFs from the running simulator (its own Screenshot/Record, or crops inside the window), local paths painted out
+- [x] README: wiki link; fixed the random-sound row (`main()` plays one once, after boot) and dropped the stale Lola-crash limit (fixed in PR #101)
+- [x] Checks: every page link resolves, every image exists and has alt text, every `settings.toml` key is in Settings-Reference, every page is in the sidebar, quoted UI labels exist in `simulator/src`
+- [ ] Owner: 7 placeholder images (`wiki/images/TODO-*.png`: parts, wiring, CIRCUITPY drive, Deploy dialog, serial console, traceback); confirm Wiring steps 7 and 9 (white LED connector/resistor, servo power)
+- [ ] Owner: after merge to `main`, save one page at github.com/…/wiki, then run the *Wiki* workflow
+- [ ] Readability test with a non-technical reader and a teen
+- [ ] Commit, push, PR into `Documentation`
+
+### Review
+- Docker Desktop wouldn't start ("unable to start"), so the simulator wasn't rebuilt; the exe in `dist\` was built from the same source minutes before the last commit. Images were cropped and GIFs made with .NET System.Drawing / WPF instead of Pillow in Docker; nothing was installed.
+- Working screenshots used to find buttons showed the whole desktop; the owner flagged it. None of those are in `wiki/`; every wiki image was checked to show only the app window (lesson added).
+- The attention animation can't be interrupted (only the trench run aborts on `ANIMATION_NUDGE_Z_MG`); the wiki says so, the setting's comment in `settings.toml` is broader than the code.
+
+# Simulator: macOS Apple Silicon build, all platforms in releases — #93 part 2
+
+Branch `feature/sim-macos` off `Documentation` (has #107 Linux and #108 releases). #92/#93 are the approval to change `.github/`. Windows build and `build.ps1` unchanged.
+
+- [x] `theme.rs`: macOS dark mode (`defaults read -g AppleInterfaceStyle`), *Increase contrast* and *Reduce motion* (`com.apple.universalaccess`) on the background thread Linux uses; parsing unit-tested (unset key = its default, unreadable = app default)
+- [x] `deploy.rs` already looks at `/Volumes/CIRCUITPY` on macOS (from #107)
+- [x] `docker/fetch-python-macos.sh`: python-build-standalone 3.13.5 `20250708` `aarch64-apple-darwin` install_only, SHA-256 pinned, cross-checked against GitHub's asset digest; one pin shared by CI and `build.sh`
+- [x] `docker/build.sh`: `PLATFORM=macos` runs natively; `-L` + rpath `@executable_path/python/lib`; tests with `DYLD_LIBRARY_PATH`; stages trimmed `dist/python/`; `otool -L` check, repoint libpython to `@rpath` with `install_name_tool` if needed, `strip -S`, ad-hoc `codesign -s - -f`, `codesign -v`
+- [x] `simulator/build.sh`: macOS branch (Apple Silicon only; says what's missing: Xcode CLT, rustup, Rust 1.92.0; installs nothing)
+- [x] CI `build-macos` on `macos-14`: Rust 1.92.0 via rustup, fmt, clippy `-D warnings`, unit tests, rpath/sign check (scenario checks skipped, `SCENARIOS=0`: see review), uploads `ddl0-sim-macos-arm64`; no new actions (existing pinned SHAs)
+- [x] `package.sh`: `linux` / `macos-arm64` tar.gz (only the exe executable, owner root), optional dist-dir argument, layout check reads tar too, `SHA256SUMS` over every archive
+- [x] `package` needs every build job and packs all three; `release` attaches zip + tar.gz + `SHA256SUMS`
+- [x] README: per-platform download/run/build, Gatekeeper note, Intel unsupported, CI and Releasing
+- [x] CI green on Windows, Linux and macOS (run 41595437517)
+- [x] A deliberately failing macOS-only test turned `build-macos` red naming it (run 41597260442); Windows/Linux green, `package` skipped; reverted
+- [x] `ddl0-release-preview`: Windows zip (104 entries), Linux tar.gz (693), macOS tar.gz (718), firmware zip, `SHA256SUMS`; `sha256sum -c` OK; repo layout; exe `0755` in both tar.gz; no tests exe, prefs, captures, fs, layouts, shims or `assets/src`
+- [x] `.\simulator\build.ps1 -Test` passes on Windows (154 tests, scenarios)
+- [x] PR into `Documentation`
+- [ ] By a tester on an Apple Silicon Mac (from the preview's tar.gz): Gatekeeper steps, window and 3D view, sound, orbit and boop, hot reload, folder dialog, Follow system (dark / contrast / reduce motion), deploy finds CIRCUITPY, tear-off panel, traceback opens editor, boot with *Board speed* on takes about as long as on Windows, `./simulator/build.sh --test` from a checkout (runs the scenario checks CI skips)
+
+### Review
+- Can't run a Mac here: everything above the tester line was checked in CI (macOS runner) or locally (Windows, dev image).
+- python-build-standalone's macOS libpython: CI's `otool -L` check confirms the exe ends up naming `@rpath/libpython3.13.dylib`, with `LC_RPATH @executable_path/python/lib`, both re-signed ad hoc and `codesign -v` clean.
+- Scenario checks on CI's macOS runner: boot took 60-80 virtual s (12.6 on Linux). Lowering the speed and changing the harness's sleep accounting didn't help (both reverted); a probe step then measured the runner (Apple M1 Virtual) sleeping 5-10x long (16.7 ms took ~87 ms), with `taskpolicy` no better. The harness clock is real time x 40, so the job skips those checks; they're the same Python the firmware and Linux jobs run. Lesson added.
+- The app's own board-speed sleeps (`hw.rs` `charge`) have the same pattern; fine on real Macs (and Windows today), so left alone; the tester checks boot length.
+- `package.sh` takes the build folder as a 4th argument, so CI downloads each platform into `builds/<platform>` and packs them all into one `release-out/`; `SHA256SUMS` covers every archive there.
+- One pin for the macOS Python (`docker/fetch-python-macos.sh`), shared by CI and `build.sh`; on a Mac it downloads into `simulator/.python-macos/` (gitignored), which is a build input, not an install.
+
+# Simulator: Linux x86_64 build — #93 part 1
+
+Branch `feature/sim-linux` off `Documentation`. No packaging or release steps (#92's branch owns those); macOS is part 2. Windows build and `build.ps1` unchanged.
+
+- [x] Bevy `x11` + `wayland` features; `Cargo.lock` only gains 13 crates, none changed
+- [x] Dev image: Linux -dev packages; python-build-standalone CPython 3.13.5 (`20250708`), SHA-256 pinned and cross-checked against GitHub's asset digest
+- [x] `docker/build.sh`: `PLATFORM=windows|linux` (default windows); Linux links `-L` the real libpython folder, rpath `$ORIGIN/python/lib`, runs unit tests in the container, stages `dist/ddl0-sim` + trimmed `dist/python/`; `OWNER` chowns `dist/`
+- [x] `pyhost::use_bundled_python` sets PYTHONHOME first thing in `main()` (before any thread); `pyhost::command` keeps it out of launched programs (editor, file manager, gsettings)
+- [x] `deploy.rs`: Linux/macOS mount points, `first_dir` unit-tested
+- [x] `theme.rs`: GNOME settings via `gsettings`, cached and refreshed on a background thread; parsing unit-tested
+- [x] `simulator/build.sh` host script (`--run --debug --test --rebuild-image`; macOS message)
+- [x] CI `build-linux` job, actions pinned to SHAs; README
+- [x] Linux in Docker: fmt, clippy `-D warnings`, 153 unit tests, all scenarios
+- [x] Bundle: 48 MB (was 269: libpython debug symbols, Tcl/Tk, pip); on clean Debian with no Python, ldd finds libpython via rpath; headless.py passes on the trimmed stdlib
+- [x] Windows: `build.ps1 -Test` 153 tests + scenarios; app starts as before
+- [x] A deliberately failing Linux-only test (commit 86dc986) turned `build-linux` red with that test named; the Windows and firmware jobs stayed green. Reverted.
+- [ ] CI green after the revert
+- [x] PR #107 into `Documentation`
+- [ ] By a tester on Ubuntu Wayland and X11 (from the `ddl0-sim-linux` artifact): window and 3D view, sound, orbit and boop, hot reload, folder dialog, GNOME settings followed, deploy finds CIRCUITPY, tear-off panel, traceback opens editor
+
+### Review
+- Can't run the Linux GUI from this Windows machine; everything above the tester line was checked in Docker or CI.
+- python-build-standalone's `sysconfig` reports its build folder (`/install/lib`), so the link needs an explicit `-L`; its libpython ships with debug symbols (241 MB) and its terminfo has case-only name clashes that a Windows bind mount can't hold. All handled in `docker/build.sh`.
+- Setting `PYTHONHOME` would also reach programs the simulator launches; `pyhost::command` strips it for them.
+- Linux needs `libwayland-client` even on X11 (Bevy links it directly with the `wayland` feature); README says so.
+- #108 (#92) merged first; merging `Documentation` in kept both its `package`/`release` jobs and `build-linux`. Linux isn't wired into `package`/`release` yet (stage 3).
+
+# CI: a GitHub release on every merge to `main` — #92
+
+Branch `feature/release-on-main` off `Documentation`, Windows asset only (Linux/macOS come with #93). Owner confirmed releases come from `main` only; #92 is the approval to change `.github/`. Decisions: release on every push to `main`; CalVer tags `vYYYY.MM.DD(.N)`; zip keeps the repo layout; notes built from merge commits; no `CHANGELOG.md`.
+
+- [x] `simulator/release/package.sh <platform> <version> [out]`: app zip (repo layout, tracked files via `git archive`, `dist/` minus tests exe and user data), firmware zip, `SHA256SUMS`; checks the layout and fails if it's wrong
+- [x] `.github/scripts/release_notes.py`: PR merges since the previous tag grouped by branch prefix, one read-only GraphQL call for title/author/closed issues, integration PRs (`Documentation`/`dev`/`main`) skipped, loose commits listed, SHA-256 table
+- [x] `simulator.yml`: actions pinned to SHAs; `package` job (every run, needs all checks, uploads `ddl0-release-preview`); `release` job (push to `main` only, `contents: write`, `concurrency: release`, tag chosen inside the lock)
+- [x] Local run in `ddl0-sim-dev` from a clean clone: zips have the right layout, planted prefs/captures/shims and a local `log.txt` left out, `sha256sum -c` OK, unknown platform rejected
+- [x] Notes on a simulated `Documentation → main` merge onto `v1.0.0`: 50 PRs in Features/Fixes/Docs/Other, integration PR skipped, nothing from before `v1.0.0`; no-token fallback works
+- [x] README: Download the simulator, Releasing, Tests and CI updated
+- [x] Branch CI green, `ddl0-release-preview` checked (104 files, layout OK, no tests exe or user data, `sha256sum -c` OK), `release` skipped
+- [x] Failure gate: with the firmware job failing on purpose, `package` and `release` were skipped (run 41581821891); temporary commit reverted
+- [x] PR #108 into `Documentation`
+- [ ] After merge to `main` (owner): first release created; zip runs on a clean Windows PC
+
+### Review
+- PR data comes from one GraphQL call via `urllib` rather than `gh pr view` per PR: same fields, one request, and it runs in the dev image where `gh` isn't installed.
+- The tag is chosen in `release` (inside `concurrency: release`), not `package`, so two quick merges can't pick the same one; `package` names its preview `dev-<sha>`.
+- `v1.0.0` isn't in `Documentation`'s history, only `main`'s, so notes were checked on a simulated merge onto `v1.0.0`.
+- Sounds are gitignored, so no asset has `sounds/` (README says so).
+- `package.sh` needs a real git checkout: inside Docker, a worktree's `.git` file points at a Windows path.
+- #107 (Linux) also edits `simulator.yml`; whichever merges second rebases (note left for that session).
+
+# Simulator: choose the firmware folder — #105
+
+Branch `feature/firmware-folder-picker` off `Documentation`. Decisions: native dialog via `rfd`; remember the choice, changeable any time; simulator files found from the exe; folder must hold `code.py`.
+
+- [x] Issue #105 logged
+- [x] `rfd =0.17.2` (windows-sys 0.61, already in the tree; lockfile only gains entries)
+- [x] `main.rs`: simulator files from the exe; firmware order CLI arg → saved folder → walk-up → folder dialog; startup errors shown in a message box (release exe has no console)
+- [x] `prefs.firmware_dir`; `firmware_code_path` validation + 4 unit tests
+- [x] Toolbar *Firmware* button + palette action; dialog on its own thread; switch restarts code.py, resets settings, rescans sounds, saves the pref; bad folder → error toast
+- [x] `build.ps1 -Test`: 151 unit tests, all scenarios pass; `cargo fmt`, `clippy --release -D warnings` clean
+- [x] Running app (via UI Automation): button named "Firmware folder" opens the dialog; cancel leaves things unchanged and re-enables it; default launch finds PropMaker_Feather; saved folder outside the repo runs that copy; saved folder deleted → falls back
+- [ ] By hand: pick a folder in the dialog (with and without code.py), the no-firmware startup dialog, and that the folder glyph renders
+- [x] README updated
+- [ ] Commit, push, PR into `Documentation`
+
+### Review
+- The Windows folder dialog's Folder field isn't in the UI Automation tree, so picking through it couldn't be automated; the switch code is covered by the saved-folder path (same validation) but not the live pick.
+- `clippy --all-targets` fails on an existing test in `part_edit.rs:1528` (`manual_range_contains`), not part of this change.
+
+# Simulator: accessibility — #94
+
+Owner approved the Bevy 0.16 → 0.17 upgrade (needed: bevy_egui's AccessKit integration is off in 0.34 and back on in 0.38). Each stage is its own branch off `Documentation` and its own PR. Plan: screen-reader tree and names, keyboard 3D view, announcements and text alternatives, contrast and Windows settings, docs.
+
+- [ ] **Stage 1 — `feature/bevy-0.17`**: bevy =0.17.3, bevy_egui =0.38.1 (egui 0.33), egui_plot =0.34.1, egui_dock =0.18.0; no behaviour change
+  - [x] Changelogs reviewed (bevy_egui 0.35–0.38, egui 0.32/0.33); every changed Bevy/egui_dock API checked against the 0.16/0.17 and 0.16/0.18 sources
+  - [x] Compiles; fmt, clippy `-D warnings`, 109 unit tests (one new: a layout saved by egui_dock 0.16 loads), 7 headless scenarios
+  - [x] Running app: orbit, Reset, boop by click (firmware sees the motion), overlays (pointers on their parts), menus stay open while ticking, palette, High contrast, UI scale, F6, Plot, detach/scale/redock a pane, parts drag and drop + undo
+  - [ ] Not checked by hand: the animations-off setting
+  - [ ] Commit, push, PR into `Documentation`
+
+### Review (stage 1)
+- **egui now draws through a camera.** The 3D camera only covers the 3D tab and turns off with it, so the main window got its own full-window egui camera (order 1, no meshes, no picking, premultiplied blend over the scene).
+- **Detached windows crashed on open** ("No fonts loaded"): the context was added in `Update`, so bevy_egui ended its pass without starting one. Now added in `PreUpdate` before bevy_egui's `InitContexts`.
+- **egui 0.32+ closes a menu on any click inside it.** Top-level menus now use `CloseOnClickOutside`, as 0.31 behaved.
+- **Single-pass egui kept** behind `#[allow(deprecated)]`: multi-pass needs a schedule per window. Follow-up when bevy_egui drops single-pass.
+- **Test-tool artefacts, not bugs:** an instant synthetic click puts press and release in one frame, so `boop` sees the drag left from moving the cursor; hold the button briefly. Text sent as Unicode characters (as dictation may send it) never reaches egui fields, in 0.34 as in 0.38 — revisit in stage 2.
+- Saved layouts keep working: egui_dock 0.18's tuple node variants serialise like 0.16's struct variants.
+
+- [ ] **Stage 2 — `feature/a11y-tree`** (stacked on #97): AccessKit on; names for glyph-only buttons and painted rows; unique sayable names (test)
+  - [x] `Cargo.toml`: bevy_egui `accesskit` feature; `cargo tree -i accesskit` shows one 0.21.1 (shared by bevy_winit, bevy_a11y and egui)
+  - [x] `a11y.rs`: forward AccessKit actions (Narrator activate, Voice Access click) to egui; text from `VK_PACKET` key events (dictation) into egui; `spoken` / `tidy` / `name` / `label` / `region` / `tab` helpers
+  - [x] Names: toolbar emoji buttons without the emoji (`tip` and `menu_button` tidy every name); ⌨ ⚙ ⬆ when crowded; detached `+` / `−` / scale %; ✖ delete layout; ⟲/⟳ 15° and X±/Z±/In/Out; palette rows (list option, selected, ticked, keys) and search box; eye swatch value
+  - [x] Found by auditing the live tree: dock tabs and their close buttons (egui_dock paints them unnamed), speed / UI scale / volume sliders, theme / scenario / plot window / Parts drop-downs, every Parts field, Settings fields, log search, plots, Plot series toggles ("main eye R", not three "R"s); duplicate names split ("Reset view" / "Reset plot", "Save parts" / "Save log", "Reset KEY" per setting)
+  - [x] Regions: toolbar, status bar, every pane (docked or detached, from `draw_pane`), 3D view and its control bar, Parts settings rows
+  - [x] Unit tests: AccessKit tree of the Run / Speed / Options groups and the palette rows has non-empty, glyph-free names, unique per group; crowded Deploy is "Deploy"; `spoken` cases
+  - [x] `build.ps1 -Test` (113 passed, 7 scenarios), `cargo fmt --check`, `clippy --release --locked -D warnings`
+  - [x] Live tree read with Windows' UI Automation (what Narrator and Voice Access use): names above; Invoke on Run, Nudge (boop), Pause, tabs, Undo, detached Larger UI / Dock back all act; Toggle on checkboxes; Tab moves focus to named controls; Narrator follows focus onto tabs; no crash with a client attached through detach and redock
+  - [ ] Voice Access by voice ("click Restart", "click Nudge"): not spoken here, needs the user; the Invoke calls it makes were checked
+  - [x] No behaviour change: orbit, boop by click, View menu stays open while ticking, palette, detach/redock, parts drag and drop + undo
+  - [ ] Commit, push, PR into `feature/bevy-0.17`
+
+### Review (stage 2)
+- **bevy_egui never passes AccessKit actions to egui.** Bevy turns them into `ActionRequest` messages that nobody read, so Narrator's activate and Voice Access's "click" would have done nothing. `a11y::forward_actions` sends each to every egui context (the message doesn't name a window; egui acts only where a widget has the target id).
+- **Dictated text root cause** (winit 0.30.13, `platform_impl/windows/keyboard.rs`): text sent as Unicode characters arrives as `VK_PACKET`, which winit reports as `Key::Unidentified` with the character in `text`; bevy_egui only turns `Key::Character` into text. `a11y::forward_packet_text` handles exactly that case, so real keys still type once (checked).
+- AccessKit is enabled per context when it is added, and only if its window already has an adapter. Windows are created in `about_to_wait` before the next update, so detached windows qualify; confirmed by reading a detached window's tree.
+- **Left for later:** a slider's number box has no name (egui names it from the slider's own text, which would move the visible "Speed" / "UI scale" / volume label); egui_dock's collapse and close-all buttons and its splitters are unnamed (ids not derivable; needs an egui_dock change); "Shortcuts" is both a toolbar button and a tab name while that tab is open.
+- Tree audit scripts (PowerShell + `UIAutomationClient`, built into Windows) list unnamed actionable elements and duplicate names; worth keeping for stage 6's checks.
+- [ ] **Stage 3 — `feature/a11y-3d-keys`** (stacked on #98): everything the mouse does in the 3D view, from the keyboard
+  - [x] 3D view takes focus (Tab after its tab, F6), named "3D view", focus ring; arrows orbit, Shift+arrows pan, + / − zoom, Home resets; same clamps as the mouse; tween or instant per Animations; no clash with `SHORTCUTS`
+  - [x] `Cmd::Boop` (B, palette, tooltip); Motion panel strength slider 0.3–2 g beside the direction combo; same `[sim] boop … g from …` log line as a click
+  - [x] Parts panel "Add <kind>" buttons place the part where a ray through the view's centre hits the droid (same anchoring as a drop) and select it
+  - [x] Unit tests: key → pose step and clamps, strength range, view centre (8 new; 121 in all)
+  - [x] README keyboard and camera sections
+  - [x] `build.ps1 -Test`, `cargo fmt --check`, `clippy --release --locked -D warnings`; 7 scenarios pass
+  - [x] Running app, keyboard only: reach the view, orbit/pan/zoom/reset; boop with a chosen direction and strength (firmware logs it); add an LED, nudge, delete, undo. UI Automation shows focus on "3D view"; captures before and after each key; Animations off jumps, on glides; B logged `[sim] boop 1.5 g from +Z` and the firmware saw it, then +Y picked in the combo with Tab; after the Parts fix, auto-save runs and nudge / add undo separately
+  - [x] Mouse still works: orbit drag, click boop, drag and drop
+  - [x] Commit, push, PR into `feature/a11y-tree`
+
+### Review (stage 3)
+- **The 3D view is a focus-only egui widget** (`Sense::focusable_noninteractive`) over the view's rect: no click or drag sense, so the mouse still reaches the scene and `ViewportRect::hovered` (worked out by layer) is unchanged. While focused it locks the arrow keys (`set_focus_lock_filter`) so egui doesn't move focus with them; Tab and Esc still leave. Keys are read with `count_and_consume_key`, Shift+arrows before arrows (a pattern without Shift matches Shift too), and passed to `orbit_camera` in `ViewportRect::keys`. AccessKit: role Canvas (UIA shows it as Image), name "3D view", the keys as its description.
+- **Key steps glide from the running glide's target**, so held keys and quick presses add up instead of restarting from wherever the camera is mid-glide. Home goes through the same path as the Reset preset.
+- **Parts treated any focused control as typing.** `sync_parts` used `wants_keyboard_input()`, which in egui 0.33 is true whenever anything has focus (the same trap stage 1 found in `read_cmds`). With the keyboard, auto-save never ran and every change after the first merged into one undo step. It now uses `ui::text_field_focused`.
+- **Add buttons say "Add led", "Add servo_part", …**, the file's kind names, as the old drag buttons did. Clicking or pressing Enter places at the centre; dragging still carries.
+- `ui::boop_logged` writes the `[sim] boop … g from …` line for both the click boop and B, so the two can't drift apart.
+- Not changed: egui's arrow keys move focus between controls by position, so inside an open combo list Tab is the reliable way down (Down jumps to the nearest control); and the two or three unnamed tab stops before each pane's controls are egui_dock's collapse / close-all buttons already listed in stage 2.
+- `clippy --all-targets` flags `manual_range_contains` in an existing `part_edit.rs` test (from #65); the required `clippy --release --locked -D warnings` is clean. Left alone as out of scope.
+- [ ] **Stage 4 — `feature/a11y-announce`** (stacked on #99): live status line, sound captions, droid status text, plot table view
+  - [x] `announce.rs`: queue, coalescing (one message per burst, repeats counted, at most 3 parts keeping the important and latest), 1.5 s rate limit, errors never dropped (FIFO, overflow counted), repeat blank frame, behaviour debounce; marker texts (11 unit tests)
+  - [x] Status bar status line: polite live region, fed by markers, behaviour changes, tracebacks, deploy outcomes
+  - [x] Sound captions: `[sim] Sound: <file>` log line per `play_wav`; announcer "Sound: <name>"; Audio pane "Now playing: <file>" was already text
+  - [x] State pane "Droid status": wings, eyes, white LED, parts; each row a Tab stop
+  - [x] Plot "Table" toggle (remembered): latest / min / max per ticked series over the view; each row's name cell reads the whole row
+  - [x] Unit tests: status line is a polite live region and empty says nothing; droid status rows; series stats (gaps, empty); table rows read whole (18 new, 139 in all)
+  - [x] README Simulator section
+  - [x] `build.ps1 -Test` (139 passed, 7 scenarios), `cargo fmt --check`, `clippy --release --locked -D warnings`
+  - [x] Running app, UI Automation listener on LiveRegionChanged (the event Narrator reads): boop → "Boop 1.0 g. Sound: noseBoops", "Now nose boops"; 3 nudges → "Sound: angry. Now angry animation"; restart → "Restarted", "Now boot sequence"; each once, focus unchanged; the same message twice fires twice; Tab walks every Droid status row and table row with full sentences; log shows `[sim] Sound: angry.wav`
+  - [ ] Narrator by ear: not done here (I can't hear it); the UIA events it reads were checked — user
+  - [x] No behaviour change: click boop (firmware counted it), orbit drag, palette, View menu, Parts add + Ctrl+Z, detach State and Dock back
+  - [x] Commit, push, PR into `feature/a11y-3d-keys` (#100)
+
+### Review (stage 4)
+- **A text label's spoken name is its AccessKit value, not its label.** accesskit_windows takes the UIA name of a `Role::Label` node from `value` (egui puts a label's text there), so `a11y::label` did nothing on the table rows; Narrator read just "Wings R". New `a11y::says` sets the value; `a11y::live` does the same for the status line.
+- **Live regions fire on a name change only** (accesskit_windows 0.29 `adapter.rs`), so the same message twice would be silent. The announcer blanks the line for one frame before a repeat; an empty line has no value, so it raises nothing.
+- Events lag by up to the 1.5 s gap plus 0.25 s gathering; bursts read as one sentence. "Now settle" (the firmware's settle step between animations) is said too, since it is what the status bar shows.
+- **Found, not fixed (follow-up): the Lola glTF model crashes the app on Bevy 0.17** (`scene contains the unregistered type Transform`, bevy_scene `scene_spawner.rs:621`). A fresh prefs file defaults to Lola, so a clean `dist\` crashes at start; earlier stages tested with prefs set to the primitive model. Tested here with `model_gltf = false`.
+- [ ] **Stage 5 — `feature/a11y-visual`** (stacked on #100): WCAG contrast test, follow Windows high contrast / animations / text size, focus everywhere
+  - [x] `theme.rs` contrast test: WCAG 2.2 ratios for every pair the applied egui visuals draw, in Light / Dark / High contrast: text, weak, disabled, link, warn, error, ok, muted and accent text on panel, window, field and striped rows; button text in every state; disabled button; selected text; 3:1 for focus ring, borders, selection and every plot line and marker. Prints every ratio (`ddl0-sim-tests every_theme --nocapture`)
+  - [x] Palette fixes, smallest that pass (table below); new `outline`, `selection`, `selected_text` tokens; weak and disabled text alpha 0.65
+  - [x] Red check: Light `muted` set to the panel colour → test failed ("Light: muted on panel 1.00 < 4.5"), reverted
+  - [x] Follow Windows (`windows-sys` feature `Win32_UI_Accessibility`, no version change): contrast theme (`SPI_GETHIGHCONTRAST`), Animation effects (`SPI_GETCLIENTAREAANIMATION`), text size (`TextScaleFactor`); read at start, on `WindowThemeChanged` and every 2 s. Pure, unit-tested mapping (`resolve`, `text_scale`, `ActiveTheme::with_os` / `set_os`); non-Windows reads defaults
+  - [x] Prefs: `ui_scale` and `animations` are `Option`; saved only once the user changes them, so they follow Windows until then. Ctrl+0 / Reset scale goes back to following the text size
+  - [x] Focus ring: unit test (Tab shows it, a click hides it); fixed the 3D view's left side being drawn off-window (ring now kept inside the window)
+  - [x] README Theme / UI scale / Animations / Remembered
+  - [x] `build.ps1 -Test` (145 passed, 7 scenarios), `cargo fmt --check`, `clippy --release --locked -D warnings`
+  - [x] Running app (Primitive model, fresh prefs): user flipped Windows contrast theme on → app went High contrast within 3 s, off → back to Dark; Animation effects off → camera view buttons jump (24–330 of 10 582 sampled pixels change, the droid's own motion), on → glide (1 393–5 544); saved prefs held only `theme`
+  - [x] Focus ring seen in all three themes on the 3D view (all four sides), dock tabs, toolbar buttons; in Dark also the palette search box (rows are marked by the selection fill, 3.11:1), Droid status rows, plot table rows and a detached Plot window
+  - [x] No behaviour change: click boop (`[sim] boop 0.7 g from +Z`, noseBoops), orbit drag, View menu, palette, detach + Dock back, Parts add (auto-saved) + Undo
+  - [ ] Not checked live: Windows text size (no change requested of the user; mapping unit-tested), a saved Light/Dark pick staying put while Windows flips (unit-tested)
+  - [x] Commit, push, PR into `feature/a11y-announce` (#102)
+
+### Review (stage 5)
+- **winit only sends `WindowThemeChanged` when its own light/dark verdict flips** (winit 0.30.13 `event_loop.rs` `WM_SETTINGCHANGE`; its verdict is `apps_dark && !high_contrast`). A contrast theme turned on while Windows is in light mode, Animation effects and text size raise no event, so the settings are also re-read every 2 s (three `SystemParametersInfoW` calls and two registry reads); `ActiveTheme` is written only when something changed.
+- **Contrast before → after** (WCAG 2.2; "before" computed with the same formula on the old palette):
+
+  | Pair | Light | Dark | High contrast |
+  |---|---|---|---|
+  | weak text on panel | 4.39 → 5.10 | 5.64 → 6.38 | 7.37 → 8.63 |
+  | disabled text on panel | 3.24 → 5.10 | 4.35 → 6.38 | 5.32 → 8.63 |
+  | warn on striped row (`9A6700` → `8C5E00`) | 4.17 → 4.62 | — | — |
+  | ok on striped row (`007A5A` → `007656`) | 4.37 → 4.61 | — | — |
+  | accent text on striped row (`0072B2` → `006CAA`) | 4.24 → 4.61 | — | — |
+  | button border on panel (`border` → new `outline`) | 1.54 → 3.12 | 1.49 → 3.52 | 21 |
+  | selection on panel (translucent accent → opaque `selection`) | 1.64 → 3.11 | 2.02 → 3.11 | 2.85 → 3.47 |
+  | selected text on selection | 9.5 → 5.00 | 6.6 → 5.31 (now white) | 7.36 → 6.06 |
+  | plot marker_motion (`B59B00` → `A08800`) | 2.74 → 3.49 | — | — |
+
+  Every other pair already passed. Separators (`border`) stay faint: they are decorative, and controls now carry the 3:1 edge.
+- **Dark selection had no tint that works with the normal text colour**: 3:1 against the panel needs luminance ≥ 0.139, 4.5:1 for `E6E7EA` text needs ≤ 0.137. Selected text is pure white in Dark and High contrast (`selected_text`), Light keeps its text colour.
+- **Disabled text now passes 4.5:1** (WCAG exempts it, but the issue asked): egui's 0.5 alpha → 0.65, still clearly dimmer than enabled text (5:1 against 15:1 in Light).
+- **The 3D view's focus ring lost its left side**: the view touches the window's left edge and the ring is drawn just outside the widget. `focus_ring` now keeps the ring inside the window.
+- Prefs from older builds already contain `ui_scale = 1.0` / `animations = true`, which count as saved choices and keep winning; the README says to delete the lines or press Ctrl+0.
+- Not changed: the status line is a live text region, not a Tab stop, so it has no ring by design (stage 4); egui_dock splitters use the faint `border` colour (draggable, but not needed to tell panes apart); the slider trail uses the selection fill against the rail (the handle carries the value and passes).
+- [ ] **Stage 6 — `docs/accessibility`** (stacked on #102): README Accessibility section; acceptance check of the issue's "Done when"
+  - [x] README `### Accessibility` (screen readers, Voice Access, keyboard table checked against `SHORTCUTS`, visuals and following Windows, known limits); every claim checked in the source; links to the existing bullets instead of repeating them
+  - [x] Small fixes: README shortcuts bullet missed B; Ctrl+0 only resets the scale (a saved `animations` must be deleted from the prefs file, said in three places now); `SHORTCUTS` Ctrl+0 label said "to 100%", now "Windows text size; 100% in a detached window"
+  - [x] Gap found and fixed: Space / Skip / Stop said nothing to a screen reader. `announce::RunWatch` says *Paused*, *Resumed*, *Skipping to the next event*, *Skip ended*, *Stopped* from the status bar's run state (`ui::run_state`, now shared with the status bar text); 1 new unit test; live: Space → *Paused* then *Resumed*, F → *Skipping to the next event*, R → *Restarted. Skip ended*
+  - [x] `build.ps1 -Test` (145 before the fix), then Docker with `CHECK=1`: fmt, clippy `--release --locked -D warnings`, 7 scenarios pass, 146 unit tests from `dist\`
+  - [x] Running app, Primitive model, fresh prefs (no prefs file existed in this worktree's `dist\`; the test one was deleted afterwards), keyboard input only, UI Automation for what Narrator reads
+  - [ ] Narrator by ear, Voice Access by voice, NVDA, Accessibility Insights FastPass — user (host installs not made)
+  - [x] Commit, push, PR into `feature/a11y-visual` (#103)
+
+### Review (stage 6) — "Done when"
+
+| Item | Result |
+|---|---|
+| Narrator / NVDA: start, pause, restart, nudge, boop, change speed, open panels, read the log, hear behaviour changes, no mouse | **Pass through UI Automation, needs the user by ear.** Keys only: R → *Restarted*, *Now boot sequence*; N → *Nudge. Sound: noseBoops. Now nose boops*; B → *Boop 1.0 g. Sound: noseBoops. Now nose boops*; N N N → *Sound: angry … Now angry animation*; Space → *Paused* / *Resumed* (after the fix; before it, silent); palette "10x" → status bar *10x*; F6 visits all 13 panels by name; log lines are UIA Text (`[sim] Sound: noseBoops.wav`, `[sim] boop 1.0 g from +Z`), readable in scan mode. NVDA untested (not installed) |
+| Voice Access: every toolbar and panel control by name, no overlays | **Tree passes, needs the user by voice.** 91 actionable controls, no duplicate names; unnamed: egui_dock's collapse / close-all buttons, tab-bar scroll bars and dividers, the Speed slider's number box (all known since stage 2; each has a named alternative) |
+| Everything the mouse does in the 3D view from the keyboard, incl. placing and editing parts | **Pass.** F6 + Tab → focus "3D view" with ring; arrows orbit, + zoom, Shift+arrows pan, Home resets (captures); B boops; Parts: Add led (placed and auto-saved), list row, *Turn left 15 degrees* ×2 and *Move X plus* change `rot_deg` / `pos` in the file, Del removes it, Ctrl+Z brings it back. Focus drops to the window after Del (documented) |
+| Contrast ≥ 4.5:1 in all themes; focus always visible; animations follow reduce motion | **Pass.** Contrast: stage 5's unit test (every pair, three themes). Focus ring seen in Light (3D view tab), High contrast (Close Plot), Dark (dock collapse button). Animations on: 3 279 of 10 582 sampled pixels change during the Side glide; off: 99 (jump). Following Windows' Animation effects was checked live in stage 5 |
+| Accessibility Insights FastPass finds no critical issues | **Needs the user** (host install) |
+| README documents accessibility features and shortcuts | **Pass** (this PR) |
+
+- **Your own prefs file probably ignores Windows**: one written by a build before stage 5 has `ui_scale` and `animations`, so text size and Animation effects don't apply until those lines go (Ctrl+0 handles only the scale). A *Follow Windows* choice for Animations would remove the hand edit; proposed as a follow-up, not done here.
+- Synthetic Unicode (dictation) text into fields was fixed in stage 2 and not re-tested here.
+
+### Follow-up — Animations: follow Windows (`feature/animations-follow-windows`, stacked on #103)
+
+- [x] `ActiveTheme::reset_animations()` drops the saved choice (mirrors `reset_scale`); unit test `reset_animations_follows_windows_again`
+- [x] `Cmd::AnimationsReset`: palette row *Animations: follow Windows*, and a *Follow Windows* button beside the *Animations* checkbox in *⚙ View* (greyed out while nothing is saved)
+- [x] README: palette list, *Animations* bullet, older-prefs note, *Following Windows* bullet no longer say to edit the prefs file
+- [x] `build.ps1 -Test` (147 unit tests, scenarios pass); fmt and clippy `--release --locked -D warnings` clean in the container
+- [x] Running app, Primitive model: prefs `animations = false` with Windows' Animation effects on → checkbox off; palette *Animations: follow Windows* → checkbox on, button disabled, `animations` line gone from the prefs file (test prefs deleted afterwards)
+- [ ] Flipping Windows' Animation effects after the reset — user (system setting); covered by the unit test via `set_os`
+
+# Simulator: unit tests in CI, servo-part limits in the app — #88
+
+Branch: `feature/sim-tests-ci` off `Documentation`. The user approved the one `.github/workflows/simulator.yml` edit. Windows CI job chosen over Wine or Linux host tests: no image change, real Windows, same DLLs as the app.
+
+- [x] `docker/build.sh`: `TEST=1` builds the unit tests (`cargo test --no-run`, exe path read from cargo's JSON with `python3`) and stages `dist/ddl0-sim-tests.exe`
+- [x] `build.ps1 -Test`: passes `TEST=1`, runs the exe from `dist\`, fails on any failing test
+- [x] CI: `build` sets `TEST=1`; new `unit-tests` job on `windows-latest` downloads `ddl0-sim-windows` and runs the exe
+- [x] README "Tests and CI"
+- [x] `main.rs`: the GUI-subsystem attribute skips `cfg(test)`, so the test exe is a console app
+- [x] `build.ps1 -Test`: 108 passed; a deliberate failing test fails it (exit 101); plain `build.ps1` stages no test exe; `cargo fmt --check` clean
+- [x] Running app, Lola and Primitive, test part on ch 0 (neutral 57.5, gain 8, ±45; breathing sweeps 50–65°): held still at −45 and +45 while the servo kept moving; `direction = -1` moves each limit to the other end of the servo range; gain 5 at 50° matches gain 8 at the servo angle asking for the same −37.5° (same pixel extent). Captures in `simulator\dist\captures\issue-88\`
+- [ ] Commit, push, PR; CI's `unit-tests` job passes
+
+## Review
+- **The first `-Test` run "passed" without running anything.** Release builds set `windows_subsystem = "windows"`, and the test exe inherited it: no console, so PowerShell neither waited for it nor got an exit code, and CI would have passed the same way. Fixed in `main.rs`; checked with a deliberately failing test.
+- **The PCA9685 panel's part value is the servo angle it follows, not the hinge angle**, so the limit checks compare poses across frames instead: a clamped flap stays still while the servo still moves.
+- The test-part file was temporary and has been deleted; no `parts.toml` is committed.
+
+# Simulator: drag-and-drop part placement — stage 4 of #65
+
+Branch: `feature/simulator-parts-stage4`, stacked on `feature/simulator-parts-stage3` (PR #90, on #89 and #87; none merged). Confirmed with the user: slide-on-surface plus fields (no 3D gizmos), an auto-save toggle (remembered) plus Save / Ctrl+S, and an "Edit parts" toggle that turns clicks into select/slide with no boops. One new direct crate, `toml_edit =0.22.27`, already in Cargo.lock through `toml`.
+
+- [x] `part_edit.rs`: working list with stable ids, undo/redo (50 steps, one per drag or field edit), drop from the panel via `MeshRayCast` (anchor = the wing if the hit is under one, else `body`; +Y along the surface normal), slide a selected part, selection ring and drop preview drawn with egui
+- [x] Parts panel: kinds as drag sources, list, settings (name kept unique, source, size, colour, full_duty, pixels, servo shape/hinge/limits, position, rotation, nudges), Delete, Undo/Redo, Save, Auto-save
+- [x] Saving with `toml_edit`: only changed keys and entries touched, comments/order/unloaded entries kept, a key back at its default removed; temp file then rename; invalid TOML left alone with a warning; no restart on the app's own write
+- [x] `parts.rs`: `Part(name)`, press observer selects in edit mode and stops propagation; button parts don't press in edit mode; `PartsFileText` resource replaces the loader's local; `part_kinds` republished on live edits
+- [x] `scene.rs`: boop off in edit mode; orbit not grabbed while a part slides. `dock.rs`/`layout.rs`: `Pane::Parts` (default layout with State/PCA9685/Board; Debug); old layouts load. `ui.rs`: `Cmd::Parts`, Ctrl+Z / Ctrl+Y / Ctrl+S / Del, palette toggle, prefs `parts_autosave`
+- [x] 12 new unit tests (unique names, round trip, comments/order/unknown entries kept, rename and source change in place, invalid TOML, temp+rename, undo/redo, delete+undo, undo cap, surface rotation, short numbers, layouts without the Parts pane)
+- [x] README "Placing parts with the mouse", panels and keys; `custom-shims.md` notes
+- [x] Docker `CHECK=1`, 7 scenarios, 108 unit tests from `dist\`
+- [x] Running app, Lola and Primitive: drop lands at the pointer; slide; settings live; no boops in edit mode; orbit from background and from the droid; delete + Ctrl+Z; auto-save off shows *unsaved*, Ctrl+S writes; restart reloads `parts.toml`; a part dropped on a wing rides it through the trench run
+- [ ] Commit, push, PR (stacked on #90)
+
+## Review
+- **The colour button drifted the value.** egui's `color_edit_button_rgb` goes through HSV every frame, so `0.2` became `0.20000029` and each frame was a change. Now only a real pick is applied, rounded to 3 places.
+- **Lola's big white panels aren't the wings.** Drops there anchor to `body`, correctly; the wings are the two rear panels. A part placed on one model may float or sink on the other, since both share one file (documented).
+- **Relative `mouse_event` moves are accelerated** by Windows, so long drags in capture scripts overshoot; use `SetCursorPos` to the target, then a small relative nudge.
+
+# Simulator: simhw part calls — stage 3 of #65
+
+Branch: `feature/simulator-parts-stage3`, stacked on `feature/simulator-parts-stage2` (PR #89, on #87; neither merged). Stage 3 only: no drag and drop (stage 4). No new crates.
+
+- [x] `hw.rs`: `part_kinds` (name → kind, left to shims), `None` until parts.rs publishes it for the run; `part_warned`; both reset per run. `PartValue`'s `allow(dead_code)` removed (`Rgb`/`Pixels` now come from simhw)
+- [x] `parts.rs`: `reload_parts` publishes the kind table on every new run (unchanged and invalid files too); `shim_set_part` / `shim_set_pixels` / `shim_part_input` with one warning per run per name, capped at 128 names; 5 unit tests
+- [x] `pyhost.rs`: `set_part`, `set_pixels`, `part_input` take `PyAny` and check types, NaN, sizes (iterables read no further than 1025 items); wait (GIL released, ≤2 s) for the run's kind table so code.py can't beat the first frame
+- [x] `PartKind::name()` in `config.rs`, used by the PCA9685 panel too
+- [x] `tests/simhw.py` mirrors the calls; `tests/shim_dir.py` (already in CI) runs the guide's `neopixel` and `touchio` shims straight from `custom-shims.md`, plus bad-input checks
+- [x] `custom-shims.md` steps 1, 4, 8, Example B note, new Example D; README "Driving parts from a shim", custom shims, not-simulated and tests notes
+- [x] Docker `CHECK=1` (fmt, clippy -D warnings), `--all-targets` clippy, 7 scenarios pass; 96 unit tests (Windows test exe run from `dist\`)
+- [x] Running app (scratch repo with the guide's parts and shims): ring chases blue on Lola and Primitive, turns red while the touch pad is held (logged, no boop), unknown `D11` warns once per run, again once after R
+- [ ] Commit, push, PR (stacked on #89)
+
+## Review
+- **Kinds live in the Bevy world, calls on the Python thread.** `reset_for_run` runs before the next frame reloads the parts, so a call at import time could see no parts. The table is `None` until published for this run and the calls wait for it, rather than keeping last run's table (stale after editing the file).
+- `set_pixels` takes 0–255 (what `neopixel` holds, brightness applied by the shim); `set_part` brightness is 0–1 and an `led`'s `(r, g, b)` is 0–255 to match.
+- A part with a `pca`/`pin` source refuses shim writes with a warning: `follow_sources` would overwrite them every frame.
+- Worktrees have no `PropMaker_Feather/sounds/` (gitignored), so the real firmware stops at boot when run from a worktree's `dist\`; the Docker scenarios cover it.
+
+# Simulator: parts file — stage 2 of #65
+
+Branch: `feature/simulator-parts-stage2`, stacked on `feature/simulator-parts-stage1` (PR #87, not yet merged). Stage 2 only: no new `simhw.set_part` / `set_pixels` / `part_input` (stage 3) or drag and drop (stage 4). No new crates.
+
+- [x] `simulator/parts.toml` (not `[[part]]` in sim.toml): parts fail one at a time instead of rejecting the whole wing/eye config; stage 4 can rewrite it without wiping sim.toml's comments; restart-on-save vs sim.toml's live apply stay separate. `parts.example.toml` committed; no `parts.toml`, so the default droid is unchanged
+- [x] `config.rs`: `PartCfg` gains `pca`, `pin`, `anchor`, `full_duty`; `deny_unknown_fields` on `PartCfg`/`HingeCfg`; `PartCfg::check()` validates name, numbers, counts, sources, hinge
+- [x] `parts.rs`: `parse_parts` (each entry on its own, `[sim]` warning per skipped one, duplicates, 64-part cap); reload when a run starts (`HwState::runs`); `follow_sources` (PCA duty/pulse, PWM/digital pin); anchors by node name, then the wing/glow components both models have; glTF parts wait for `SceneInstanceReady`
+- [x] `hw.rs` pin table (`pins`, `button_pins`); `pyhost.rs` `set_pwm_pin(…, frequency)`, `set_pin` record every pin, new `pin_input`; `pwmio`/`digitalio` shims, scenario proxy and `tests/simhw.py` mirrored
+- [x] `ui.rs`: Auto-reload also watches `parts.toml`; PCA9685 panel lists parts (name, value, kind, source); a spare channel shows its part's name
+- [x] README "Parts file" section; `custom-shims.md` simhw table
+- [x] Docker `CHECK=1` (fmt, clippy -D warnings) + `--all-targets` clippy; 7 scenarios pass; 91 unit tests (Windows test exe run from `dist\`)
+- [x] Running app with the example file plus a bad entry, on Lola and Primitive: flap follows ch 0 (same angle as R wing), tail light follows the white LED pin, wing lamp rides the right wing lit by main R, ring on the band, button on D5 pressed/released with no boop; bad entry logged and skipped; saving the file restarts and applies; with Auto-reload off, Restart applies
+- [x] `digitalio` button read checked in Docker (pull-up/pull-down, no button = unchanged)
+- [ ] Commit, push, PR (stacked on #87)
+
+## Review
+- **Value column was cut off** at the default panel width (long pin names like `EXTERNAL_NEOPIXELS`); columns are now name · value · kind · source.
+- **Pin buttons are written every frame**, not only on press, so a released button on a pull-up input reads `True` from the start of a run and after a restart.
+- Parts anchored to Lola-only nodes (`head`, …) are skipped on the primitive model with a warning, by design; the five shared names work on both.
+- `ddl0-sim` isn't listed for the computer-use tool, so captures used PrintWindow with `SetCursorPos` + a relative `mouse_event` nudge for clicks.
+
+# Simulator: generic part types — stage 1 of #65
+
+Branch: `feature/simulator-parts-stage1` off `Documentation`. Stage 1 only: no parts file, pin/PCA sources, `simhw` calls or panel listing (stages 2–4). No new crates.
+
+- [x] `config.rs`: `PartCfg` (flat: kind-specific fields are ignored by other kinds), `PartKind`, `PixelLayout`, `PartShape`, `HingeCfg`; `WingCfg::elevation_deg` delegates to `HingeCfg`
+- [x] `hw.rs`: `HwState::parts` (name → `PartValue`), cleared by `reset_for_run`
+- [x] `scene.rs` / `droid.rs`: shared `ServoTrack`, `servo_frame`, `glow_emissive`, `shine`, `lamp_material`, `lamp_light` (no behaviour change)
+- [x] `parts.rs` (new): `Parts` resource, spawn under `DroidRoot`, LED/pixels glow, servo part slew + hinge, button press/release with no boop
+- [x] Docker `CHECK=1` build (fmt, clippy -D warnings), `--all-targets` clippy, 7 scenarios pass, 83 unit tests (Windows test exe against `dist\`)
+- [x] No parts: app unchanged on Lola and Primitive (captures)
+- [x] Local demo (removed before commit): one part of each kind on both models; LED cycles colour, ring chases, flap swings (clamping is covered by unit tests), button press/release logged with no boop, head click still boops, orbit from the button works, parts rebuilt on model switch
+- [x] Commit, push, PR into `Documentation` (#87)
+
+## Review
+- **Button stuck down (found in the demo).** The cap sinks while pressed, so the pointer is no longer over it when the mouse button comes up and `Pointer<Released>` goes to the shell instead. The release is now a system (`release_held_button`) that lets go of the held button once the left mouse button is up, wherever the pointer is.
+- **Synthetic drags don't orbit with `SetCursorPos`**: the camera reads raw mouse motion, so capture scripts need relative `mouse_event` moves.
+- `PartCfg` is a flat struct (kind-specific fields ignored by other kinds) rather than a tagged enum, so each `[[part]]` in stage 2's file only lists what it needs and serde defaults stay simple.
+- CI still doesn't run `cargo test` (Windows cross target); the tests were run as a Windows exe from `dist`.
+
+# Simulator: UI refresh part 5 — 3D viewport overlays, mini-toolbar, transitions (#80)
+
+Branch: `feature/sim-ui-viewport`, stacked on `feature/sim-ui-palette` (PR #85, not yet merged). PR 5 of 5. No new crates. Room light moves into the mini-toolbar too (user's choice).
+
+- [x] Step a — `overlay.rs` (new): wing angles, eye RGB, white LED duty, accel arrow; egui painter on the 3D view after `orbit_camera`; values from the same helpers as the PCA panel and Plot; palette tokens only; `Cmd::Overlay`, prefs `overlay_*`
+- [x] Step b — mini-toolbar in the Viewport tab (`dock.rs`): Front/Side/Top/Eyes/Reset, Light, Screenshot, Record, Overlays; through `tip`/`Cmd`; Camera and Capture groups leave the main toolbar (3 groups left)
+- [x] Step c — transitions: camera tween in `orbit_camera` (real clock, shortest yaw, a drag/scroll takes over), panel open/close fade (`dock::Fades`), `prefs.animations` (palette + View menu, ✔ in palette), `animation_time = 0` when off
+- [x] Unit tests: overlay rows, projection, tween, fades, prefs round-trip (73 pass, Windows test exe run against `dist\`)
+- [x] README: 3D view toolbar, overlays, camera glide, animation setting; toolbar groups and palette list updated
+- [x] Docker build (locked), `CHECK=1`, `--all-targets` clippy; 7 scenarios pass
+- [x] Captures (SendInput + PrintWindow): overlay values equal the PCA9685 panel on the same frame; Dark/Light/High contrast readable; bar by mouse, by F6 → Tab → Enter, and from the palette (✔ rows); toolbar clicks never boop; camera mid-glide at 120 ms with animations on, already there with them off; panel tick clears and fades; overlays and animations-off survive a restart; Screenshot toast; Light menu
+- [ ] Commit, push, PR (stacked on #85) with #80's Done-when checklist
+- [ ] With a real mouse: watch a panel fade in and out (too quick to catch reliably with window captures), Record start/stop from the bar — user
+
+## Review
+- **Pointers were 52 px low (user spotted it).** Bevy 0.16's `Camera::world_to_viewport` already adds the viewport's offset in the window, and the overlay added the dock tab's offset again. Checked in `bevy_render-0.16.1` and fixed `to_egui`. The check was the arrow's start: the camera looks at that point, so it must sit at the view's centre.
+- **Wing pointers aimed at the hinge**, which on Lola sits at the wing's edge, plus a guessed offset. Anchors are now the size-weighted middle of the part's mesh bounding boxes (`part_centre`), so they land on the shell and follow it as it moves.
+- **Accel arrow showed the held reading**, which a Nudge never changes. It now uses `last_accel`, the value the firmware read and the Plot shows.
+- **Labels overlapped in Top view** (both eyes line up); a label now moves down past any it would cover. The accel label had no plate and was unreadable on the white head.
+- **Mini-toolbar wrapped early:** an `egui::Area` starts from last frame's size, so `horizontal_wrapped` wrapped at its own old width. It now wraps at the view's width.
+- "▾" isn't in egui's bundled fonts (drawn as a box); the menus are plain *Light* / *Overlays*, like *Options*.
+- Clicking a dock tab's title doesn't give it keyboard focus; F6 does (PR 4's design), then Tab reaches the bar.
+
+# Simulator: UI refresh part 4 — command palette and keyboard navigation (#80)
+
+Branch: `feature/sim-ui-palette`, stacked on `feature/sim-ui-docking` (PR #84, not yet merged). PR 4 of 5; no overlays, mini-toolbar or transitions. No new crates.
+
+- [x] Step 1 — `ui.rs`: `Cmd` covers every toolbar, View-menu and detached-bar action; keyless rows in `SHORTCUTS` (labels for panes/themes/lights/speeds/layouts from their enums); Shortcuts window lists only keyed rows; one dispatcher (`CmdCx::run`) — toolbar/menu clicks queue a `Cmd`; shared `cmd_enabled`
+- [x] Step 2 — `palette.rs` (new): Ctrl+K palette per egui context (works in detached windows), filter, Up/Down/Enter/Esc, disabled rows greyed, saved layouts and layout files listed at run time
+- [x] Step 3 — keyboard navigation: Tab/arrows (egui built-in, checked in 0.31.1 source), F6 / Shift+F6 between dock tabs with keyboard focus on the tab button; `theme::focus_ring` from palette tokens, keyboard-only (`:focus-visible` style); egui_dock `*_with_kb_focus` tab styles
+- [x] Unit tests: no duplicate binds; every pane/theme/light/speed/built-in layout has a row with a label; filter ranking; `step_tab` wraps through every tab (65 tests pass, Windows test exe run against `dist\`)
+- [x] README: command palette and keyboard navigation
+- [x] Docker build (locked), `CHECK=1` (fmt, clippy -D warnings), `--all-targets` clippy; 7 scenarios pass
+- [x] Captures (SendInput + PrintWindow): palette runs Screenshot (toast), Layout: Debug, Restart, Theme ×4, detach; typing in palette or log search fires no shortcuts; Space on a focused button pauses once; Tab/arrows/F6 with the ring in Light, Dark, High contrast, Follow system; palette in a detached Log window (Larger UI → 110%, Dock back)
+- [ ] Commit, push, PR (stacked on #84; #82–#84 still open)
+- [ ] Interactive with a real keyboard: Nudge/Shake from the palette with code.py running (this worktree has no `sounds/`, so code.py stopped at boot here; scenarios cover the firmware) — user
+
+## Review
+- **Shortcuts died after one Tab (pre-existing, exposed by keyboard nav).** `read_cmds` skipped keys while `ctx.wants_keyboard_input()`, which egui 0.31 defines as *any* widget focused, not just text fields. With mouse use nothing kept focus, so it never showed. Now `text_field_focused` checks for a `TextEditState` on the focused id.
+- **Palette list showed two rows.** Inside the modal a `ScrollArea` gets almost no room and falls back to its 64 px `min_scrolled_height`; set it to the list's max.
+- **Shift+F6 before F6 in the table:** egui's key match ignores extra modifiers, so a plain-F6 bind would also take Shift+F6.
+- Typing "detach" didn't find the row labelled "Move the focused panel to its own window"; labels now use the word people type (Detach…, Dock back…).
+- `FindWindow` is ANSI by default, so a detached window's em-dash title can't be found by name; enumerate the process's windows instead.
+
+# Simulator: UI refresh part 3 — dockable, detachable panels and layouts (#80)
+
+Branch: `feature/sim-ui-docking`, stacked on `feature/sim-ui-toolbar` (PR #83, not yet merged). PR 3 of 5; no command palette, keyboard navigation, overlays or transitions. Crate: `egui_dock =0.16.0` (egui 0.31 release; confirmed with the user over `egui_tiles =0.12.0` because it has floating windows, close buttons and tab menus built in).
+
+- [x] Step 1 — `Cargo.toml`: `egui_dock =0.16.0` (serde; the dock state round-trips through TOML, so no `serde_json`); `dock.rs` (new): `Pane`, `PaneCx`, `draw_pane`; Motion/PCA/Log bodies extracted from `ui.rs`; dock replaces the side and log panels; Viewport pane sets the camera viewport and gates orbit/boop
+- [x] Step 2 — floating, tab context menu (Float / Detach / Close), View menu panel ticks, focus mode (F11), dock style from palette tokens
+- [x] Step 3 — detached OS windows (Bevy secondary `Window` + own egui context), close/Dock back re-docks, theme and UI scale per window
+- [x] Step 4 — `layout.rs` (new): layout in prefs (dock, floating rects, detached windows, main window position), named layouts (Default/Debug/Demo + user), Reset, export/import (`dist\layouts\`), validation, off-screen recovery
+- [x] README: docking, View menu, focus mode, layouts, export/import, per-window UI scale
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` (also `--tests`) clean; 7 scenarios + headless checks pass
+- [x] Captures: dock/float/detach/re-dock/hide/show every pane; focus mode; restart restores layout, floating and detached windows, scale; layouts switch; export/import round-trip; Reset; off-screen pulled back; Light/Dark/High contrast readable; boop only through the viewport
+- [ ] Commit, push, PR (stacked on #83)
+- [ ] Interactive with a real mouse: drag tabs to every edge, move a floating panel and a detached window between monitors, Ctrl+= / - / 0 in each window, the theme picker — user
+
+- [x] Follow-up from the user: Behaviours and Scenarios as their own panels (out of the toolbar); plot tickboxes as a 3×2 / 2×3 grid; drag a tab out past the window edge to detach it (floating panels were stuck at the edge)
+
+## Review
+- **Tear-off:** egui_dock hands `on_tab_button` a stand-in widget while a tab is dragged, so the drag is found by rebuilding egui_dock 0.16.0's tab-button ids (pinned with `=`). egui keeps the drag alive while the pointer is outside the window; letting go there detaches the tab under the pointer (`GetCursorPos`), slid onto that monitor allowing for the title bar. Docking back never adds a tab over the 3D view.
+- **UI scale never stuck (a PR 1 bug).** bevy_egui calls `set_pixels_per_point` every frame from `EguiContextSettings.scale_factor`, which overwrote `ctx.set_zoom_factor`. The scale now lives in that per-window setting, which is also what makes per-window scale possible.
+- **Two vsync'd windows cut the frame rate to ~19 FPS.** Detached windows use `AutoNoVsync`; the main window's vsync still paces the app (~60 FPS with a detached window open).
+- **The 3D view's hover never registered** inside an egui_dock tab (the dock's tab-body widget wins egui's hit test), so orbit and click-to-boop were dead from step 1 until the end. Hover is now pointer-in-rect plus top layer, and an orbit drag belongs to the view only if it started there, so dragging a tab across it doesn't spin the camera.
+- **egui_dock 0.16 never fills `WindowState.screen_rect`**, so floating panels' places weren't in the serialised dock. They're read from egui's area memory and saved separately (`floats`).
+- Saved detached windows open on the first `Update`, not at `Startup`; a startup-spawned window logged bevy_egui's "Failed to retrieve egui node data".
+- A window capture (PrintWindow) of a window behind another can return a stale frame, which looked like the main UI had vanished. Re-capture before believing a blank window.
+- The Import list was a third menu level and was squeezed to a sliver at the screen edge (the user caught it); the files are listed inline now.
+- Once, with synthetic input, Log and Plot ended up split and the camera top-down, which fits Bevy missing a mouse release while focus moved between windows. Not reproduced; worth watching with a real mouse.
+
+
+# Simulator: UI refresh part 2 — grouped toolbar, status bar, toasts (#80)
+
+Branch: `feature/sim-ui-toolbar`, stacked on `feature/sim-ui-theme` (PR #82, not yet merged). PR 2 of 5; no docking, command palette or overlays.
+
+- [x] `ui.rs`: toolbar as five groups (Run, Speed, Options, Camera, Capture) + ⚙ View menu (theme, UI scale) and Shortcuts; groups fold into menus (Options, Capture, Camera, Speed) when narrow, then into one More menu; icon glyphs from egui's bundled fonts; every control keeps its `tip` text and `SHORTCUTS` key
+- [x] `ui.rs` / `main.rs`: status bar (run state, sim time, speed, behaviour, heap, FPS) from the same sources as the panels; shared `heap_colour`; `FrameTimeDiagnosticsPlugin`
+- [x] `toast.rs` (new), `capture.rs`, `hw.rs`, `ui.rs`: toasts for screenshot saved, firmware/shims reloaded, traceback (click shows it in the log); palette tokens only
+- [x] README: toolbar groups, status bar, notifications; renamed buttons
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` (also `--tests`) clean; 7 scenarios + headless checks pass
+- [x] Captures (window capture + posted input): toolbar at 1800/1300/1000/820 px; More > Capture > Screenshot works; status bar vs panels; all three toasts in Light, Dark, High contrast; traceback click switches to Log, scrolls and highlights
+- [x] Commit, push, PR (stacked on #82)
+- [ ] Interactive with a real mouse: hover tooltips in folded menus, theme picker inside the ⚙ View menu, a real traceback scrolled far up the log — user
+
+## Review
+- Run alone is ~550 px, so at ~800 px even four folded menus didn't fit and the row pushed View/Shortcuts off-screen (and stopped the Behaviours row wrapping). Groups that still don't fit now go into one More menu, and the right-hand buttons drop their text. Layout decisions use widths measured in the full form, so dropping text can't make it flip back and forth.
+- The status bar was first declared after the side panel, so it only spanned the left part and FPS was cut off on narrow windows. It is declared before the side panel now.
+- `●` isn't in egui's bundled fonts (rendered as a box); the toast marker is painted instead. The State panel's `→` chain separator has the same problem (pre-existing, not changed here).
+- Current behaviour skips the LED scheduler's chain, which otherwise ties with the wing behaviours.
+- Saved screenshots are the 3D view only, so an open menu doesn't spoil them.
+- Unit tests in `hw.rs`/`ui.rs` compile under `clippy --tests` but can't run: the crate's tests need the Windows target (and a Linux build stops at `alsa-sys`).
+- A window size saved far off-screen (65k px tall) crashes the app at start; found by accident while testing, out of scope here (PR 3 handles off-screen windows).
+
+
+# Simulator: UI refresh part 1 — style, themes, UI scale, tooltips (#80)
+
+Branch: `feature/sim-ui-theme` (off `Documentation`). PR 1 of 5 from the issue; toolbar/status bar/toasts, docking, palette and overlays follow in later PRs.
+
+- [x] `theme.rs` (new): `ThemeChoice`, `Palette` tokens (Okabe-Ito), Light/Dark/High contrast, `apply` (style, type scale, focus ring), `ActiveTheme`, `ThemePlugin` (system theme via registry + `WindowThemeChanged`, zoom)
+- [x] `prefs.rs` / `main.rs`: `theme`, `ui_scale` saved; plugin wired in
+- [x] `ui.rs`: all `Color32` literals → palette tokens; Theme combo + UI scale on toolbar; Ctrl+= / - / 0 in `SHORTCUTS`; shared section header; tooltips with shortcut keys from `SHORTCUTS`
+- [x] `scene.rs`: clear colour and floor follow theme (× room light)
+- [x] README: themes & UI scale, remembered prefs, tooltips
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` clean; headless scenarios pass
+- [x] Captured Light, Dark and High contrast (Dim, plus High contrast in Bright and Dark rooms): panels, log, plot and 3D readable; an old prefs file without the new keys loads
+- [ ] Interactive: follow-system flipping live, scale slider and Ctrl+= / - / 0, theme and scale restored after restart, tooltips — user
+
+## Review
+- egui draws a selected button's text in `selection.stroke`'s colour. The first draft set that to the accent, so in Dark and High contrast the selected Light/Model/Log buttons were accent-on-accent and unreadable. It's the text colour now; the focus ring comes from `widgets.active`.
+- High contrast's floor at `#202020` showed bright white speckle in the Dim room only (not Bright, not Dark, not the Dark theme at `#2E3036`). Using `#2E3036` there too removed it. Not traced further into Bevy's lighting.
+- The UI scale reset button said "100%" right next to the slider's own "100%" value; it's "Reset scale" now.
+- The slider applies the new scale on release; zooming mid-drag moved the slider out from under the cursor.
+- Toolbar rows wrap (`horizontal_wrapped`), since the larger type would push controls off a narrow window. PR 2 rebuilds the toolbar properly.
+- Plot x/y/z accel lines have their own colours instead of z-bright, x/y-dim; README updated to match.
+
+
+# Simulator: shortcuts window (#77), audio panel (#58), deploy to CIRCUITPY (#61)
+
+Branch: `feature/sim-audio-deploy-shortcuts` (off `Documentation`). #14 left alone (user's choice).
+
+- [x] #77 `ui.rs`: one `SHORTCUTS` table drives the key handling and a Shortcuts window (button, `?`/F1, Esc); ignored while a text field has focus
+- [x] #58 `wav.rs` (new, std-only) + `audio.rs`: `NowPlaying` + level envelope, `AudioMix` volume/mute (saved in prefs), `wav_info`, `scan_sounds` (missing `play_wav` files, unplayable formats)
+- [x] #58 `shims/audiomixer.py` + `audiocore.py` + `pyhost.rs` + `tests/simhw.py`: report mixer format; `ValueError` on a mismatched sample, like CircuitPython 9.2
+- [x] #58 `ui.rs`: Audio panel (now playing, meter, Stop, mute, volume, sound list with Play, problems)
+- [x] #61 `deploy.rs`: find `CIRCUITPY` by volume label (`windows-sys` 0.61.2, already in the tree via winit), plan only changed files, never `lib/`/`boot_out.txt`, `code.py` last, background copy
+- [x] #61 `ui.rs`: Deploy button + confirmation window; results in the sim log
+- [x] README: shortcuts bullet, audio panel, deploy button, setup step, unit-test note
+- [x] Docker build (locked); `cargo fmt --check`, `clippy -D warnings` clean; unit tests (wav 10, deploy 5, settings 10) + headless checks + 7 scenarios pass
+- [x] Interactive (posted keys + window capture): F1 opens Shortcuts, Esc closes, N still boops; boot normal; Deploy and Shortcuts buttons present
+- [ ] Interactive: `?` with a real keyboard, `?` typed in log search doesn't open it, Audio panel (meter, mute, volume, Play, a renamed WAV flagged) — user
+- [ ] Deploy to the real board, confirm the copy, second deploy says up to date — user
+
+## Review
+- `?` arrives from bevy_egui as Shift+Slash (keys are mapped by physical position), never as `Key::Questionmark`, so the table binds Shift+Slash, plus Questionmark and F1.
+- The mixer's `ValueError` text was checked against CircuitPython 9.2's `audiosample_must_match` (the board runs 9.2.8): `The sample's sample_rate does not match`, etc. The first draft used older wording.
+- The headless stand-in WAVs were mono, which the mixer now rejects as the board would; they're stereo now.
+- Deploy only blames log mode for a write-protected drive (Windows error 19). A plain "access denied" keeps the OS wording, since it can mean other things.
+- Deploy never deletes files that are only on the board, and `boot.py`/`log_off.py` are deployed too (the issue's list left them out; log mode needs `boot.py`).
+- One commit for all three issues: they share `ui.rs`, `prefs.rs` and the README, so splitting by hunk wasn't worth the risk.
+- Computer use still can't find the sim window; checks were done by posting keys to it and capturing it with PrintWindow.
+
+# Simulator: event markers (#49) + servo speed limit (#51)
+
+Branch: `feature/sim-event-markers-servo-speed` (off `Documentation`).
+
+- [x] `hw.rs`: `MarkerKind`, pending `markers`, `mark()`, `trigger_idle()`, `servo_speed`
+- [x] `pyhost.rs`: mark WAV starts and restarts/scenarios; `trigger_idle()`
+- [x] `ui.rs`: mark nudges/shakes/boops; stamp markers in `record_history`; draw VLines + labels; Events checkbox (saved via `plot_hidden`)
+- [x] `config.rs` / `sim.toml`: `[servo] sec_per_60deg = 0.12` (FS90 at 4.8 V)
+- [x] `scene.rs`: `slew()` + tests, `ServoSlew`, `slew_servos` (virtual time), `drive_wings` uses slewed angle; sustained-lag warning
+- [x] `ui.rs` / `prefs.rs` / `main.rs`: "Servo speed limit" toolbar checkbox, remembered
+- [x] README: FS90 in hardware list, plot markers, servo speed limit
+- [x] Docker build (locked); `cargo fmt --check`, `clippy --all-targets -D warnings` clean; slew tests pass natively (5); headless checks pass (7 scenarios)
+- [ ] Interactive: nudge/idle markers, Events toggle, wings ease, pause mid-move, warning at slow `sec_per_60deg` — user
+
+## Review
+- Whatever causes a marker queues it in `HwState` (boop/nudge/shake, `play_wav`, `trigger_idle`, `start_with`). `record_history` then timestamps it on the plot's own clock, so markers line up with the samples. While the clock is paused they wait, which is also when the firmware gets to act on them.
+- The servo slew runs in virtual time and is always tracked. The toolbar toggle only picks what the 3D wings show, so the lag warning works either way. The plot and the PCA9685 panel still show the commanded angle.
+- `LAG_SUSTAIN_S` is 0.4 s, not the planned 0.3 s. A full 180° snap takes 0.36 s at 0.12 s/60°, and a single snap must not warn.
+- The slew logic is in plain functions (`slew`, `ServoTrack::follow`), so its tests run natively. The Windows-target tests only compile in the image, since it has no Wine.
+- Computer use still can't find the sim window. A PrintWindow capture confirmed both checkboxes and a clean boot with no lag warnings. The nudge/idle markers and the warning at a slow `sec_per_60deg` are left for the user.
+
+# Simulator: hot-reload sim.toml (#47) + more capable plot (#48)
+
+Branch: `feature/sim-toml-reload-plot` (off `Documentation`).
+
+- [x] `config.rs`: `SimConfig::read` (Ok(None) missing / Err on parse); `load` built on it
+- [x] `ui.rs` `hot_reload`: watch sim.toml mtime, replace `SimConfig` + `hw().board`, log reload or warning (keep old config)
+- [x] `main.rs`: pass start-up sim.toml mtime; `sim.toml` header comment
+- [x] `egui_plot =0.32.1` (last release on egui 0.31); one egui in `cargo tree`
+- [x] `ui.rs` plot: 5 s–5 min window, Freeze, zoom + Reset, hover readout, per-series checkboxes, small eye R/G/B, min/max decimation
+- [x] `prefs.rs`: plot window + series visibility remembered
+- [x] README updated
+- [x] Docker build succeeds (locked); `cargo fmt --check` and `clippy -D warnings` clean; headless checks pass (7 scenarios)
+- [ ] Interactive: sim.toml edits live / broken TOML keeps old; plot controls; scenarios — user
+
+## Review
+- Everything already read `Res<SimConfig>` and `hw().board` live, so a reload is just replacing them. It isn't gated on Auto-reload, because nothing restarts.
+- The plot x axis is run time (s), not "seconds ago", so a zoomed or frozen view doesn't scroll. Following = setting the bounds each frame; any user change to the bounds turns following off.
+- Three plots share one x axis through `link_axis`; the mouse wheel is left to the panel (`allow_scroll(false)`), and Ctrl+scroll / right-drag zoom.
+- Adding `egui_plot` made cargo re-pick `windows-sys` 0.61 for one existing crate; I restored 0.52 by hand so the lock only adds `egui_plot` (`--locked` passes).
+- Couldn't drive the GUI from here (computer use can't find the sim window), so the interactive checks are left for the user.
+
+# Simulator: boop strength (#44) + accelerometer plot (#45)
+
+Branch: `feature/sim-boop-strength-accel-plot` (off `Documentation`).
+
+- [x] `scene.rs`: boop strength from hold time (0.1 s → 0.3 g, 1 s → 2 g), direction from the hit normal, `[sim] boop … g from …` log
+- [x] `hw.rs` / `pyhost.rs` / shim: `last_accel` (clipped as read) and `simhw.accel_range`
+- [x] `settings.rs`: `saved_value(key)`
+- [x] `ui.rs`: accel band in the plot with nudge / animation / hard / clip lines
+- [x] `tests/simhw.py`, `docs/custom-shims.md`, README updated
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean; headless checks pass (7 scenarios)
+- [ ] Interactive: tap / hold / side click / clip test / scenarios — user
+
+## Review
+- Strength comes from `Pointer<Click>::duration` and direction from the mesh-picking hit normal, so no new input tracking was needed; the orbit-drag guard still applies.
+- The plot records what the firmware actually read (`next_accel`, clipped like the shim), not the held value, so a 2 g range visibly flattens a shake below the hard line.
+- Thresholds come from settings.toml / config.py defaults via the Settings state, so editing one moves its line.
+- `build.ps1` doesn't run fmt/clippy; ran `docker/build.sh` with `CHECK=1` for those.
+
+# Simulator: scenario checks in the Docker build (#60)
+
+Branch: `feature/headless-build-checks` (off `Documentation`).
+
+- [x] `Dockerfile`: `python3` listed explicitly (was only there through the base image)
+- [x] `build.sh`: runs `tests/headless.py` after staging `dist/`; failure exits 3
+- [x] `build.ps1`: exit 3 → "Scenario checks failed", says dist\ is still built
+- [x] README (Tests and CI) updated
+- [x] `build.ps1 -RebuildImage` succeeds with all 26 checks and 7 scenarios PASS; `cargo fmt --check` and `clippy -D warnings` clean
+- [x] Broken scenario (`boop.toml` expecting a sound that never plays) fails the build with `FAIL scenario boop`, exe still staged; reverted
+- [x] No `__pycache__` left in the checkout
+
+## Review
+- Hooked into `docker/build.sh`, not `build.ps1`, so CI's build job runs the same checks with no `.github/` change.
+- Checks run after staging `dist/`: broken firmware fails the build but still leaves a simulator to debug it in.
+- Exit code 3 is reserved for "checks failed", so `build.ps1` can tell it apart from a compile error.
+- Adds ~13 s to a build; Debian's Python 3.11 is enough (`tomllib`), so no new download.
+
+# Simulator live State panel (#39)
+
+Branch: `feature/simulator-state-panel` (off `Documentation`).
+
+- [x] `sim_runtime.py`: `_State` snapshot at 10 Hz real time: hardware.py's `asyncio.Event`s, task await chains, `motion_sense`'s nudge count / angry window and the idle `_wait_for` deadline, read from coroutine frames; cleared when the run ends
+- [x] `hw.rs` / `pyhost.rs`: `FwState` + `simhw.set_state`
+- [x] `ui.rs` / `prefs.rs`: State section (event badges, two countdown bars, task list), open state saved
+- [x] `tests/simhw.py` + `headless.py`: 8 new state checks
+- [x] Every int/float local in each task's firmware frames shown under the task (`func.name` for called functions), so new counters need no simulator change
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] `headless.py` passes: all 25 checks and 7 scenarios (firmware unchanged)
+- [x] README updated
+- [ ] Interactive: events flip during a boop, count 1→2→3 then angry resets it, idle countdown restarts on nudge, Trigger idle → "not waiting" + attention/trench task — user
+
+## Review
+- The count, window and idle wait are locals in the firmware's coroutines, so they're read from `cr_frame.f_locals`; the idle deadline comes from the simulator's own `_wait_for` frame, so it's exact. Firmware untouched.
+- Deadlines are sent in virtual time and the UI counts down from the clock, so bars move smoothly between snapshots even at high speed.
+- Events are discovered from `hardware.py`, not listed; a renamed firmware local only blanks its row.
+- Tasks asyncio starts for itself (wait_for's inner `Event.wait`) are hidden; chains stop at the first non-firmware coroutine.
+
+# Simulator Settings panel for settings.toml (#46)
+
+Branch: `feature/simulator-settings-editor` (off `Documentation`).
+
+- [x] `settings.rs` (std only): discover `_int("KEY", default)` in config.py with help from the comment above; read settings.toml like `os.getenv`; line-based edits that keep comments, order, line endings and other keys; write via tmp + rename
+- [x] Calibration keys (`SERVO2_*`, `BREATH_SERVO2_*`) read-only, filtered out again at save
+- [x] `ui.rs`: Settings section (value, default, Reset, Save, Revert, pending/changed/invalid colours); re-read on disk change in `hot_reload`; open state in prefs
+- [x] 10 unit tests pass (`rustc --test src/settings.rs` in the dev image), incl. no-op edit leaves the real settings.toml byte-identical
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] `headless.py` passes: all checks and 7 scenarios (firmware unchanged)
+- [x] README updated
+- [ ] Interactive: edit `BREATH_PERIOD_S`, Save → restart with faster breathing, `git diff` shows one value; Reset; locked rows — user
+
+## Review
+- Logic lives in `settings.rs` with no egui/bevy, so its tests run with plain `rustc` (the crate itself only cross-compiles for Windows).
+- Keys come from config.py, not a list in Rust, so a new tunable appears with no simulator change.
+- Reset writes the default value rather than deleting the line, so the file's comments for that key stay.
+- Only discovered keys are read or shown, and only integers are written, so nothing else in settings.toml (e.g. secrets someone adds) is displayed or touched.
+
+# Simulator 3-axis accelerometer input (#43)
+
+Branch: `feature/simulator-3-axis-accel` (off `Documentation`).
+
+- [x] `hw.rs`: `nudge_dir`, kept across restarts with `accel_g`
+- [x] `ui.rs`: nudge/shake are held + direction x delta (0.3 / 2.0 g); Direction picker, x/y/z held sliders, Rest button
+- [x] `scene.rs` / `pyhost.rs`: head click and scenario steps pass a direction
+- [x] `sim_runtime.py`: `axis` key for nudge/shake steps; log line names a non-default axis
+- [x] `tests/simhw.py`: relative nudge/shake with a direction
+- [x] `scenarios/sideways-nudge.toml`: x/y nudges are ignored, z nudge boops, no angry
+- [x] README updated
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] `headless.py` passes: all 18 checks and 7 scenarios, including `sideways-nudge`
+- [ ] Interactive: Direction picker, held sliders and Rest in the app — user
+
+## Review
+- The issue assumed the firmware senses nudges from any direction; since PR #35 it reads only z. Firmware left alone: the simulator now shows ±X/±Y nudges being ignored, as on the robot.
+- Nudge and shake are relative to the held reading, so they work from a sideways or tipped pose. From rest on +Z they give 1.3 g and 3 g as before, so existing scenarios and tests are unchanged.
+- A −Z shake from rest reads −1 g and only counts as a nudge, because hard motion is `abs(z) > 2.5`. Documented, not changed.
+- In `sideways-nudge` the tilt itself is a z change, so it boops once before the sideways nudges.
+
+# Simulator scripted scenarios (#40)
+
+Branch: `feature/simulator-scenarios` (off `Documentation`).
+
+- [x] `sim_runtime.py`: `_Scenario` engine (TOML steps + expectations), simhw proxy that records audio/PCA/white LED, polled each loop pass
+- [x] `hw.rs` / `pyhost.rs` / `simhw.py`: `nudge`, `shake`, `set_accel`, `trigger_idle`, `set_scenario`
+- [x] `ui.rs`: Scenarios row (dropdown, Run scenario, PASS/FAIL badge)
+- [x] `simulator/scenarios/`: boot, breathing, boop, angry-nudges, angry-shake, idle
+- [x] `headless.py` runs every scenario after the existing checks; `--scenario NAME`. All 18 checks + 6 scenarios pass
+- [x] Negative checks: a missed `by` FAILs (exit 1), an unknown action is an ERROR, a SyntaxError in a firmware module FAILs the scenario
+- [x] Docker build succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] README updated
+- [ ] Interactive: each scenario from the dropdown passes in the app, badge + hover, Restart clears it — user
+
+## Review
+- One engine, in `sim_runtime.py`, shared by the app and headless, so they can't drift. Rust only passes the file in and shows the verdict.
+- The issue's one-line `[[step]] t = …` isn't valid TOML; one key per line instead.
+- Added `start = "<log line>"`: at 40x, Python's imports eat ~7 virtual s before boot, so absolute times would vary by machine.
+- A gentle nudge is ignored while a boop animates, so `angry-nudges` spaces its nudges 5 s apart.
+- `breathing` is its own scenario (timed from boot complete) so the boot sequence's own wing moves can't satisfy it.
+# Simulator behaviour buttons (#38)
+
+Branch: `feature/simulator-behaviour-buttons` (off `Documentation`).
+
+- [x] `sim_runtime.py`: discover no-argument `async def`s in `behaviours.*`, minus `code.py`'s `create_task` targets (parsed with `ast`) and `_` names; run one on request with `pause_breathing` set
+- [x] `hw.rs` / `pyhost.rs`: list, request and running state; `simhw.set_behaviours`, `take_behaviour_request`, `set_behaviour_running`
+- [x] `ui.rs`: Behaviours toolbar row, greyed out while one runs
+- [x] Headless test: 3 new checks (buttons found, background loops excluded, boot_sequence button re-runs boot); all 18 pass
+- [x] `build.ps1` succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] README updated
+- [ ] Interactive: row shows 7 buttons, each runs, breathing pauses/resumes, buttons grey out, Restart/Stop clears the row; existing scenarios — user (computer use can't reach the sim window)
+
+## Review
+- Found today: attention_animation, boot_sequence, data_processing_led, settle, angry_animation, nose_boops, trench_run. `settle` is a helper; renaming it `_settle` would hide it (firmware change, user's call).
+- Background loops are found by parsing `code.py`, not by watching tasks, so the row doesn't change while boot runs.
+- A button only clears `pause_breathing` if it set it, so it never cuts short a pause a firmware trigger owns.
+- No `trench_active` special case: a button-started trench run doesn't hold off the LED scheduler (documented).
+
+# Simulator UI polish (#50, #52, #56, #59)
+
+Branch: `feature/simulator-ui-polish` (off `Documentation`). One commit per issue, one PR.
+
+- [x] #50 PCA9685 grid: servo angle for ch 0/1, colour swatch per eye
+- [x] #52 Log: search, Firmware / [sim] toggles, red tracebacks, Clear / Copy / Save
+- [x] #56 Camera views (Front, Side, Top, Eyes, Reset), Screenshot, Record frames
+- [x] #59 Collapsible sections, saved prefs (`ddl0-sim.prefs.toml` next to the exe), shortcuts, Pause
+- [x] `build.ps1` succeeds; `cargo fmt --check` and `clippy -D warnings` clean in the container
+- [x] Headless test passes (all 16 checks)
+- [x] Interactive: boot, breathing, N → boop, S → angry, I → attention; Space pause freezes sim time; camera views; log search, red SyntaxError traceback, Save; Screenshot; Record (22 frames in ~2 s); folded section restored after restart
+- [ ] Copy button — not checked (no clipboard access in the session) — user
+- [x] README updated
+
+## Review
+- Copy needs bevy_egui's `manage_clipboard` feature, which adds `arboard` / `clipboard-win` to Cargo.lock. No existing crate versions changed.
+- Pause needed a Python-side change: while paused the scheduler sleeps 50 ms per pass, or animations that yield with `asyncio.sleep(0)` would spin a core against a frozen clock.
+- `docker/build.sh` used to `rm -rf dist`, which would have wiped the prefs and captures on every build; it now keeps those two.
+- Once saved, the Model choice overrides `[model] kind` in sim.toml (documented). Delete the prefs file to fall back.
+- Shortcut keys are consumed, so a button focused by a click doesn't also fire on Space.
+
+# Trench run idle animation (Top Gun: Maverick)
+
+Branch: `feature/trench-run` (off `Documentation`).
+
+- [x] `behaviours/trench_run.py`: random manoeuvres (tight turns split the wings, climbs lift both, dives drop both), smoothstep transitions, buffet flutter (~7 Hz, stronger under load), orange afterburner eyes, white LED flicker; runs `TRENCH_RUN_S` (300 s)
+- [x] `idle_attention()`: 50/50 attention or trench run; a nudge aborts the run and `motion_sense` keeps `pause_breathing` until its boop / angry ends
+- [x] `trench_active` event: LED scheduler skips or stops its flicker while the run owns the white LED
+- [x] `TRENCH_RUN_S` in `config.py` / `settings.toml`; README behaviour, tuning and sound tables
+- [x] Headless test: accepts either idle animation, checks a trench run is aborted by the next nudge, second idle trigger at 100 s; silent stand-ins for sounds missing locally
+- [x] Headless passes (4 runs: trench picked in 2); forced-trench copy: aborts on nudge, and with `TRENCH_RUN_S = 8` completes and resets
+- [ ] Interactive sim (Trigger idle now until the trench run plays; nudge mid-run; full run at fast-forward) — user
+- [ ] Add `sounds/trenchRun.wav` — user (missing file crashes the firmware when the run starts)
+- [ ] Hardware check: servo strain at the buffet frequency — user
+
+## Review
+- Wings swing 20–90° on both servos (left mirrored, as in `angry_animation`): the span boops (20–70) and angry (30–90) already use. First version used the attention ranges, which gave the left wing only 20° of travel; user asked for more pronounced moves. No calibration changed.
+- Sound loops a short `trenchRun.wav` (full length won't fit on CIRCUITPY) and stops when the run ends or is aborted.
+- On abort the afterburner is cleared (eyes off, white LED idle), because a boop only resets some eye channels; the small eye would otherwise stay orange.
+
+# Breathing ignores `pause_breathing`
+
+Branch: `bugfix/breathing-pause` (off `Documentation`).
+
+- [x] Root cause: `ambient_breathing()` never checked `pause_breathing`, so while boop / angry / attention ran it kept writing wings (ch 0/1) and eye LEDs every 0.1 s, interleaved with the animation's writes
+- [x] Fix: each tick, if `pause_breathing.is_set()` sleep 0.1 s and skip; `t` is held, so breathing resumes from the same point in its cycle
+- [x] Headless test passes in the `ddl0-sim-dev` image (all 13 checks)
+- [x] Probe (scratch, not committed): tag each ch 0/1 write by calling function, count breathing writes inside each animation
+- [ ] Hardware check — user
+
+## Review
+- Before: 682 breathing wing writes inside animations (angry 66 + 68, boop 132 + 126 + 258, attention 32).
+- After: 0 inside any animation. The probe still shows 2 (ch 0 + ch 1 at 79.29 s) because it merges two back-to-back boops into one span; those writes land in the gap after the first boop ended and before the second boop's sound started (79.3 s), when the pause is correctly clear.
+- On resume the wings step from the animation's end pose to breathing's held position in one tick. Before the fix that same step happened on the next breathing tick anyway.
+
+# nose_boops() / angry_animation() slower than written (follow-up to #17)
+
+Branch: `bugfix/motion-speed` (off `Documentation`, after PR #26).
+
+- [x] Measure in the headless sim at board speed (estimated `[board]` figures, #20 not run yet), first to last wing write:
+  - `angry_animation`: ~4.0 s vs 2.4 s written (3 flaps × 2 strokes × 0.4 s), ~1.7x slow
+  - `nose_boops`: ~7.9 s vs 4.8 s written (2 boops × 2 strokes × 1.2 s), ~1.65x slow
+- [x] Root cause: same as #17. Fixed step counts (20 / 60 per stroke) with `sleep(duration / steps)`, plus 2 PCA9685 writes (~4 ms) and scheduler overhead per step
+- [x] Both now share a clock-driven `sine_flaps()`; same `duration` (per stroke), angles, end pose and eye-colour logic
+- [x] Headless test passes
+- [ ] Interactive sim (nudge → boop, hard shake → angry, Board speed on) — user
+- [ ] Hardware check — user; re-check once #20 has real `[board]` figures
+
+## Review
+- After: angry 2.42 / 2.44 s, boops 4.80–4.84 s. ~6.4 ms per frame, so ~62 frames per angry stroke and ~187 per boop stroke (was 21 / 61).
+- Trajectory kept exactly, including the snap between strokes: each stroke ends where it started (min → max → min, then max → min → max), so the wing jumps min ↔ max at every stroke boundary, as before.
+- Eye colour after a boop still comes from the last stroke's end angle (`angle_max`, so full blue / dim red), as before.
+- Not changed: `ambient_breathing` never waits on `pause_breathing`, so it keeps writing the wings ~10x/s during these animations (and attention). Pre-existing; worth its own issue.
+
+# Issue #17 — attention_animation() much slower on the robot than written
+
+Branch: `bugfix/attention-speed` (stacked on `chore/tidy-code`, PR #24).
+
+- [x] Measure in the headless sim at board speed (estimated `[board]` figures, #20 not run yet): 9.31 s for 5 flaps = 1.86 s/flap vs 0.2 s written
+- [x] Root cause: fixed step count (61/flap) with fixed sleeps; every step also costs 8 PCA9685 writes (~16 ms), so the sleeps were a small fraction of the real time
+- [x] Drive the animation from `time.monotonic()` so each flap takes `duration` whatever the write cost; flap duration 0.5 s (user's choice)
+- [x] Headless test passes
+- [ ] Interactive sim (Trigger idle now, Board speed on) — user
+- [ ] Hardware check — user; re-check once #20 has real `[board]` figures
+
+## Review
+- After: 2.54 s for 5 flaps = 0.51 s/flap, ~23 frames per flap (~22 ms each).
+- Frames yield with `asyncio.sleep(0)`: the 8 writes already take longer than one 50 Hz servo period, so sleeping more would only cost smoothness.
+- Not changed: `nose_boops` (60 steps × 2 writes) and `angry_animation` (20 steps × 2 writes) have the same fixed-step pattern, so they also run slower than written, though less badly.
+
+# Issue #18 — Tidy code.py: duplicate import and unused task variable
+
+Branch: `chore/tidy-code` (off `Documentation`).
+
+- [x] Duplicate `import random` — already gone after the module split (#19)
+- [x] `code.py`: drop the unused `play_wav_task` variable (the startup sound task is still created)
+- [x] `code.py`: remove commented-out `move_s1` / `move_s2` tasks
+- [x] Remove legacy commented `nose_boops` (`behaviours/motion.py`) and `attention_animation` (`behaviours/attention.py`)
+- [x] Headless test passes in the `ddl0-sim-dev` image
+- [ ] Hardware check — user (no behaviour change expected)
+
+## Review
+- Headless: all 12 checks pass; startup sound (`008.wav`) still plays, boop / attention / angry unchanged.
+- Kept the servo notes at the bottom of `code.py` and the commented alternatives inside live functions: they're the user's.

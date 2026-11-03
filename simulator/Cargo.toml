@@ -1,0 +1,69 @@
+[package]
+name = "ddl0-sim"
+version = "0.1.0"
+edition = "2021"
+description = "3D desktop simulator that runs the DD-L0-LA59 CircuitPython firmware unmodified"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[dependencies]
+bevy = { version = "=0.17.3", default-features = false, features = [
+    "std",
+    "bevy_asset",
+    "bevy_audio",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_gltf",
+    "bevy_log",
+    "bevy_mesh_picking_backend",
+    "bevy_pbr",
+    "bevy_post_process",
+    "bevy_picking",
+    "bevy_render",
+    "bevy_scene",
+    "bevy_state",
+    "bevy_window",
+    "bevy_winit",
+    "multi_threaded",
+    "png",
+    # Since 0.17 Bevy's own types (Transform, Mesh3d, ...) are put in the type
+    # registry by this feature, not by their plugins. Without it, spawning a
+    # glTF scene panics with "unregistered type ...Transform".
+    "reflect_auto_register",
+    "tonemapping_luts",
+    "ktx2",
+    "zstd_rust",
+    "wav",
+    # Window backends for Linux (#93); no effect on Windows.
+    "x11",
+    "wayland",
+] }
+# manage_clipboard lets ctx.copy_text reach the OS clipboard (the log panel's Copy button).
+# accesskit gives screen readers and Voice Access the egui tree (#94).
+bevy_egui = { version = "=0.38.1", default-features = false, features = ["render", "default_fonts", "manage_clipboard", "accesskit"] }
+# 0.34.1 is on egui 0.33, which bevy_egui 0.38 uses.
+egui_plot = "=0.34.1"
+# The dockable panel layout; 0.18.0 is the release for egui 0.33. serde is for saving the layout.
+egui_dock = { version = "=0.18.0", features = ["serde"] }
+pyo3 ={ version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+# Rewrites parts.toml in place, keeping its comments and order (0.22 is the one toml 0.8 already uses).
+toml_edit = "=0.22.27"
+# The native folder picker for choosing the firmware folder (#105). On Windows it
+# only adds windows-sys 0.61, already in the tree; its defaults are Linux backends (#93).
+rfd = "=0.17.2"
+
+# Volume-label lookup for the one-click deploy, the OS light/dark setting and the
+# pointer position for tearing a panel off into its own window. 0.61.2 is already in the tree via winit.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Registry", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+
+# Keep dependency builds optimised in dev too; Bevy is unusably slow otherwise.
+[profile.dev.package."*"]
+opt-level = 2
