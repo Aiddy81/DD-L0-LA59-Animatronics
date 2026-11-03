@@ -69,7 +69,7 @@ Open the **Behaviours** panel. It has one button per behaviour, such as **angry_
 |---|---|
 | Booping 3 times doesn't make her angry | The boops must be inside one "window" (1–3 minutes), and a boop during a flutter is ignored. Wait for each flutter to stop, then boop again. Or use **Hard shake**. |
 | A boop does nothing | You may have dragged: that turns the camera. Or she's in an animation; use **Hard shake** to interrupt. |
-| No sound | Check the **Audio** panel isn't on **Mute** and your speakers are on. Sounds are also listed in the **Log**. |
+| No sound | The sound files aren't included, so [add your own](Adding-Sounds) first. Then check the **Audio** panel isn't on **Mute** and your speakers are on. Sounds are also listed in the **Log**. |
 | The **Behaviours** buttons are greyed out | One is already running. Wait for it to finish. |
 
 ## More detail (for tinkerers)

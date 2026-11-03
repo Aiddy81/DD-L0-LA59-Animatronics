@@ -48,7 +48,7 @@ The full list is on [Layouts, themes and shortcuts](Layouts-Themes-and-Shortcuts
 ## Known limits
 
 - Tested with Narrator through Windows UI Automation, not by ear. NVDA, JAWS and Dragon haven't been tested.
-- Windows only for now. Mac (VoiceOver) and Linux (Orca) depend on [issue #93](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/issues/93).
+- Screen readers are tested on Windows only. The Linux and Mac versions expose the same controls, but Orca and VoiceOver are untested. Voice Access and the Windows settings above are Windows features; on a Mac, *Follow system* reads dark mode, *Increase contrast* and *Reduce motion*, and on Linux it reads GNOME's settings.
 - A few dock controls (collapse and close-all buttons, scroll bars, the dividers) have no names. Each panel's *×* and the command palette do the same jobs.
 - After **Del** deletes a part, focus goes back to the window. Press **F6** to return to a panel.
 

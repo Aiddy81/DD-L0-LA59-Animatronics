@@ -8,6 +8,8 @@ Find your problem in the list. If it isn't here, [open an issue](https://github.
 |---|---|
 | Nothing happens when I double-click `ddl0-sim.exe` | Extract the ZIP first (right-click > **Extract All…**). The exe needs the files next to it. |
 | "Windows protected your PC" | Click **More info**, then **Run anyway**. |
+| Mac: "can't be opened" or "is damaged" | Right-click `ddl0-sim` > **Open**, or **System Settings > Privacy & Security > Open Anyway**. |
+| Linux: it won't start | It needs a Vulkan driver and `libwayland-client`, `libxkbcommon` and `libasound2`. See [Get the simulator](Get-the-Simulator#on-linux). |
 | It asks me to pick a folder | It can't find the firmware. Pick the `PropMaker_Feather` folder from your copy of the project. |
 | A box says something went wrong at start-up | Read the message: it names the missing file. Usually the `simulator` folder isn't above the exe, or the download is incomplete. Download it again. |
 
@@ -19,7 +21,7 @@ Find your problem in the list. If it isn't here, [open an issue](https://github.
 | The **Log** shows a red traceback | The firmware has an error. If you changed a file, undo your last change. Click the blue line to open the file at the problem. |
 | Boops don't work | Click without moving the mouse (a drag turns the camera). If **Edit parts** is on in the **Parts** panel, turn it off. |
 | I can't make her angry | See [Make her angry](Droid-Behaviours#3-make-her-angry). **Hard shake** always works. |
-| No sound | Check **Mute** in the **Audio** panel and your computer's volume. |
+| No sound | The sounds aren't included: [add your own](Adding-Sounds). Then check **Mute** in the **Audio** panel and your computer's volume. |
 | The app is slow or jerky | Close other big programs. Pick **Model > Primitive** in the toolbar's *Options* for a simpler 3D model. |
 | A panel disappeared | **⚙ View** and tick it, or **⚙ View > Layouts > Reset layout**. |
 | Keys don't do anything | You're typing in a text box. Click the 3D view or press **Esc** first. |
@@ -42,7 +44,10 @@ In the `captures` folder next to `ddl0-sim.exe`.
 Close the app and delete `ddl0-sim.prefs.toml` next to the exe.
 
 **Does it run on Mac or Linux?**
-Not yet: [issue #93](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/issues/93).
+Yes: 64-bit Linux and Macs with an Apple chip. See [Get the simulator](Get-the-Simulator). Intel Macs aren't supported.
+
+**Why doesn't she make any sound?**
+The sound files aren't included in the project or the download. Add your own: [Adding sounds](Adding-Sounds).
 
 ## More detail (for tinkerers)
 

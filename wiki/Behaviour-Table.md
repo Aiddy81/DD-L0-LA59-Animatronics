@@ -10,6 +10,8 @@
 | Trench run | `trench_run()` (`trench_run.py`) | Idle wait ends, the other 50% | Flight moves for `TRENCH_RUN_S`: turns split the wings, climbs lift both, dives drop both, buffeting under load. Eyes glow orange, brighter on climbs; white LED flickers. | `trenchRun.wav`, looped | Time's up, or a nudge over `ANIMATION_NUDGE_Z_MG` |
 | Thinking light | `random_led_scheduler()` → `data_processing_led()` (`leds.py`) | Every 5–60 s at random | White LED flickers for 2–6 s. | — | It finishes; skipped while `trench_active` is set |
 
+The sound files aren't included in the project; see [Sound list](Sound-List).
+
 All of these run as `asyncio` tasks started in `code.py`, except the boop, angry, attention and trench run, which are called by the motion and idle tasks. See [How the firmware works](How-the-Firmware-Works).
 
 In the simulator, every one that takes no arguments has a button in the **Behaviours** panel.

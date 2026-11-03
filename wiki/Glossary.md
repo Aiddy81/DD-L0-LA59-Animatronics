@@ -28,6 +28,6 @@ Words used in this wiki, in plain language. In alphabetical order.
 | **Servo** | A small motor that turns to an exact angle when told. Lola has two, one per wing. |
 | **settings.toml** | A text file of numbers you can change, like how long she waits before asking for attention. See [Settings reference](Settings-Reference). |
 | **Shim** | A stand-in. The simulator swaps the robot's hardware libraries for shims that move the 3D model instead of real motors. |
-| **Simulator** | The Windows program that shows Lola in 3D and runs her real firmware, so you can play without the robot. |
+| **Simulator** | The program (for Windows, Linux and Mac) that shows Lola in 3D and runs her real firmware, so you can play without the robot. |
 | **Trench run** | A 2½-minute "flight" Lola sometimes does when she wants attention: her wings tilt and dive, and her eyes glow orange. |
-| **WAV** | A sound file. Lola's sounds are in the `sounds/` folder. |
+| **WAV** | A sound file. Lola's sounds go in the `sounds/` folder; you add your own (see [Adding sounds](Adding-Sounds)). |

@@ -6,7 +6,7 @@ There are two ways to enjoy Lola. Pick the one that fits you.
 
 | You'll need | Why |
 |---|---|
-| A Windows 10 or 11 computer | The simulator runs on Windows. Mac and Linux are coming later ([issue #93](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/issues/93)). |
+| A Windows 10/11 PC, a 64-bit Linux PC, or a Mac with an Apple chip (M1 or newer) | The simulator runs on all three. Intel Macs aren't supported. |
 | About 500 MB of free space | For the simulator and the Python that comes with it. |
 | Speakers or headphones (optional) | To hear her sounds. Every sound is also written on screen. |
 
@@ -29,7 +29,8 @@ Before you start, read [Safety first](Hardware-Safety).
 |---|---|
 | The simulator | So you can try a change safely before the robot. |
 | A text editor | To edit the firmware files. Notepad works; [VS Code](https://code.visualstudio.com/) is nicer, and the simulator can open errors straight in it. |
-| A copy of the project | [Download the ZIP](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/archive/refs/heads/main.zip), or clone it with Git if you know how. |
+| A copy of the firmware | It's in the simulator download already. Or take `ddl0-firmware-….zip` from the [latest release](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/releases/latest), or clone the project with Git if you know how. |
+| Some WAV sound files | The sounds aren't included; see [Adding sounds](Adding-Sounds). |
 
 Next: [How the firmware works](How-the-Firmware-Works).
 

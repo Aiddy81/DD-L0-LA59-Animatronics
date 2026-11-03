@@ -9,17 +9,17 @@ DD-L0-LA59 (we call her **Lola**) is a small robot droid that seems alive. She:
 
 ![The Lola droid in the simulator, breathing slowly with her eyes glowing](images/home-lola.png)
 
-You don't need the robot to try her out. The **simulator** is a program for your Windows computer that shows Lola in 3D and runs the very same code as the real robot.
+You don't need the robot to try her out. The **simulator** is a program for your Windows, Linux or Mac computer that shows Lola in 3D and runs the very same code as the real robot.
 
 ## Choose your path
 
 | I want to… | Start here | You'll need |
 |---|---|---|
-| 🎮 **Try the simulator** | [Get the simulator](Get-the-Simulator) | A Windows computer |
+| 🎮 **Try the simulator** | [Get the simulator](Get-the-Simulator) | A Windows, Linux or Mac computer |
 | 🔧 **Build the robot** | [Parts list](Parts-List) | The parts, a soldering iron and an adult helper if you're under 16 |
 | ✏️ **Change how she behaves** | [How the firmware works](How-the-Firmware-Works) | The simulator, a text editor |
 | 💡 **Add new hardware** | [Adding new hardware](Adding-New-Hardware) | The simulator |
-| 🧑‍💻 **Work on the simulator itself** | [Building the simulator](Building-the-Simulator) | Docker Desktop |
+| 🧑‍💻 **Work on the simulator itself** | [Building the simulator](Building-the-Simulator) | Docker (Windows, Linux) or Rust (Mac) |
 
 New to all this? Read [What you need](What-You-Need) first, and keep the [Glossary](Glossary) open for any word you don't know.
 

@@ -24,7 +24,7 @@ To keep your own arrangement, choose **Save current as** and type a name. **Rese
 
 ## Light or dark
 
-Open **⚙ View > Theme** and pick **Follow system**, **Light**, **Dark** or **High contrast**. *Follow system* matches your Windows settings.
+Open **⚙ View > Theme** and pick **Follow system**, **Light**, **Dark** or **High contrast**. *Follow system* matches your computer's light/dark and contrast settings.
 
 ![The simulator in the Light theme: light grey panels and a pale room around Lola](images/themes-light.png)
 

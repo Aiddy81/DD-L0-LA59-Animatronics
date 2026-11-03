@@ -6,7 +6,7 @@ Thanks for helping! Small fixes, such as a typo on a wiki page, are as welcome a
 
 | Branch | What it is |
 |---|---|
-| `main` | What's running on the robot. Never push to it directly. |
+| `main` | What's running on the robot. Never push to it directly. Every merge into it publishes a [release](CI-and-Releases#releases). |
 | `dev` | Tested work on its way to `main`. |
 | `Documentation` | The current integration branch. **Take every work branch from here** and open your pull request back into it. |
 

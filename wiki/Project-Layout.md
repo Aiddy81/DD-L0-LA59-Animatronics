@@ -8,9 +8,9 @@ PropMaker_Feather/        the firmware: copied to the CIRCUITPY drive
   settings.toml           the tunables (whole numbers and quoted strings only)
   log.py boot.py log_off.py   serial output, optional log.txt
   behaviours/             boot, breathing, motion, attention, trench_run, leds
-  sounds/                 WAV files
+  sounds/                 WAV files (not in git: add your own)
   lib/                    Adafruit .mpy libraries (copied by hand; don't edit)
-simulator/                the Windows desktop simulator
+simulator/                the desktop simulator (Windows, Linux, macOS)
   src/                    Rust (Bevy + egui + PyO3)
   shims/                  Python stand-ins for the CircuitPython hardware modules
   scenarios/              scripted tests (TOML)
@@ -18,13 +18,16 @@ simulator/                the Windows desktop simulator
   docs/custom-shims.md    guide to writing shims
   assets/                 3D model (droid.glb) and its Blender source
   docker/                 dev image and build script
-  build.ps1               build entry point
+  build.ps1               build entry point on Windows
+  build.sh                build entry point on Linux and macOS
+  release/package.sh      packs the release downloads
   sim.toml                wing mapping, servo and board timing
   parts.example.toml      template for extra parts
   dist/                   build output (not in git)
 wiki/                     these wiki pages (synced to the GitHub wiki)
 tasks/                    todo.md (work log) and lessons.md
-.github/workflows/        CI: simulator.yml, wiki-sync.yml
+.github/workflows/        CI and releases (simulator.yml), wiki publishing (wiki-sync.yml)
+.github/scripts/          release_notes.py
 ```
 
 ## Where to change what

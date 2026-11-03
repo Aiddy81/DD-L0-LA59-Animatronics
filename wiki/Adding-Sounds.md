@@ -2,7 +2,9 @@
 
 > **You'll need:** a sound file, a free sound editor such as [Audacity](https://www.audacityteam.org/), the simulator · **Time:** 15 minutes
 
-Lola's sounds are WAV files in the `sounds/` folder. The board is fussy about their format, so every file must be saved the same way.
+Lola's sounds are WAV files in the `sounds/` folder. **They aren't included in the project or the downloads**, so you make or find your own and give them the names on the [Sound list](Sound-List). The board is fussy about their format, so every file must be saved the same way.
+
+Only use sounds you're allowed to use: ones you recorded yourself, or ones whose licence lets you.
 
 ## Make a sound the robot can play
 
@@ -13,10 +15,10 @@ Lola's sounds are WAV files in the `sounds/` folder. The board is fussy about th
 5. Pick **WAV**, encoding **Signed 16-bit PCM**.
 6. Give it a short name with no spaces, such as `beep.wav`, and save.
 
-## Replace one of her sounds
+## Give her a sound
 
-1. Name your file exactly like the one you're replacing, for example `noseBoops.wav` (capital letters matter).
-2. Copy it into `PropMaker_Feather/sounds/`, replacing the old one.
+1. Name your file exactly as on the [Sound list](Sound-List), for example `noseBoops.wav` (capital letters matter).
+2. Copy it into `PropMaker_Feather/sounds/` (make the folder if it isn't there), replacing any old one.
 3. In the simulator, open the **Audio** panel and click **Play** next to it to hear it.
 4. If it's shown in **red**, the robot can't play it: the panel says why. Export it again with the settings above.
 5. Boop Lola in the simulator to hear it in action, then [copy it to the robot](Copy-the-Firmware).
@@ -54,4 +56,5 @@ Your file shows in the **Audio** panel with no red, and plays when the behaviour
 - The mixer in `hardware.py` is `audiomixer.Mixer(voice_count=1, sample_rate=22050, channel_count=2, bits_per_sample=16, samples_signed=True)`. Every WAV must match it; the simulator raises the same `ValueError` as CircuitPython 9.2 when one doesn't.
 - `play_wav(name, loop=False)` returns straight away. There's one voice, so a new sound stops the last one. `stop_wav()` stops a looped sound.
 - The board's flash is small (about 8 MB on the Prop-Maker Feather). Keep sounds short.
-- Full list of current sounds: [Sound list](Sound-List).
+- Full list of the names the firmware uses: [Sound list](Sound-List).
+- `sounds/` is in `.gitignore`, so your files stay on your computer and never go into git.

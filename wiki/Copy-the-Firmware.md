@@ -6,13 +6,14 @@ The firmware is the set of files in the project's **`PropMaker_Feather`** folder
 
 ## The first time: copy by hand
 
-1. [Download the project ZIP](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/archive/refs/heads/main.zip) and extract it (or use your Git copy).
+1. From the [latest release](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/releases/latest), download **`ddl0-firmware-…zip`** and extract it. (The simulator download and a Git copy have the same files in their `PropMaker_Feather` folder.)
 2. Plug the Feather into your computer. The **CIRCUITPY** drive appears.
-3. Open the **`PropMaker_Feather`** folder.
+3. Open the extracted folder.
 4. Select these and copy them onto **CIRCUITPY**, replacing anything already there:
    - `code.py`, `boot.py`, `config.py`, `hardware.py`, `log.py`, `log_off.py`, `settings.toml`
-   - the folders `behaviours`, `lib` and `sounds`
-5. Wait for the copy to finish. The board restarts by itself and Lola starts up.
+   - the folders `behaviours` and `lib`
+5. Make a folder called `sounds` on **CIRCUITPY** and put your WAV files in it. The sounds aren't included in the project: see [Adding sounds](Adding-Sounds) for how to make them and the [Sound list](Sound-List) for the names.
+6. Wait for the copy to finish. The board restarts by itself and Lola starts up.
 
 ![The CIRCUITPY drive in File Explorer after copying, showing code.py, the other .py files, settings.toml and the behaviours, lib and sounds folders (screenshot to come)](images/TODO-copy-circuitpy.png)
 
@@ -38,7 +39,8 @@ Once the libraries are on the board, the simulator can copy just the files you c
 
 | Problem | Fix |
 |---|---|
-| *No CIRCUITPY drive found* | Plug the robot in and wait for the drive to appear. Check your cable carries data. |
+| *No CIRCUITPY drive found* | Plug the robot in and wait for the drive to appear. Check your cable carries data. On Linux it's looked for under `/media/$USER/`, `/run/media/$USER/` or `/media/`; on a Mac under `/Volumes/`. |
+| The board crashes with an error about `sounds/` | The `sounds` folder is missing on CIRCUITPY. Make it (step 5). |
 | The copy fails: the drive is "read-only" | Logging mode is on. Turn it off first: see [Test it and read the log](Test-and-Read-the-Log#turn-logging-off). |
 | The board's LED blinks and Lola does nothing | There's an error. Open the serial console to read it ([Test it and read the log](Test-and-Read-the-Log)). Did you copy `lib`? |
 | *ImportError: no module named …* | The `lib` folder is missing or incomplete. Copy it again. |

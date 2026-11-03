@@ -1,6 +1,8 @@
 # Sound list
 
-All in `PropMaker_Feather/sounds/`. File names are case-sensitive.
+The firmware expects these files in `sounds/` (on CIRCUITPY, and in `PropMaker_Feather/sounds/` for the simulator). File names are case-sensitive.
+
+> **The sound files aren't part of the project.** They're left out of git and the release downloads, so add your own with these names. See [Adding sounds](Adding-Sounds).
 
 | File | Played by | When |
 |---|---|---|
