@@ -45,7 +45,9 @@ bevy_egui = { version = "=0.38.1", default-features = false, features = ["render
 egui_plot = "=0.34.1"
 # The dockable panel layout; 0.18.0 is the release for egui 0.33. serde is for saving the layout.
 egui_dock = { version = "=0.18.0", features = ["serde"] }
-pyo3 ={ version = "=0.25.1", features = ["abi3-py311", "generate-import-lib"] }
+# 0.29 fixes GHSA-36hh-v3qg-5jq4 and GHSA-chgr-c6px-7xpp (#113, #114). It links
+# python3.dll on Windows with raw-dylib, so it needs no import library.
+pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 # Rewrites parts.toml in place, keeping its comments and order (0.22 is the one toml 0.8 already uses).
