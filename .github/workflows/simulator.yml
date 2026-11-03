@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - name: Run code.py against the simulator's hardware stand-ins
@@ -29,11 +29,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build the dev image
         run: docker build -t ddl0-sim-dev simulator/docker
       - name: Restore cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             .ci-cache/registry
@@ -51,7 +51,7 @@ jobs:
             -w /workspace/simulator ddl0-sim-dev bash docker/build.sh
           sudo chown -R "$(id -u):$(id -g)" .ci-cache simulator/dist
       - name: Upload the simulator
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ddl0-sim-windows
           path: simulator/dist/
@@ -65,7 +65,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ddl0-sim-windows
           path: dist
@@ -75,3 +75,71 @@ jobs:
         run: |
           .\ddl0-sim-tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # Packs the build into the release zips on every run, so packaging is tested
+  # on each PR rather than first tried on main. Needs every check above, so a
+  # failing build or test never gets packaged.
+  package:
+    name: Package (release preview)
+    needs: [firmware, build, unit-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ddl0-sim-windows
+          path: simulator/dist
+      - name: Package the simulator and firmware
+        run: bash simulator/release/package.sh windows "dev-${GITHUB_SHA::7}" release-out
+      - name: Upload the release preview
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ddl0-release-preview
+          path: |
+            release-out/*.zip
+            release-out/SHA256SUMS
+          retention-days: 14
+
+  # Every push to main (only reviewed merges move it) becomes a release. The
+  # tag is chosen here, inside the concurrency group, so two quick merges
+  # can't pick the same one.
+  release:
+    name: GitHub release
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ddl0-sim-windows
+          path: simulator/dist
+      - name: Choose the tag (vYYYY.MM.DD, then .2, .3 the same day)
+        run: |
+          base="v$(date -u +%Y.%m.%d)"
+          taken=$(git ls-remote --tags --refs origin "refs/tags/$base*" | sed 's|.*refs/tags/||')
+          tag=$base n=1
+          while grep -qxF "$tag" <<<"$taken"; do n=$((n + 1)); tag="$base.$n"; done
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "Releasing $tag"
+      - name: Package the simulator and firmware
+        run: bash simulator/release/package.sh windows "$TAG" release-out
+      - name: Write the release notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release_notes.py --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sums release-out/SHA256SUMS > notes.md
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "DD-L0-LA59 $TAG" \
+            --notes-file notes.md release-out/*.zip release-out/SHA256SUMS
