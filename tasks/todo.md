@@ -1,3 +1,25 @@
+# Project wiki — #95
+
+Branch `docs/wiki` off `Documentation`. Decisions (owner): pages live in `wiki/`, reviewed by PR and published to the GitHub wiki by a workflow; I capture the simulator screenshots, the owner adds hardware photos.
+
+- [x] Issue #95 read; wiki enabled but no wiki repo yet (needs one page saved on github.com first)
+- [x] `.github/workflows/wiki-sync.yml`: on `wiki/**` changes to `main` (and by hand), rsync `wiki/` into `<repo>.wiki.git` with `GITHUB_TOKEN`; checkout pinned by SHA
+- [x] 34 pages + `_Sidebar.md` / `_Footer.md`: Start here, Using the simulator, Building the robot, Changing behaviour, Adding hardware, For developers, Reference
+- [x] Every how-to: You'll need / Time, numbered steps, "It should look like this", "Something went wrong?", "More detail (for tinkerers)"
+- [x] Facts checked against the code (settings, behaviours, sounds, channel map, build switches, UI labels)
+- [x] 25 screenshots/GIFs from the running simulator (its own Screenshot/Record, or crops inside the window), local paths painted out
+- [x] README: wiki link; fixed the random-sound row (`main()` plays one once, after boot) and dropped the stale Lola-crash limit (fixed in PR #101)
+- [x] Checks: every page link resolves, every image exists and has alt text, every `settings.toml` key is in Settings-Reference, every page is in the sidebar, quoted UI labels exist in `simulator/src`
+- [ ] Owner: 7 placeholder images (`wiki/images/TODO-*.png`: parts, wiring, CIRCUITPY drive, Deploy dialog, serial console, traceback); confirm Wiring steps 7 and 9 (white LED connector/resistor, servo power)
+- [ ] Owner: after merge to `main`, save one page at github.com/…/wiki, then run the *Wiki* workflow
+- [ ] Readability test with a non-technical reader and a teen
+- [ ] Commit, push, PR into `Documentation`
+
+### Review
+- Docker Desktop wouldn't start ("unable to start"), so the simulator wasn't rebuilt; the exe in `dist\` was built from the same source minutes before the last commit. Images were cropped and GIFs made with .NET System.Drawing / WPF instead of Pillow in Docker; nothing was installed.
+- Working screenshots used to find buttons showed the whole desktop; the owner flagged it. None of those are in `wiki/`; every wiki image was checked to show only the app window (lesson added).
+- The attention animation can't be interrupted (only the trench run aborts on `ANIMATION_NUDGE_Z_MG`); the wiki says so, the setting's comment in `settings.toml` is broader than the code.
+
 # Simulator: choose the firmware folder — #105
 
 Branch `feature/firmware-folder-picker` off `Documentation`. Decisions: native dialog via `rfd`; remember the choice, changeable any time; simulator files found from the exe; folder must hold `code.py`.

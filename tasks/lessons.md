@@ -19,3 +19,7 @@
 ## Simulator UI (PR 5 of #80, Oct 2026)
 
 - **Overlay pointers were off and I hadn't noticed (the user did).** Two causes: an engine call's coordinate space assumed rather than read (`world_to_viewport` already includes the viewport offset), and anchors taken from node origins (a wing's hinge) instead of what is drawn. Rule: check a projection against a point with a known screen position (the camera's look-at point is the view's centre) before trusting it, and anchor labels on the visible geometry, then zoom into the capture to confirm each pointer touches its part.
+
+## Wiki screenshots (#95, Nov 2026)
+
+- **Never show the user's desktop.** The working screenshots I took to find buttons showed the whole desktop (file names, other apps), and the user flagged it for privacy and security. Rule: any image for docs comes only from the simulator's own *Screenshot*/*Record* (window only), or a close-up cropped strictly inside the app window's edges. Check every image before it goes into `wiki/`. Clear the log or paint over it when it shows local paths (`C:\Users\…`).

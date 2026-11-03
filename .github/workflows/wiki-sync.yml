@@ -1,0 +1,49 @@
+name: Wiki
+
+# The wiki is written in wiki/ so it is reviewed by PR like any other change.
+# This copies it to the GitHub wiki. Only main publishes, so the wiki describes
+# what is released, not work in progress.
+on:
+  push:
+    branches: [main]
+    paths: ['wiki/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Publish wiki/ to the wiki
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Copy wiki/ to the wiki repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The wiki repo only exists after its first page is saved on github.com.
+          if ! git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" wiki-repo; then
+            echo "::error::No wiki repo yet. Create any page once at https://github.com/${REPO}/wiki, then re-run this workflow."
+            exit 1
+          fi
+          rsync -a --delete --exclude '.git' wiki/ wiki-repo/
+          cd wiki-repo
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "Sync from ${REPO}@${SHA}"
+          git push
