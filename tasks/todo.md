@@ -8,12 +8,18 @@ Branch `feature/release-on-main` off `Documentation`, Windows asset only (Linux/
 - [x] Local run in `ddl0-sim-dev` from a clean clone: zips have the right layout, planted prefs/captures/shims and a local `log.txt` left out, `sha256sum -c` OK, unknown platform rejected
 - [x] Notes on a simulated `Documentation → main` merge onto `v1.0.0`: 50 PRs in Features/Fixes/Docs/Other, integration PR skipped, nothing from before `v1.0.0`; no-token fallback works
 - [x] README: Download the simulator, Releasing, Tests and CI updated
-- [ ] Branch CI green, `ddl0-release-preview` checked, `release` skipped
-- [ ] Failure gate: a failing upstream job stops `package`
-- [ ] PR into `Documentation`
+- [x] Branch CI green, `ddl0-release-preview` checked (104 files, layout OK, no tests exe or user data, `sha256sum -c` OK), `release` skipped
+- [x] Failure gate: with the firmware job failing on purpose, `package` and `release` were skipped (run 41581821891); temporary commit reverted
+- [x] PR #108 into `Documentation`
 - [ ] After merge to `main` (owner): first release created; zip runs on a clean Windows PC
 
 ### Review
+- PR data comes from one GraphQL call via `urllib` rather than `gh pr view` per PR: same fields, one request, and it runs in the dev image where `gh` isn't installed.
+- The tag is chosen in `release` (inside `concurrency: release`), not `package`, so two quick merges can't pick the same one; `package` names its preview `dev-<sha>`.
+- `v1.0.0` isn't in `Documentation`'s history, only `main`'s, so notes were checked on a simulated merge onto `v1.0.0`.
+- Sounds are gitignored, so no asset has `sounds/` (README says so).
+- `package.sh` needs a real git checkout: inside Docker, a worktree's `.git` file points at a Windows path.
+- #107 (Linux) also edits `simulator.yml`; whichever merges second rebases (note left for that session).
 
 # Simulator: choose the firmware folder — #105
 
