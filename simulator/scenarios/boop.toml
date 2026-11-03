@@ -1,0 +1,17 @@
+# One nudge boops the nose; one nudge is not enough to get angry.
+description = "A nudge after boot boops (noseBoops.wav), without getting angry"
+start = "Boot sequence complete!"
+
+[[step]]
+t = 5.0
+action = "nudge"
+
+[[expect]]
+sound = "noseBoops.wav"
+after = 5.0
+by = 8.0
+
+[[expect]]
+sound = "angry.wav"
+by = 15.0
+never = true

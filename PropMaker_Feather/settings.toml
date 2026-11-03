@@ -1,0 +1,73 @@
+# DD-L0-LA59 tunables, read at boot by config.py. Edit, save, and the board restarts.
+# CircuitPython only reads whole numbers and "quoted strings" here, so each
+# name carries its unit: _S seconds, _MG milli-g (1000 = 1 g).
+# A missing line falls back to the value in config.py.
+# This file is committed to git: never put Wi-Fi passwords or other secrets in it.
+
+# ---------------------------------------------------------------------------
+# TIMING
+# Every setting ending in _S is a number of seconds, as a whole number only
+# (write 90, not 1.5 minutes or 90.5). Handy conversions:
+#   60 = 1 minute    300 = 5 minutes    900 = 15 minutes
+#   1800 = 30 minutes    3600 = 1 hour    7200 = 2 hours
+# A value that isn't a whole number is ignored, and the default is used.
+# ---------------------------------------------------------------------------
+
+# IDLE: how long the droid waits, left alone, before it tries to get attention.
+# Each time, it picks a random wait somewhere between MIN and MAX, so it never
+# feels predictable. Any boop or nudge restarts the wait from zero.
+# Default: between 15 minutes (900) and 2 hours (7200).
+# For testing, try 60 and 120 to see it within 1-2 minutes.
+# MIN must be smaller than or equal to MAX.
+IDLE_MIN_S = 900
+IDLE_MAX_S = 7200
+
+# TRENCH RUN: when the wait above ends, the droid either flaps for attention or
+# does a "trench run" flight (a 50/50 coin flip). This is how long the trench
+# run lasts, unless someone nudges the droid to stop it early.
+# Default: 2.5 minutes (150), long enough to show every move many times over.
+TRENCH_RUN_S = 150
+
+# ANGRY: the droid gets angry if it's nudged ANGRY_NUDGES times within a short
+# stretch of time (a "window"). The length of each window is picked at random
+# between MIN and MAX. When a window runs out, the nudge count starts again
+# from zero, and a new window begins.
+# Default: 3 nudges within a window of 1 minute (60) to 3 minutes (180).
+# A shorter window or more nudges makes it harder to annoy.
+# MIN must be smaller than or equal to MAX.
+ANGRY_MIN_WINDOW_S = 60
+ANGRY_MAX_WINDOW_S = 180
+# Number of nudges (not seconds) needed to make it angry.
+ANGRY_NUDGES = 3
+
+# Motion: z moving more than NUDGE_Z from where it rests, either way, is a nudge;
+# a z reading above HARD is a shake. Attention and the trench run shake the board
+# themselves, so while they run z must move more than ANIMATION_NUDGE_Z (the log
+# prints each one's peak change to help tune it).
+NUDGE_Z_MG = 250
+ANIMATION_NUDGE_Z_MG = 800
+HARD_MOTION_MG = 2500
+
+# BREATHING: while idle, the wings slowly rise and fall like breathing.
+# BREATH_PERIOD_S is how many seconds one full breath takes (wings up and back
+# down again). A bigger number means slower, calmer breathing.
+# Default: 4 seconds.
+BREATH_PERIOD_S = 4
+# Wing positions for breathing, in degrees (not seconds).
+# Right-wing (servo 0) angles: a lower number lifts the wing higher.
+BREATH_ANGLE_MIN = 50
+BREATH_ANGLE_MAX = 65
+
+# Left-wing (servo 1) calibration: it's mounted inverted. Adjust until both
+# wings close equally. Boot and attention use SERVO2_*, breathing BREATH_SERVO2_*.
+SERVO2_MIN = 40
+SERVO2_MAX = 60
+BREATH_SERVO2_MIN = 35
+BREATH_SERVO2_MAX = 50
+
+# Eye brightness range for breathing and boops (0-360).
+EYE_MIN_BRIGHTNESS = 70
+EYE_MAX_BRIGHTNESS = 360
+
+# White LED glow between effects (0-65535).
+WHITE_LED_IDLE_DUTY = 500

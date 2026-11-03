@@ -1,10 +1,12 @@
 # DD-L0-LA59 Animatronics Firmware
 
+📖 **New here? The [project wiki](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/wiki) has step-by-step guides with pictures** for trying the simulator, building the robot and changing how it behaves, for every skill level. This README is the developer reference.
+
 ## Overview
 This project implements interactive animatronic behaviors for a custom device using Adafruit hardware and CircuitPython 9.x. The system features servo-driven wings, RGB LED eyes, sound playback, and motion sensing, all orchestrated with asynchronous code for lifelike, responsive actions.
 
 ## Features
-- **Servo Animation**: Smooth, natural wing movements for idle, attention, and angry states.
+- **Servo Animation**: Smooth, natural wing movements for idle, attention, trench-run and angry states.
 - **LED Effects**: RGB LEDs (main and small "eyes") display color patterns synchronized with animations.
 - **Audio Playback**: WAV sound effects triggered by events and behaviors.
 - **Motion Sensing**: LIS3DH accelerometer detects movement to trigger responses.
@@ -15,11 +17,16 @@ This project implements interactive animatronic behaviors for a custom device us
 ## Hardware Requirements
 - Adafruit PropMaker Feather (with I2C, PWM, and I2S support, accelerometer, audio amplifier) - [https://www.adafruit.com/product/5768](https://www.adafruit.com/product/5768)
 - 8-Channel PWM or Servo FeatherWing Add-on For All Feather Boards (for servos and LEDs) - [https://www.adafruit.com/product/2928](https://www.adafruit.com/product/2928)
-- Servos (x2, for wing movement)
+- FEETECH FS90 9 g micro servos, 180°, 1.5 kg·cm (x2, for wing movement)
 - RGB LEDs (main and small "eyes"))
 
 ## File Structure
-- `PropMaker_Feather/code.py` — Main firmware controlling all hardware and behaviors
+- `PropMaker_Feather/code.py` — Entry point: runs the boot sequence, then starts every behaviour as an `asyncio` task
+- `PropMaker_Feather/hardware.py` — Board setup: accelerometer, PCA9685 channel map, LEDs, audio, shared events
+- `PropMaker_Feather/config.py` — Reads the tunables from `settings.toml`, with built-in defaults
+- `PropMaker_Feather/settings.toml` — Tunables (see [Tuning](#tuning))
+- `PropMaker_Feather/log.py`, `boot.py`, `log_off.py` — Serial output, optionally saved to `log.txt` (see [Logging on the robot](#logging-on-the-robot))
+- `PropMaker_Feather/behaviours/` — One module per behaviour: `boot`, `breathing`, `motion` (boops and angry), `attention`, `trench_run`, `leds`
 - `PropMaker_Feather/sounds/` — WAV files for sound effects
 - `PropMaker_Feather/lib/` — CircuitPython libraries (Adafruit drivers, etc.)
 
@@ -27,18 +34,52 @@ This project implements interactive animatronic behaviors for a custom device us
 - **Boot Sequence**: Smooth startup animation for wings and eyes, with LED and audio effects.
 - **Ambient Breathing**: Wings and LEDs move in a breathing pattern.
 - **Motion Response**: Device reacts to motion with "boop" or "angry" animations and sounds.
-- **Idle Attention**: After a random idle period, device performs an attention-seeking animation.
+- **Idle Attention**: After a random idle period, device performs an attention-seeking animation, or (equal chance) a trench run.
+- **Trench Run**: A 2½-minute Top Gun: Maverick-style flight. Tight turns split the wings (one up, one down), steep climbs lift both, steep dives drop both, and the wings buffet under load. Eyes glow orange like an afterburner, brighter on climbs; the white LED flickers. A nudge or shake cuts it short.
 - **Random LED Effects**: White LED flashes at random intervals to simulate data processing.
 
 ## Setup & Usage
-1. Copy all files to your CIRCUITPY drive, preserving the folder structure.
+1. Copy the contents of `PropMaker_Feather/` (`code.py`, `boot.py`, `config.py`, `hardware.py`, `log.py`, `log_off.py`, `settings.toml`, `behaviours/`, `lib/`, `sounds/`) to the root of your CIRCUITPY drive, preserving the folder structure. After the first time, the simulator's **Deploy to CIRCUITPY** button copies everything except `lib/` for you, only the files that changed (see [Using it](#using-it)).
 2. Ensure all required libraries are present in `PropMaker_Feather/lib/`.
 3. Place WAV files in `PropMaker_Feather/sounds/` and name them correctly.
 4. Power the device. The firmware will run automatically.
 
+### Logging on the robot
+The wings can't run while the board is plugged into a computer, so the serial output can be saved to a file instead and read afterwards.
+
+1. **Turn on:** with the board plugged in, create an empty file named `log_mode` (no extension) in the root of CIRCUITPY, then press the board's reset button. A soft reload (Ctrl-D) isn't enough, because `boot.py` only runs on a reset or power-on.
+2. **Run** the robot on battery. Every serial line is appended to `log.txt`, starting with the seconds since power-on. Each run starts with `=== DD-L0-LA59 starting ===`. At 256 KB the log moves to `log.old.txt` and starts again, so only the latest ~512 KB is kept.
+3. **Read:** plug back in and copy `log.txt` off. While logging mode is on, the drive is **read-only to the computer**, so you can copy files off but not edit or add any.
+4. **Turn off:** open the serial console, press Ctrl-C, then type `import log_off` and press Enter. This deletes `log_mode` and restarts the board, and the drive is editable again.
+
+Each line is written straight to flash, so a pulled battery loses at most the line being written. A write can take a few milliseconds, so the wings may pause very briefly when a line is logged.
+
+To check logging before deploying, tick *log_mode* in the simulator and restart; `log.txt` shows in its own tab (see [The simulated drive](#matching-the-real-board)).
+
 ## Customization
 - Add or replace WAV files in the `sounds/` directory for new sound effects.
-- Adjust servo and LED parameters in `code.py` for different movement or color effects.
+- Tune timings, thresholds and calibration in `settings.toml` (below). No code change needed.
+- Change how a behaviour moves or lights up in its module under `behaviours/`.
+
+### Tuning
+
+`settings.toml` is read at boot. Edit it on the CIRCUITPY drive, save, and the board restarts with the new values. CircuitPython only reads whole numbers and quoted strings from it, so each name carries its unit: `_S` seconds, `_MG` milli-g (1000 = 1 g). A missing line falls back to the default in `config.py`. A value that isn't a whole number prints a warning on the serial console and uses the default. The file is committed to git, so never put Wi-Fi passwords or other secrets in it.
+
+| Key | Default | What it does |
+|---|---|---|
+| `IDLE_MIN_S`, `IDLE_MAX_S` | 900, 7200 | Quiet spell (random, between these) before seeking attention |
+| `TRENCH_RUN_S` | 150 | Length of the trench run |
+| `ANGRY_MIN_WINDOW_S`, `ANGRY_MAX_WINDOW_S` | 60, 180 | Length of the random window in which nudges are counted |
+| `ANGRY_NUDGES` | 3 | Nudges inside one window that make the droid angry |
+| `NUDGE_Z_MG` | 250 | A change in z this big from where it rests, up or down, is a nudge. The resting z is measured at start-up and after each animation, so this works however the board is mounted or the droid sits |
+| `ANIMATION_NUDGE_Z_MG` | 800 | The change in z needed to interrupt the attention animation or trench run, whose wing movement shakes the board. The serial log prints `Animation peak z change` after each one, to help tune it |
+| `HARD_MOTION_MG` | 2500 | A z reading above this is a shake (straight to angry) |
+| `BREATH_PERIOD_S` | 4 | Breathing period |
+| `BREATH_ANGLE_MIN`, `BREATH_ANGLE_MAX` | 50, 65 | Right-wing angle range while breathing |
+| `SERVO2_MIN`, `SERVO2_MAX` | 40, 60 | Left-wing calibration (mounted inverted) for boot and attention |
+| `BREATH_SERVO2_MIN`, `BREATH_SERVO2_MAX` | 35, 50 | Left-wing calibration while breathing |
+| `EYE_MIN_BRIGHTNESS`, `EYE_MAX_BRIGHTNESS` | 70, 360 | Eye brightness range for breathing and boops (0–360) |
+| `WHITE_LED_IDLE_DUTY` | 500 | White LED glow between effects (0–65535) |
 
 ## Sound Files and Their Functions
 
@@ -47,13 +88,438 @@ This project implements interactive animatronic behaviors for a custom device us
 | angry.wav        | angry_animation()        | Angry response to repeated/strong motion  |
 | noseBoops.wav    | nose_boops()             | Gentle/loving response to motion          |
 | youWho.wav       | attention_animation()    | Attention-seeking after idle period       |
-| 001.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 003.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 005.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 007.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 008.wav          | play_Wav_task (random)   | General/random sound effect               |
+| trenchRun.wav    | trench_run()             | Trench run after idle period (a short clip, looped for the whole run) |
+| 001.wav          | main() (random)          | General/random sound effect               |
+| 003.wav          | main() (random)          | General/random sound effect               |
+| 005.wav          | main() (random)          | General/random sound effect               |
+| 007.wav          | main() (random)          | General/random sound effect               |
+| 008.wav          | main() (random)          | General/random sound effect               |
+
+After the boot sequence, `main()` in `code.py` plays one WAV picked at random from every file in `sounds/` (the named ones above included), once.
 
 Place these files in `PropMaker_Feather/sounds/` with the exact names above. You can add or replace WAV files for custom effects, but ensure the filenames match those referenced in the code or update the code accordingly.
 
+## Simulator
+
+`simulator/` is a desktop app for Windows, Linux (x86_64) and macOS (Apple Silicon) that runs `PropMaker_Feather/code.py` (with its modules and `settings.toml`) **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
+
+### Download the simulator
+
+Every update to `main` is published as a release, with the simulator ready to run on Windows, Linux and macOS: no Docker, Rust or Python needed. Each download also holds the firmware (`PropMaker_Feather/`), which the simulator finds on its own. To check a download, compare its SHA-256 with the one in the release notes or `SHA256SUMS`.
+
+**Windows** (x86_64)
+
+1. Download `ddl0-sim-windows-<version>.zip` from the [latest release](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/releases/latest).
+2. Unzip it anywhere and run `simulator\dist\ddl0-sim.exe` inside it.
+
+The exe isn't code-signed, so Windows SmartScreen may warn the first time: choose *More info* → *Run anyway*. To check the download:
+
+```powershell
+Get-FileHash .\ddl0-sim-windows-<version>.zip -Algorithm SHA256
+```
+
+**Linux** (x86_64; needs the libraries listed under [On Linux](#on-linux))
+
+1. Download `ddl0-sim-linux-<version>.tar.gz` from the latest release.
+2. Unpack it and run the simulator:
+
+```bash
+tar -xzf ddl0-sim-linux-<version>.tar.gz
+```
+
+```bash
+./ddl0-sim-linux-<version>/simulator/dist/ddl0-sim
+```
+
+To check the download: `sha256sum ddl0-sim-linux-<version>.tar.gz`.
+
+**macOS** (Apple Silicon, macOS 11 or later; Intel Macs aren't supported)
+
+1. Download `ddl0-sim-macos-arm64-<version>.tar.gz` from the latest release.
+2. Unpack it (double-click it in Finder, or `tar -xzf` in Terminal) and run `simulator/dist/ddl0-sim` inside it.
+
+The app isn't signed or notarised by Apple, so Gatekeeper blocks it the first time ("can't be opened" or "is damaged"). Either right-click `ddl0-sim` in Finder, choose *Open*, then *Open* again (on macOS 15 and later: try to open it once, then *System Settings* → *Privacy & Security* → *Open Anyway*), or clear the download's quarantine flag on the whole unpacked folder:
+
+```bash
+xattr -dr com.apple.quarantine ddl0-sim-macos-arm64-<version>
+```
+
+To check the download: `shasum -a 256 ddl0-sim-macos-arm64-<version>.tar.gz`.
+
+### Build and run
+
+Needs Docker Desktop only; nothing is installed on the host.
+
+```powershell
+.\simulator\build.ps1 -Run
+```
+
+The first build takes a while. Output goes to `simulator\dist\`, a self-contained folder with the bundled Python. Run `simulator\dist\ddl0-sim.exe` directly after that. It runs the first firmware it finds, in this order: a `code.py` path given as its first argument; the folder last chosen with *🗁 Firmware* (if it still has `code.py`); `PropMaker_Feather\code.py` in a folder above the exe. If none is found it asks for the folder rather than exiting. The simulator's own files (3D assets, `sim.toml`, `parts.toml`, scenarios) always come from the `simulator\` folder above the exe, so the firmware can live anywhere, such as a copy, another checkout or the CIRCUITPY drive.
+
+#### On Linux
+
+Needs Docker only (your user must be allowed to run it); the build happens in the same image.
+
+```bash
+./simulator/build.sh --run
+```
+
+`--debug` builds the debug profile, `--test` also runs the Rust unit tests and `--rebuild-image` rebuilds the dev image. Output goes to `simulator/dist/`: the `ddl0-sim` binary and a bundled CPython in `dist/python/`, so no Python is needed on the host. After that, run `simulator/dist/ddl0-sim` directly; it finds firmware the same way as on Windows.
+
+The machine running it needs:
+
+- a Vulkan driver: Mesa (`mesa-vulkan-drivers` on Debian and Ubuntu) or your GPU vendor's driver;
+- an X11 or Wayland desktop, with `libwayland-client` (needed even on X11), `libxkbcommon` and ALSA (`libasound2`), which desktop installs already have;
+- an XDG desktop portal (`xdg-desktop-portal` plus your desktop's backend) for the *🗁 Firmware* folder dialog.
+
+A `ddl0-sim-linux` build is attached to every CI run. GitHub's download is a zip, which drops the execute bit: run `chmod +x ddl0-sim` in the unzipped folder first, and put the folder at `simulator/dist/` in a checkout (it loads `simulator/assets`, `sim.toml` and the scenarios from the folder above it).
+
+Known limits on Linux: a panel torn off into its own window opens at the default position rather than under the pointer, and *Follow system* reads GNOME's settings (dark style, high contrast, animations, text scaling factor) through `gsettings`; on other desktops the app's defaults apply.
+
+#### On macOS
+
+Apple Silicon only (Intel Macs aren't supported). macOS has no Docker step: the build runs natively. It needs [rustup](https://rustup.rs) and Xcode's command line tools (`xcode-select --install`, for the linker and `codesign`); the script installs neither, and tells you what's missing. Then install the Rust version the project uses:
+
+```bash
+rustup toolchain install 1.92.0 --profile minimal -c rustfmt,clippy
+```
+
+```bash
+./simulator/build.sh --run
+```
+
+The script downloads the CPython it bundles (python-build-standalone 3.13.5, SHA-256 checked) into `simulator/.python-macos/` once. `--debug` and `--test` work as on Linux. Output goes to `simulator/dist/`: the `ddl0-sim` binary, which loads Python from `dist/python/` beside it, signed ad hoc (Apple Silicon won't run an unsigned binary). A binary you build yourself isn't quarantined, so Gatekeeper doesn't ask.
+
+A `ddl0-sim-macos-arm64` build is attached to every CI run. Like the Linux one it's a zip without the execute bit: run `chmod +x ddl0-sim` and `xattr -dr com.apple.quarantine .` in the unzipped folder, and put the folder at `simulator/dist/` in a checkout.
+
+Known limits on macOS: a panel torn off into its own window opens at the default position rather than under the pointer. *Follow system* reads dark mode, *Increase contrast* and *Reduce motion* through `defaults`; macOS has no system text size for apps, so the scale starts at 100%.
+
+### Using it
+
+- **Toolbar**: one row of groups: **Run** (Run/Restart, Stop, Pause, +10 ms, +100 ms, Skip, Trigger idle), **Speed** and **Options** (CircuitPython strict, Board speed, Servo speed limit, log_mode, Restart when firmware is saved, Model). On the right, *🗁 Firmware* chooses the firmware folder (the one with `code.py`; its tooltip shows the current one), *⬆ Deploy* copies the firmware to the board (see below), *⚙ View* holds the panel list, focus mode, layouts, theme and UI scale, and *⌨ Shortcuts* shows the key list. When the window is too narrow for every group, groups fold into a drop-down button with the same controls, Options first, then Speed. The camera views, Light, Screenshot and Record are in the 3D view's own toolbar (below). If even that is too wide, the folded groups that don't fit share one *More* menu and *View* and *Shortcuts* shrink to their icons. Run always stays visible. Every control keeps its tooltip and key.
+- **Status bar** (bottom edge): first, the **status line**: the latest event in words, such as *Boop 1.0 g. Sound: noseBoops*, *Now angry animation*, *Restarted*, *Paused*, a traceback or a deploy result. Screen readers such as Narrator read each new message aloud without moving focus (it is a polite live region). Events that come together are joined into one message, and a new message comes at most every 1.5 s; errors are never dropped. Then the run state (*stopped*, *running*, *paused* or *skipping*, plus the scenario if one is playing), sim time, speed, the current behaviour, the heap estimate and frames per second. The values come from the same sources as the panels: speed matches the slider and the heap matches the Board panel's bar, in the same colours (amber from 80% of the budget, red over it). The behaviour is the one a behaviour button started, otherwise the function a task is running (the second step of the longest chain in the State panel, e.g. `nose_boops` or `attention_animation`, ignoring the LED scheduler), otherwise *breathing*.
+- **Notifications**: a short card in the bottom-right corner for *Screenshot saved*, *Firmware reloaded* (or *Shims reloaded*, when *Restart when firmware is saved* restarts the run) and each new traceback, as well as the usual log line. Cards fade after a few seconds (a traceback after 8 s) and stay while hovered. Click one to dismiss it; clicking a traceback card also shows it in the log: it switches to the *Log* tab, clears a search or *Firmware* filter that would hide it, then scrolls to the traceback and briefly highlights it.
+- **Panels**: the 3D view, Motion, Behaviours, Scenarios, State, PCA9685, Board, Parts, Audio, Plot, Settings, Log and Shortcuts are each a tab you can arrange (Parts places extra hardware on the droid: see [Placing parts with the mouse](#placing-parts-with-the-mouse)):
+  - **Dock**: drag a tab by its title onto another panel's edge to split it, or onto its middle to tab them together. Drag the dividers to resize.
+  - **Float**: drag a tab out over the window, or right-click it and pick *Float*, to keep it as a small window inside the simulator.
+  - **Detach**: drag a tab out past the edge of the main window and let go, or right-click it and pick *Detach to window*, to give it its own window, e.g. the log on a second monitor. A floating panel stops at the window edge, but its tab can be dragged further. The new window opens under the pointer, moved just enough to fit on that monitor. Close that window, or click its *Dock back* button, and the panel goes back into the main window, in the panel you last clicked in (never as a tab over the 3D view). Each detached window has its own UI scale (*−* / *%* / *+* in its top bar, or Ctrl+= / Ctrl+- / Ctrl+0 while it has focus).
+  - **Hide and show**: the *×* on a tab hides that panel; *⚙ View* lists every panel with a tick, so a hidden one is easy to bring back. The 3D view is always there.
+  - **Focus mode** (F11, or *⚙ View > Focus mode*): shows only the panel you last clicked in (or the 3D view) across the whole window; F11 again brings the layout back.
+  - Clicks and camera drags only reach the droid inside the 3D view, so a floating panel over it can't boop it by accident.
+- **Layouts** (*⚙ View > Layouts*): *Default*, *Debug* (log and plot large, 3D view small) and *Demo* (the 3D view on its own). *Save current as* stores the current arrangement under a name, listed with the built-ins (*×* deletes it). *Export* writes it to `simulator\dist\layouts\<name>.layout.toml`, so it can be shared or kept with the repo; files in that folder are listed under *Import from layouts\* to load. A layout file that can't be read gives a warning card and the layout stays as it was. *Reset layout* goes back to *Default*. A saved window that would open off-screen (an unplugged monitor, a changed resolution) is moved back onto the main monitor, and one bigger than the monitor is shrunk to fit.
+- **Motion**: *Nudge* gives one accelerometer reading 0.3 g past the held value, in the direction picked in *Direction* (+X, −X, +Y, −Y, +Z, −Z; default +Z). From rest that is 1.3 g on z, which is a boop. **Clicking the droid** also boops: the reading is pushed along the surface you clicked (top of the head = +Z, a side = ±X/±Y, using the full angle), and the longer you hold the mouse button the harder it is, from 0.3 g for a tap (0.1 s or less) up to 2 g at 1 s or more. From rest on top, a tap crosses the nudge threshold, about half a second crosses the animation threshold, and a full second counts as hard motion. The log shows e.g. `[sim] boop 0.9 g from +Z`. A drag to orbit the camera isn't a boop. To boop from the keyboard, set *boop strength (g)* (0.3–2 g, default 1 g) and *Direction*, then press *Boop* or **B** (also in the command palette); it logs the same `[sim] boop … g from …` line. Three nudges inside the angry window cause an angry flap. *Hard shake* gives one reading 2 g past the held value, which from rest is 3 g and goes straight to angry. A nudge is too gentle to interrupt the attention animation or trench run; use *Hard shake*. The three *held* sliders set the x, y and z reading the sensor returns between nudges; *Rest* puts them back to [0, 0, 1] g. *Tipped over* holds [0, 0, -1] g, which counts as one nudge. The firmware reads only z, so ±X and ±Y nudges are ignored, as on the robot. A −Z shake from rest reads -1 g, so it only counts as a nudge.
+- **State** (panel): at the top, **Droid status** lists what the droid is showing as text: both wing angles, the main and small eye colours (as a percentage of peak per channel), the white LED duty and each part's value. Each row is a Tab stop, so a screen reader reads it on the way through. Below that, why a behaviour did or didn't fire. Each `asyncio.Event` in `hardware.py` (green = set), the nudges counted so far against `ANGRY_NUDGES` with the time left in the current angry window, the time left until the idle trigger (or *not waiting* while its animation runs), and every running task with what it's awaiting, e.g. `motion_sense » nose_boops » sine_flaps » sleep`. Under each task are all the number variables in its firmware functions at that moment, listed in two columns (name, value), e.g. `motion_count` 1, `rest_z` 1.00, `nose_boops.boops` 2, `sine_flaps.angle` 38.91 (variables of a function the task called are prefixed with its name; a variable appears once it has been assigned). The values are read live (10 times a second) from the firmware's running coroutines, so the firmware needs no changes. The angry window only restarts when `motion_sense` next checks it, so its bar can sit at 0 s for a moment.
+  - **Shows up on its own:** a new `asyncio.Event` in `hardware.py`; a new behaviour started as a task; a new function a running task calls (it appears in that task's chain); a new counter or timer variable (int or float) in a behaviour, as a raw value under its task.
+  - **Needs a simulator change:** events declared outside `hardware.py`, and a countdown bar for a new timer. The two bars read the nudge count (`motion_count`, `angry_window_start`, `angry_window_length` in `motion_sense`) and the idle wait (`idle_attention`'s `wait_for`) by name. Renaming any of those blanks its bar instead of crashing (the raw values still show under the task); update `_State` in `simulator/shims/sim_runtime.py` to match.
+- **Speed**: fast-forward up to 200x with the slider, or click *1x*, *10x* or *100x* to jump straight to that speed. *Skip* (skip to next event) runs the clock at 1000x until a behaviour starts, then drops back to 1x. A behaviour has started when a sound plays or an event in `hardware.py` changes (e.g. `pause_breathing`). Breathing and the white-LED flashes don't stop it, so one click gets you through the idle wait to the attention animation or trench run. The log names what stopped it. Click *Stop skip* to end it early. *Trigger idle* ends the 15-120 min idle wait so the attention animation or the trench run plays (50/50).
+- **Behaviours** (panel): one button per behaviour, to run it straight away without reproducing its trigger. A button runs the firmware's own function once, with breathing paused (`pause_breathing`) until it finishes. The other buttons are greyed out until then. The list is built from the firmware each run, so a new behaviour gets a button with no simulator change. To get one, it must be an `async def` in a `behaviours/` module that can be called with no arguments. Functions `code.py` already runs with `asyncio.create_task(...)` (breathing, motion sensing, idle attention, the LED scheduler) and names starting with `_` are left out. A trench run started this way doesn't hold off the white-LED scheduler the way one started from idle does.
+- **Scenarios** (panel): pick one of `simulator/scenarios/*.toml` and click *Run scenario*. It restarts `code.py`, plays the scenario's inputs at set times and checks what the droid does. The badge shows *running*, then *PASS* or *FAIL* with a count; hover it for each check. Each result is also logged as a `[sim] scenario ...` line. See [Scenarios](#scenarios).
+- **Edit and save any firmware file** (`code.py`, a module under `PropMaker_Feather/`, or `settings.toml`) and the simulator restarts with the change. Errors show as a traceback in the log. **Click a traceback line** (shown in blue) to open that file at that line in your editor. The command is `[editor] command` in `simulator/sim.toml`, `code -g {file}:{line}` (VS Code) by default; `{file}` and `{line}` are filled in and it runs directly, never through a shell. Set it to `""`, or if the command can't start, the file is shown in your file manager instead. Only files inside `PropMaker_Feather/` open this way.
+- **Edit and save `simulator/sim.toml`** (wing mapping, eye channels, `[board]` timing) and it applies live, without restarting `code.py`; the log shows `[sim] sim.toml reloaded`. An invalid file logs a warning and keeps the previous config. `[model] kind` only applies at start-up; use **Model** in the toolbar to switch live.
+- **`settings.toml`** is read the way CircuitPython 9 reads it: `os.getenv()` sees only the whole numbers and quoted strings in that file, never your PC's environment variables.
+- **CircuitPython strict** (on by default) holds `code.py` and its modules to what the board has. Imports outside CircuitPython 9 and `lib/` fail, as do APIs CircuitPython lacks (`random.choices`, `os.path`, `asyncio.TaskGroup`...). `time.monotonic()` gets the board's reduced float precision, so long-uptime timer drift shows when you fast-forward. Untick it to run with full desktop Python; the change applies on the next restart.
+- **Pause** (toolbar) freezes `code.py`'s clock; *Resume* carries on from the same moment. Restarting also unpauses. Sounds already playing finish. While paused, *+10 ms* and *+100 ms* run the clock for that long and stop again. Every animation frame inside the step plays, at the current speed, so you can walk through a fast angry flap or the trench-run buffeting.
+- **Keyboard shortcuts**: Space pause/resume, . step 100 ms, F skip to next event, N nudge, S hard shake, B boop, R restart, I trigger idle; for parts, Ctrl+Z / Ctrl+Y undo / redo, Del delete the selected one, Ctrl+S save. They're ignored while you type in a text field (the log's search box, Settings), and each button's tooltip shows its key. F11 toggles focus mode. **Shortcuts** in the toolbar, `?` or F1 shows the Shortcuts panel (floating at first; dock it like any other) listing every key and mouse control (camera, plot, clicking the droid); the same key, Esc or its *×* hides it. The panel and the key handling read one table in `ui.rs`, so the list can't go stale.
+- **Command palette** (Ctrl+K, or *⚙ View > Command palette…*): type a few letters to filter, then Up/Down and Enter (or a click) to run. Esc closes it. It lists every toolbar, View-menu and panel action:
+  - run, motion and speed controls;
+  - camera views and room light, Screenshot and Record, the overlays and the Options toggles (a ✔ marks the on/off ones that are on);
+  - Deploy;
+  - show or hide each panel, and float, detach or close the focused panel;
+  - focus mode, built-in and saved layouts, layout files to import, and themes;
+  - UI scale, *Animations*, *Animations: follow Windows* and Dock back.
+  
+  Each row shows its key, and actions that can't run right now (Stop while stopped, the step buttons while running) are greyed out. Every word you type must match, and matches at the start of a word rank first, so `th da` finds *Theme: Dark*. The palette reads the same table as the keys, tooltips and Shortcuts panel. It works in detached panel windows too, where scale and Dock back act on that window. While it is open, keys go to the palette, not to the simulator.
+- **Keyboard navigation**:
+  - Tab / Shift+Tab and the arrow keys move between controls, and Enter presses the focused one. Space stays pause/resume.
+  - F6 / Shift+F6 step through the panels: the panel's tab becomes active and takes focus, and Tab then goes into its controls (F6 then F11 maximises that panel).
+  - The focused control gets an accent-coloured ring, in every theme. It only appears once you use the keyboard and goes away when you click.
+  - The 3D view itself takes focus: F6 to its tab, then Tab. While it is focused (the ring goes round the whole view) the arrow keys orbit the camera, Shift+arrows pan, + and − zoom, and Home goes back to the starting view; Tab or Esc leaves. Screen readers call it "3D view".
+  - Everything else the mouse does in the view has a key or a control: *B* boops the droid (see Motion below), and the Parts panel's *Add* buttons place parts (see [Placing parts with the mouse](#placing-parts-with-the-mouse)).  See [Accessibility](#accessibility) for screen readers, Voice Access and the full key list.
+- **Audio** (panel): what's playing, with a level meter, and a *Stop* button. *Mute* and the volume slider change only the simulator's output; the firmware's own mixer level still applies. Below that is every WAV in `PropMaker_Feather/sounds/` with its format and a *Play* button (played in the simulator only; `code.py` doesn't see it). A file the board couldn't play is flagged in red: not PCM, not 8- or 16-bit, or a sample rate, channel count or bit depth that differs from the `audiomixer.Mixer` in `hardware.py`. So is any `play_wav("x.wav")` in the firmware whose file isn't there, with the file and line that asks for it.
+- **Deploy to CIRCUITPY** (*⬆ Deploy*, at the right of the toolbar): finds the board's drive by its `CIRCUITPY` label (on Linux, where the desktop mounts it: `/media/$USER/CIRCUITPY`, `/run/media/$USER/CIRCUITPY` or `/media/CIRCUITPY`; on macOS, `/Volumes/CIRCUITPY`), lists the files that are new or changed (compared byte for byte) and copies them after you confirm. It copies the top-level `.py` files, `settings.toml`, `behaviours/` and `sounds/`; it never touches `lib/` or `boot_out.txt`, and never deletes anything on the board. `code.py` goes last, so the board restarts once with every file in place. Each copied file is logged as `[sim] deployed ...`. While log mode is on the drive is read-only to the computer, so turn it off first (see [Logging on the robot](#logging-on-the-robot)).
+- **3D view toolbar**: a small bar in the top-right corner of the 3D view holds the camera views (*Front*, *Side*, *Top*, *Eyes*, a close-up of the eyes, and *Reset*, the start-up view), *Light*, *📷 Screenshot*, *⏺ Record* and *Overlays*. It stays there in focus mode. Clicks on the bar or its menus never boop the droid or turn the camera. Tab reaches its buttons like any other control, and every one of them is also in the command palette.
+- **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom. From the keyboard, with the 3D view focused: arrows orbit (5° a press; up looks down from higher), Shift+arrows pan, + / − zoom, Home resets; holding a key keeps it moving, within the same limits as the mouse. With *Animations* on each key step glides briefly, and off it jumps. A view button glides the camera to that view in about half a second; dragging or scrolling during the glide takes over from where it is.
+- **Overlays** (*Overlays* in the 3D view's toolbar, or type `overlay` in the command palette): readouts drawn on the model, each switched on its own.
+  - *Wing angles*: each wing's servo angle as the firmware asked for it.
+  - *Eye colours*: each eye's R, G and B as a percentage of peak duty.
+  - *White LED duty*: the white LED's duty.
+  - *Accelerometer arrow*: points along the reading the firmware last got from the sensor, the same one the Plot's accelerometer band shows, labelled with its size in g. At rest that is the held reading from the Motion panel; a nudge or shake shows until the firmware's next read.
+
+  The numbers come from the same code as the PCA9685 panel and the Plot, so they always agree. Each pointer aims at the middle of its part and follows it as it moves, and labels that would overlap are moved apart. Labels use the theme's colours, so they stay readable in every theme. They appear in screenshots and recordings. The overlays you leave on are remembered.
+- **Animations** (*⚙ View > Animations*, or the command palette): follows Windows' *Settings > Accessibility > Visual effects > Animation effects* until you change it here. Turning it off stops the camera glide, the fade as panels are shown or hidden, and the menu and section animations, so everything changes at once. Once you change it, your choice is remembered and Windows' setting no longer applies; *Follow Windows* beside the checkbox (or *Animations: follow Windows* in the command palette) forgets the choice and follows Windows again. See [Accessibility](#accessibility).
+- **Light** (in the 3D view's toolbar): *Bright*, *Dim* or *Dark* room. The eyes and white LED glow (with bloom) and light the droid in proportion to their duty, so *Dim* and *Dark* show how bright `EYE_MIN_BRIGHTNESS` or the idle white LED will look in a dim room.
+- **Theme** (in the *⚙ View* menu): *Follow system*, *Light*, *Dark* or *High contrast*. *Follow system* (the default) uses *High contrast* while a Windows contrast theme is on (*Settings > Accessibility > Contrast themes*), otherwise the Windows light/dark app mode, and switches live within about two seconds. Picking *Light*, *Dark* or *High contrast* is remembered and ignores Windows. Every panel, the plot and the 3D background and floor follow it. Every theme meets WCAG 2.2 AA: text is at least 4.5:1 against its background, and focus rings, control edges, the selection and plot lines at least 3:1 (a unit test checks every pair). Plot and status colours use a colour-blind-safe set (Okabe-Ito). **UI scale** sizes the main window's interface from 75% to 200%. Until you change it, it follows Windows' *Settings > Accessibility > Text size* (125% there gives 125% here); Ctrl+= and Ctrl+- step it by 10% and remember your choice, and Ctrl+0 or *Reset scale* goes back to following Windows. A prefs file from an older build has `ui_scale` and `animations` saved: press Ctrl+0 to follow the text size again, and *Follow Windows* beside *Animations* to follow Animation effects. Detached panel windows have their own scale. Hover any control for what it does and its key.
+- **Screenshot** saves a PNG of the window. **Record** saves a PNG every 0.1 s, for up to 30 s, to make into a GIF with any GIF tool. Both go into `simulator\dist\captures\`, next to the exe.
+- The **PCA9685** panel shows every channel's duty and pulse width. The *view* column adds the servo angle the firmware asked for on the wing channels, and a swatch of each eye's colour, with the eye's peak duty (6550 µs) shown as full brightness. The **Plot** shows wing angles, LED levels (main eye solid, small eye dashed, each as separate R/G/B, plus the white LED) and, in its bottom band, the accelerometer reading the firmware actually got (x, y and z in their own colours) with its thresholds: `NUDGE_Z_MG` (yellow), `ANIMATION_NUDGE_Z_MG` (orange) and `HARD_MOTION_MG` (red), read from `settings.toml`, plus the sensor's clip level (dashed grey). A fourth band graphs the heap estimate over time against the board's budget (red) and 80% of it (amber), so a slow leak shows as a climbing line. Vertical **event markers** show what each move is reacting to: nudges, shakes and head-click boops (yellow, labelled with their strength), sounds starting (violet, labelled with the WAV file), *Trigger idle* (green) and restarts or scenario starts (dashed grey). They're labelled along the top band; untick *Events* to hide them. Pick a window from 5 s to 5 min; the last 5 min are always kept. *Freeze* holds the view still while recording carries on. Drag to pan; Ctrl+scroll or right-drag to zoom (the bands share one time axis); *Reset* or a double-click goes back to following. In a short pane the mouse wheel scrolls down to the lower bands. Hover for every ticked series' value at that moment, and untick a series to hide it; the tickboxes sit in a grid, three groups to a row when the pane is wide enough (the white LED and both eyes first, then wings, accelerometer and heap) and two otherwise. The threshold lines are labelled at the left, middle and right of the view so the labels don't overlap. *Table* (remembered) swaps the plots for a table of each ticked series' latest, lowest and highest value over the window in view; each row is a Tab stop that reads the whole row, e.g. *Wings R: latest 57°, min 50°, max 65°*.
+- **Sound captions**: every sound the firmware plays is also written to the log as `[sim] Sound: <file>` and said in the status line, and the Audio panel shows *Now playing: <file>*, so nothing depends on hearing it.
+- **Settings** (panel): every tunable `config.py` reads, with its value in `settings.toml`, its default and a *Reset* button. Hover a key for its help, taken from the comment above it in `config.py`, so a new `_int(...)` tunable shows up without changing the simulator. Changes stay pending (amber) until *Save* (above the list, so it stays in reach) writes them into `settings.toml`. Only the edited values change: comments, order and every other line are kept, and a key not yet in the file is added at the end. Only whole numbers are written. With *Restart when firmware is saved* on, the run restarts with the new values; otherwise press *Restart*. *Revert* drops the pending changes. The left-wing calibration (`SERVO2_*`, `BREATH_SERVO2_*`) is shown but locked, because it matches the physical build. A key shown in bold differs from its default; one in red holds a value that isn't a whole number, so the firmware uses the default. Hand edits to `settings.toml` or `config.py` show up in the panel when there are no pending changes.
+- **Log**: search box (case-insensitive), *Firmware* and *[sim]* toggles to show either source, tracebacks in red (clickable lines in blue), and *Clear*, *Copy* (the lines shown) and *Save* (the whole log, to `simulator\dist\captures\`). The *log.txt* and *log.old.txt* tabs beside *Log* show what `log.py` wrote to the simulated drive, with its size against the 256 KB rollover, *Copy* and *Delete* (both files).
+- **Remembered between runs**: the window's size and position, the panel layout (docked splits and tabs, floating panels' places and sizes, each detached window's place, size and UI scale), your saved layouts, the Model, Light and Theme choices, the UI scale and the *Animations* setting once you've changed them, the overlays, the toolbar checkboxes, the audio volume and mute, the log toggles, and the plot's window and ticked series. They're saved in `simulator\dist\ddl0-sim.prefs.toml`; delete it to go back to the defaults. Rebuilding keeps it, the `captures` and `layouts` folders and the simulated drive (`fs`). Once you've run the app, its saved Model choice takes priority over `[model] kind` in `sim.toml`. Speed always starts at 1x.
+
+The simulator reproduces the hardware maths: angle to pulse width at 50 Hz, and the LIS3DH clipping at its configured range. So it shows what the robot will really do, including:
+- The eye channels peak at 32.8% duty, because `set_pulse_width_range(0, 6550)` is about a third of the 20 ms period.
+- The accelerometer saturates at its range. The firmware uses `RANGE_4_G`, so a 3 g shake reads as 3 g and passes `abs(z) > 2.5` (hard motion). At `RANGE_2_G` it would clip to about 2 g and only count as a nudge; the plot's trace flattens at the dashed clip line, below the red hard-motion line.
+- A WAV whose sample rate, channel count, bit depth or signedness doesn't match the mixer raises the same `ValueError` as CircuitPython 9.2 (`The sample's sample_rate does not match`), instead of playing on the PC and failing on the robot.
+- A blocking `time.sleep()` in a behaviour freezes every other behaviour while it runs, just as on the board. (`data_processing_led()` used to do this; it now uses `await asyncio.sleep()`, so the wings keep breathing during the white-LED flicker.)
+
+### Accessibility
+
+The simulator can be used with a screen reader, by voice, with the keyboard alone and in high contrast. The interface exposes every control to Windows UI Automation (through AccessKit), which is what Narrator, NVDA, JAWS and Voice Access read.
+
+**Screen readers.** Start Narrator with Win+Ctrl+Enter, then start `ddl0-sim.exe`. Tab, Shift+Tab, F6 and Enter work as described under [Keyboard](#keyboard) below, and the reader says each control's name, role and state as focus moves.
+- The **status line** at the left of the status bar is read aloud by itself, without moving focus: behaviour changes (*Now angry animation*), boops (*Boop 1.0 g*), sounds (*Sound: noseBoops*), *Paused* and *Resumed*, skips, restarts, tracebacks and deploy results. Messages come at most every 1.5 s, events that happen together are joined into one message, and errors are never dropped. See **Status bar** under [Using it](#using-it).
+- **Droid status** at the top of the State panel lists both wing angles, both eye colours, the white LED and each part as sentences, one Tab stop per row. Use it to check what the droid is doing at any moment.
+- The Plot's **Table** button replaces the graphs with each ticked series' latest, lowest and highest value. Each row is one Tab stop and is read as a whole, e.g. *Wings R: latest 57°, min 50°, max 65°*.
+- **Sounds** are also written to the log (`[sim] Sound: angry.wav`) and shown in the Audio panel, so nothing depends on hearing them. The Log panel's lines are text but not Tab stops: read them with Narrator's scan mode (Caps Lock+Space, then the arrow keys), and use the log's search box to filter them.
+
+**Voice Access** (Windows 11, *Settings > Accessibility > Speech*). Every button, checkbox, tab and menu has the name it shows on screen, without its icon, so say *click* and the name: *click Restart* (or *click Run* when stopped), *click Pause*, *click Resume*, *click Nudge*, *click Hard shake*, *click Boop*, *click Trigger idle*, *click Front*, *click Reset view*, *click Log*, *click Add led*, *click Table*, *click Dock back*. Names that would be the same in one view are made different, and a few short labels have a longer spoken name: say *click Reset view* or *click Reset plot*, *click Save parts* or *click Save log* (both buttons show *Save*), and *click Move X plus*, *click Move in* or *click Turn left 15 degrees* for the Parts panel's *X+*, *In* and *⟲15°*. Anything else can be reached by its keyboard shortcut ("press B").
+
+#### Keyboard
+
+Everything the mouse does has a key or a control. The Shortcuts panel (`?` or F1) shows the list below from the same table the key handling uses; the command palette (Ctrl+K) runs every action by name, including the ones with no key.
+
+| Keys | Action |
+|---|---|
+| Tab / Shift+Tab, arrow keys | Next / previous control; Enter presses it |
+| F6 / Shift+F6 | Next / previous panel (its tab takes focus; Tab goes into it) |
+| Ctrl+K | Command palette |
+| `?` or F1, Esc | Show / hide the Shortcuts panel |
+| F11 | Focus mode: only the focused panel (or the 3D view) |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Larger / smaller UI; follow Windows' text size again (100% in a detached window) |
+| Space | Pause / resume |
+| . | Step the paused clock 100 ms |
+| F | Skip to next event |
+| R | Restart `code.py` |
+| I | Trigger idle |
+| N / S | Nudge / hard shake |
+| B | Boop with the Motion panel's *Direction* and *boop strength (g)* |
+| Arrows (3D view focused) | Orbit the camera |
+| Shift+arrows (3D view focused) | Pan |
+| + / − (3D view focused) | Zoom |
+| Home (3D view focused) | Back to the starting view |
+| Ctrl+Z / Ctrl+Y | Undo / redo a part change |
+| Del | Delete the selected part |
+| Ctrl+S | Save the parts to `parts.toml` |
+
+To reach the **3D view**, press F6 until its tab is active, then Tab; a ring goes round the view and the reader says "3D view". Tab or Esc leaves it. The camera views (*Front*, *Side*, *Top*, *Eyes*, *Reset view*) are buttons in the view's own toolbar.
+
+**Parts without the mouse**: in the Parts panel, *Add led* (or another kind) places the part where the centre of the 3D view meets the droid, so turn the camera to aim first. Pick a part in the list with Tab and Enter, then change *Position*, *Rotation°* or use the *Nudge* buttons (*X±*, *Z±*, *In*, *Out*, 15° turns; the reader says *Move X plus*, *Turn left 15 degrees* and so on); Del deletes it and Ctrl+Z undoes. See [Placing parts with the mouse](#placing-parts-with-the-mouse).
+
+#### Seeing it
+
+- **Themes**: *Light*, *Dark* and *High contrast* all meet WCAG 2.2 AA: text at least 4.5:1, focus rings, control edges, the selection and plot lines at least 3:1. A unit test checks every pair (`simulator\dist\ddl0-sim-tests.exe every_theme --nocapture` prints them). Plot colours are colour-blind safe.
+- **Focus**: the focused control has an accent ring in every theme once you use the keyboard, including the 3D view, dock tabs and table rows.
+- **Following Windows**: with the theme on *Follow system* (the default), turning on a Windows contrast theme switches the app to *High contrast* within about two seconds. *UI scale* follows *Settings > Accessibility > Text size*, and *Animations* follows *Visual effects > Animation effects*, until you change them in the app; then your choice is saved and Windows no longer applies. Ctrl+0 (*Reset scale*) goes back to following the text size. *Follow Windows* beside the *Animations* checkbox (or *Animations: follow Windows* in the command palette) goes back to following Animation effects. A prefs file from a build before this feature already has `ui_scale` and `animations` saved, so press Ctrl+0 and *Follow Windows* once to follow Windows.
+- **Reduced motion**: with *Animations* off (or Windows' Animation effects off), the camera jumps instead of gliding and panels and menus change at once.
+
+#### Known limits
+
+- Tested with Narrator only through UI Automation (the events it reads), not by ear; NVDA, JAWS and Dragon are untested. Voice Access has been checked through the same calls it makes, not by voice.
+- Screen readers are tested on Windows only. The Linux and macOS builds expose the same AccessKit tree, but Orca and VoiceOver are untested.
+- The dock's collapse and close-all buttons, its tab-bar scroll bars and the dividers between panels have no names (each panel's own *Close* button and the command palette do the same jobs), and a slider's number box is unnamed (its slider is named).
+- After Del deletes a part, focus goes back to the window; press F6 to return to a panel.
+- The status line is a live region, not a Tab stop. Read older events in the Log panel.
+- Text sent by dictation reaches text fields, but dictating into fields has not been tested by voice.
+
+### Matching the real board
+
+The RP2040 is much slower than a PC and has far less memory, so the simulator models both:
+
+- **Board speed** (toolbar, on by default): every servo/LED write, accelerometer read and scheduler pass takes as long as it does on the robot. So an animation runs at the speed the robot will really manage, not just the speed the code asks for.
+- **Servo speed limit** (toolbar, on by default): the 3D wings turn no faster than the real servo, set by `sec_per_60deg` in `sim.toml` `[servo]` (0.12 s per 60° for the FS90 at 4.8 V). The time is the firmware's clock, so *Pause* stops a wing part-way through a move. Whether it's on or off, the log warns (`[sim] … wing servo can't keep up`) when the firmware's command stays more than 10° ahead of where the servo can be for over 0.4 s. That means the animation will look slower or fall short on the robot. A single snap, even across the full travel, catches up before then. The plot and the PCA9685 panel still show the angle the firmware asked for.
+- **Heap gauge** (Board panel): an estimate of how much of the board's free memory the firmware (`code.py` and its modules, bytecode included) uses. It warns in the log at 80% and 100%. `gc.mem_free()` and `gc.mem_alloc()` return the estimate too. It's approximate: it catches "this clearly won't fit", not the last few KB. The Plot graphs it over time.
+- **Blocked loop**: every task's run between two awaits (one *step*) is timed in board time: blocking `time.sleep()` calls and *Board speed* costs in full, desktop CPU at 1x, so the speed slider doesn't inflate it. Nothing else runs during a step, so when one takes longer than `loop_hold_warn_ms` in `sim.toml` `[board]` (50 ms; 0 turns it off), the log warns `[sim] <task> held the loop for N ms without an await`, at most once per task every 5 s. The Board panel shows the longest step this run and which task took it (amber when over the limit).
+- **The simulated drive**: to the firmware, `/` is the CIRCUITPY drive. In the simulator that is `PropMaker_Feather/` with a writable folder, `simulator\dist\fs\`, laid over it. Reads find the file in `fs\` first, then in `PropMaker_Feather/` (so `sounds/` and `settings.toml` work as usual). Every write lands in `fs\`, so the firmware's own files are never changed; deleting or renaming one of them fails with *Permission denied*. As on the board with USB connected, the drive is read-only to the firmware: `boot.py` runs before `code.py` on every (re)start, and writes only work after it calls `storage.remount("/", readonly=False)`. Otherwise they fail with CircuitPython's `[Errno 30] Read-only filesystem`, and `log.py` prints `Log file off: ...`. The *log_mode* checkbox (toolbar) adds or removes `fs\log_mode`; restart to apply, as a reset is needed on the board.
+- **Not simulated**: importing a library that's in `lib/` (or built into CircuitPython) but which the simulator doesn't model, such as `neopixel`, gives you a stand-in. The stand-in accepts every call and does nothing, so the rest of your code keeps running. It's listed in the Board panel. To make it do something, write a shim for it (see [Custom shims](#custom-shims); the shim guide has a ready-made `neopixel` one).
+
+The timing and memory figures in `simulator/sim.toml` `[board]` start as estimates. To measure your robot:
+
+The bench runs inside the robot with no PC attached. It saves its results in the board's non-volatile memory, and you read them back over USB afterwards.
+
+1. On the CIRCUITPY drive, rename `code.py` to `code_main.py`, then copy `simulator/board_bench.py` in as `code.py`.
+2. Unplug the Feather, fit it in the robot and power on. Only the main eye's red LED flickers dimly; the wings don't move. When it's done the main eye glows green. If the Feather's red LED blinks instead, it failed, and the error is saved in place of the results.
+3. Plug the Feather into the PC and open the serial console. Press Ctrl-D to rerun if you missed the output. With USB connected it prints the saved `[board]` block instead of measuring.
+4. Paste that block over the one in `simulator/sim.toml`. Then, on the drive, delete the bench `code.py` and rename `code_main.py` back to `code.py`.
+
+If the Feather is plugged into USB and nothing is saved, the bench measures and prints straight away. That only works if the FeatherWing is attached.
+
+### Scenarios
+
+A scenario is a timeline of inputs plus what the droid should do, so the test checklist (boot, breathing, nudge → boop, 3 nudges / hard shake → angry, idle → attention) runs without clicking. The shipped ones cover that checklist: `boot`, `breathing`, `boop`, `angry-nudges`, `angry-shake`, `idle` and `sideways-nudge`. Run them from the toolbar or with `headless.py` (see [Tests and CI](#tests-and-ci)). To add one, drop a `.toml` file into `simulator/scenarios/`; the toolbar picks it up within a second.
+
+```toml
+description = "Three nudges in one window end in angry.wav"
+start = "Boot sequence complete!"   # optional: times count from this log line
+
+[[step]]
+t = 5.0             # virtual seconds (from start, or from code.py starting)
+action = "nudge"    # nudge | shake | tilt | idle | wait
+# axis = "+x"       # nudge/shake direction: +x -x +y -y +z -z (default "+z")
+
+[[expect]]
+sound = "angry.wav" # must play between after and by
+after = 15.0        # optional, default 0
+by = 20.0
+```
+
+- **Steps**: `nudge` (one reading 0.3 g past the held value) and `shake` (2 g past it) match the Motion buttons. `axis = "+x"` (also `-x`, `+y`, `-y`, `+z`, `-z`; default `"+z"`) picks their direction, like *Direction*. `idle` is *Trigger idle*. `tilt` holds the accelerometer at `g = [x, y, z]` (default `[0, 0, -1]`, tipped over). `wait` does nothing, but the scenario runs until it.
+- **Expectations**, one kind each:
+  - `sound`: a WAV file name, glob (`"angry*.wav"`) or list of them.
+  - `wing = "right"` or `"left"` with `above` and/or `below`: the servo angle in degrees (from the pulse width, via `sim.toml` `[servo]`).
+  - `led = "main_r"`, `"main_g"`, `"main_b"`, `"small_r"` .. `"small_b"` or `"white"` with `above` and/or `below`: brightness from 0 to 1 (eyes at their 6550 µs peak count as 1).
+  - `log`: text that appears in a line `code.py` prints.
+  - `never = true` turns any of them around: it fails if it does happen in the window.
+  - `name` replaces the description shown for it.
+- A traceback always fails the scenario. It finishes once every step has run and every expectation has a result; `code.py` stopping before then is a fail. A mistake in the file (an unknown key, a missing `by`) shows as *ERROR* with the reason in the log.
+- Prefer `start = "Boot sequence complete!"` for anything after boot: Python's imports take a few virtual seconds at high speed, so times counted from the very start vary between machines.
+- A gentle nudge is ignored while the wings are animating, so space nudges past the boop before them (see `angry-nudges.toml`).
+
+### Custom shims
+
+The hardware stand-ins ("shims") are compiled into the exe, so it runs on its own. To add one, or change a built-in one, without rebuilding, put a `.py` file in `simulator\dist\shims\` (create the folder). A file there replaces the built-in shim of the same name or adds a new one, and is read at the start of every run; the log names each shim taken from it. Rebuilding keeps the folder.
+
+[`simulator/docs/custom-shims.md`](simulator/docs/custom-shims.md) is a step-by-step guide: when you need a shim, mirroring the real library's API, the `simhw` calls a shim uses to reach the simulator, worked examples (including a `neopixel` shim lighting a ring of pixels), testing, and when Rust changes are needed. With the [parts file](#parts-file), most new hardware needs no Rust at all.
+
+### Parts file
+
+To show extra hardware on the 3D droid without writing Rust, list it in `simulator/parts.toml`. Copy [`simulator/parts.example.toml`](simulator/parts.example.toml) to start. With no file, the droid looks as it always has. Or drag parts onto the droid from the **Parts** panel, which writes the file for you: see [Placing parts with the mouse](#placing-parts-with-the-mouse).
+
+The file is read when `code.py` starts and again on every restart: **Restart** (R), or saving the file while *Restart when firmware is saved* is on. The log shows `[sim] parts.toml: N parts loaded`. A bad entry (an unknown kind or field, a bad value, a duplicate name) logs a `[sim] parts.toml part N ("name") skipped: …` warning; the other parts still load and the app keeps running. If the whole file isn't valid TOML, the previous parts stay.
+
+Each part is one `[[part]]` entry. Only `name` is required; leave out the rest to use their defaults.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `name` | (required) | Up to 32 letters, digits, `_` or `-`; unique. |
+| `kind` | `"led"` | `"led"` (a glowing sphere), `"pixels"` (a row or ring of dots), `"servo_part"` (a shape turned about a hinge) or `"button"` (a cap you can press with the mouse). |
+| `pca` | none | Follow PCA9685 channel 0-15, like the wings and eyes. An `led` or `pixels` part shows the duty as brightness; a `servo_part` turns to the servo angle (from the pulse width, via `sim.toml` `[servo]`). Sharing a channel with a wing or eye is fine. |
+| `pin` | none | Follow a board pin, e.g. `"D5"`. A `pwmio` duty gives brightness, or for a `servo_part` a pulse at the PWMOut's frequency. A `digitalio` output is on/off. A `button` drives the pin as an input instead: `DigitalInOut.value` reads `False` while pressed with `Pull.UP`, `True` otherwise. |
+| | | With neither `pca` nor `pin`, the part is left to shims (and a button to the mouse): see [Driving parts from a shim](#driving-parts-from-a-shim). Giving both is an error, and so is `pca` on a button. |
+| `anchor` | `"body"` | The node the part sits on and moves with. `"body"` is the droid itself. `wing_right`, `wing_left`, `eye_main`, `eye_small` and `led_white` work on both models; other Lola node names (`head`, `antenna_base`, …) only on Lola. On the primitive model, such a part is skipped with a warning. |
+| `pos` | `[0, 0, 0]` | Position relative to the anchor (x right, y up, z forward). The head is about 2.5 across, with its top about 2.1 up. |
+| `rot_deg` | `[0, 0, 0]` | Rotation in degrees about x, y, z. A part's +y points out of the surface it sits on: `[0, 0, -90]` faces right, `[90, 0, 0]` forward, `[-90, 0, 0]` back. |
+| `size` | `0.05` | Radius of an LED, dot or button; half-width of a servo part's shape. |
+| `colour` | `[1, 1, 1]` | RGB 0-1: the LED's colour at full brightness, or the body colour of a servo part or button. |
+| `full_duty` | `1.0` | The duty that counts as full brightness. Use `0.3275` for an LED driven like the eyes (a 360° "servo" with pulses of 0-6550 µs). |
+| `count`, `layout`, `spacing` | `8`, `"row"`, `0.15` | Pixels: how many dots (1-1024), `"row"` along x or `"ring"` around y, and the distance between neighbours. |
+| `shape` | `"box"` | Servo part: `"box"` or `"cylinder"`, reaching along +z from the hinge. |
+| `hinge` | (see meaning) | Servo part, as for the wings. The defaults are `{ neutral_deg = 90, direction = 1.0, gain = 1.0, hinge_axis = [1, 0, 0], min_deg = -90, max_deg = 90 }`. Angle = (servo angle − `neutral_deg`) × `direction` × `gain`, clamped to `min_deg`..`max_deg`. |
+
+For example, a flap on the right side that copies the right wing's servo, and a button on the front wired to `D5`:
+
+```toml
+[[part]]
+name = "side_flap"
+kind = "servo_part"
+pca = 0
+pos = [1.2, 1.45, -0.35]
+rot_deg = [0, 0, -90]
+size = 0.12
+hinge = { neutral_deg = 90, direction = -1.0, gain = 0.45, min_deg = 0, max_deg = 75 }
+
+[[part]]
+name = "front_button"
+kind = "button"
+pin = "D5"
+pos = [0, 1.38, 1.18]
+rot_deg = [90, 0, 0]
+size = 0.07
+colour = [0.9, 0.75, 0.1]
+```
+
+The **PCA9685** panel lists the parts with their source and live value. A spare channel that a part follows is shown under the part's name. Clicking a button part presses it without booping the droid.
+
+#### Placing parts with the mouse
+
+The **Parts** panel (*⚙ View > Parts* if a saved layout doesn't show it) adds and edits parts without touching the file by hand:
+
+- **Add**: press *Add led*, *Add pixels*, *Add servo_part* or *Add button* (Tab and Enter reach them) to place that kind where a line through the centre of the 3D view meets the droid, anchored the same way as a drop; if the centre isn't on the droid, the log says so and nothing is added, so turn or pan the camera first. Or drag one of those buttons onto the 3D view. While you drag, a ring marks the spot on the droid under the pointer; let go and the part lands there, with its +y out of the surface. Dropped on a wing, it is anchored to that wing and moves with it; anywhere else it sits on `body`. It gets the first free name of the form `led_1`, `led_2`, …, no source (shim only), and is selected.
+- **Edit parts** (the toggle at the top of the panel, also in the command palette): while it is on, clicking a part selects it, dragging a selected part slides it over the surface (keeping its turn about the normal), and clicks on the droid never boop and never press a button part. Dragging anywhere else still orbits the camera. Turn it off to boop and press buttons again. Placing a part turns it on.
+- **Settings**: the selected part's name (kept unique; a clash or a bad name shows in red and isn't applied), source (*PCA channel*, *Pin* or *Shim only*), size and colour, `full_duty` for a lit part following a channel or pin, the dot count, layout and spacing for `pixels`, and the shape, hinge axis, neutral angle, direction, gain and limits for a `servo_part`. *Position* and *Rotation°* take exact values, and *Nudge* moves it a step along the surface (*X±*, *Z±*), in or out, or turns it 15° about the normal. Every change shows on the model at once. A value the file wouldn't accept (e.g. min above max) is shown in red and not applied.
+- **Delete and undo**: *Delete part* or Del removes the selected part. *Undo* (Ctrl+Z) and *Redo* (Ctrl+Y) step through the last 50 changes; a whole drag or a whole edit of one field is one step.
+- **Saving**: with *Auto-save* on (the default; remembered), each finished change is written to `simulator/parts.toml` straight away. Turn it off to collect changes, shown as *unsaved changes*, then *Save* or Ctrl+S. The file is written to `parts.toml.tmp` first and then renamed over the old one, so it is never left half-written. Only the entries and keys that changed are touched: comments, the order of entries, your formatting and any entry the app couldn't load are kept, and a key that goes back to its default is removed. A new file starts with a short header. Saving doesn't restart `code.py`. If the file isn't valid TOML, it is left alone and a `[sim] parts.toml not saved` warning explains why. Editing the file by hand still works as before; the panel picks up the new contents on the next restart (and drops any unsaved panel changes, with a warning).
+
+Both models share one `parts.toml`, and Lola and the primitive droid aren't the same shape, so a part placed on one may float above or sink into the other. Place parts on the model you use most.
+
+#### Driving parts from a shim
+
+A part with neither `pca` nor `pin` is driven by a [custom shim](#custom-shims) through three `simhw` calls, so a library the simulator doesn't model (`neopixel`, `touchio`, …) can still show on the droid:
+
+| Call | Part kinds | Value |
+|---|---|---|
+| `simhw.set_part(name, value)` | `led`, `pixels`, `servo_part` | Brightness `0.0`-`1.0` or `True`/`False` for an `led` or `pixels` part; `(r, g, b)` `0`-`255` for an `led`; the servo angle in degrees for a `servo_part`. |
+| `simhw.set_pixels(name, [(r, g, b), ...])` | `pixels` | One colour per pixel, `0`-`255` per channel, as `neopixel` holds them after its brightness. At most 1024. |
+| `simhw.part_input(name)` | `button` | `True` while the button is held down on the model, otherwise `False`. |
+
+A name that isn't in the file, the wrong kind, a part that follows a `pca` or `pin`, or a bad value (wrong type, NaN, too many pixels) logs one `[sim] simhw.…: …; ignored` warning per name per run and does nothing else; the firmware keeps running. [Example D in the shim guide](simulator/docs/custom-shims.md#example-d-a-neopixel-ring-and-a-touch-pad-with-no-rust-neopixel-touchio) is a working `neopixel` shim on a ring and a `touchio` shim on a button.
+
+### Tests and CI
+
+`python simulator/tests/headless.py` runs the real firmware (`code.py`, its modules and `settings.toml`) headless, with CircuitPython strict mode and board speed on. It scripts a hard shake, a nudge, an idle trigger, repeated nudges and a *boot_sequence* behaviour button. It fails on any traceback, if the boop, attention or angry behaviour doesn't happen, if the State panel's events, tasks, nudge count or timers can't be read, if the behaviour buttons are wrong or don't run, if the wings and motion sensing stall during a white-LED flicker, or if any task step holds the loop longer than `loop_hold_warn_ms` (a small blocking test checks the timing itself). Then it plays every scenario in `simulator/scenarios/` against a fresh run each and fails if any of them doesn't pass. `--scenario NAME` (repeatable) runs only those scenarios. It needs Python 3.11+ (CI uses 3.13); without Python on the host, run it in the dev image: `docker run --rm -v "${PWD}:/workspace" -w /workspace ddl0-sim-dev python3 simulator/tests/headless.py`.
+
+`python simulator/tests/shim_dir.py` checks drop-in shims: overriding and adding modules, a broken or unreadable shim, and the `simhw` part calls, running the `neopixel` and `touchio` examples straight from `simulator/docs/custom-shims.md` and feeding the calls bad input. CI runs it too.
+
+The simulator's Rust unit tests run with `.\simulator\build.ps1 -Test`. The build cross-compiles them into `simulator\dist\ddl0-sim-tests.exe` (a Windows exe, so it can't run in the Linux container), then runs it from `dist\`, where it finds the Python and MinGW DLLs it needs. A failing test fails the script. To rerun them without rebuilding, run `.\ddl0-sim-tests.exe` from `simulator\dist\`.
+
+The tests for `settings.rs`, `wav.rs` and `deploy.rs` need only `rustc`, so they can also be run on their own, which is quicker. For the Settings panel's `settings.toml` reader and writer (`simulator/src/settings.rs`): `docker run --rm -v "${PWD}:/workspace" -w /workspace/simulator ddl0-sim-dev bash -c "rustc --edition 2021 --test src/settings.rs -o /tmp/settings-test && /tmp/settings-test"`. The Audio panel's WAV reader (`src/wav.rs`) and the deploy planner (`src/deploy.rs`, against temporary folders, never a real drive) are tested the same way: swap the file name in that command.
+
+`simulator\build.ps1` runs `headless.py` in the dev image as its last step, so a firmware change that breaks a behaviour fails the build. The failing checks and scenarios are listed as `FAIL` lines. The simulator is still built in `simulator\dist\`, so you can open it to see what went wrong.
+
+The wiki's pages live in `wiki/` and are reviewed in PRs like code; `.github/workflows/wiki-sync.yml` publishes them to the GitHub wiki when `wiki/` changes on `main` (see the wiki's *Contributing and branching* page for when to update it).
+
+GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run. When everything passes, a `package` job packs every platform's build into the release archives (see [Releasing](#releasing)) and attaches them to the run as `ddl0-release-preview`, so packaging is checked on every PR.
+
+A `build-linux` job builds the Linux simulator in the same image (`PLATFORM=linux` for `docker/build.sh`), with rustfmt and clippy, runs the Rust unit tests and the scenario checks there, and attaches the built `ddl0-sim-linux` folder to the run. Locally on Linux, `./simulator/build.sh --test` does the same.
+
+A `build-macos` job builds natively on an Apple Silicon runner (`macos-14`, `PLATFORM=macos`, Rust 1.92 through rustup) with rustfmt, clippy and the Rust unit tests, checks that the binary loads libpython through `@rpath` and is signed, and attaches `ddl0-sim-macos-arm64`. It skips the scenario checks (`SCENARIOS=0`): that runner is a VM whose sleeps run 5-10x long, too slow for their real-time clock, and they're the same Python the other jobs check. On a real Mac, `./simulator/build.sh --test` runs them. `package` waits for every build job.
+
+### Releasing
+
+Releases are automatic: every push to `main` (a merged `Documentation → main` PR) publishes a GitHub release once every CI job on that commit has passed. If any job fails, nothing is released. Docs-only merges are released too, since `main` only moves through reviewed merges and each one is what runs on the robot.
+
+- **Tags** are dates: `vYYYY.MM.DD` (UTC), then `vYYYY.MM.DD.2`, `.3` for later releases the same day. A tag is never reused or moved; the hand-made `v1.0.0` stays as it is.
+- **Notes** list every PR merged since the previous tag, grouped by branch prefix (`feature/` Features, `bugfix/` Fixes, `docs/` Docs, `ci/` CI, anything else Other), with title, link, author and the issues each closed, then any commits that came in outside a PR. They're built by `.github/scripts/release_notes.py` from the merge commits, because PRs reach `main` through `Documentation`, so GitHub's own generated notes would list just the one `Documentation → main` PR.
+- **Assets**, built by `simulator/release/package.sh` from tracked files only:
+  - `ddl0-sim-windows-<version>.zip`: the repo layout the app expects: `PropMaker_Feather/`, `simulator/` (assets, shims, scenarios, docs, `sim.toml`, `parts.example.toml`) and `simulator/dist/` (exe, bundled Python, MinGW DLLs), plus `README.md` and `LICENSE`. It leaves out the unit-test exe and anything the app saves beside the exe (prefs, captures, `fs/`, layouts, drop-in shims).
+  - `ddl0-sim-linux-<version>.tar.gz` and `ddl0-sim-macos-arm64-<version>.tar.gz`: the same layout, with `ddl0-sim` and its bundled Python in `simulator/dist/`. They're tar.gz so the binary keeps its execute bit.
+  - `ddl0-firmware-<version>.zip`: the contents of `PropMaker_Feather/`, to copy to the root of CIRCUITPY.
+  - `SHA256SUMS`, also shown as a table in the notes.
+
+  The sound files aren't in the repo, so no archive has `sounds/`: add your own as described in [Setup & Usage](#setup--usage).
+- The `release` job is the only one with write access (`contents: write`), uses only `GITHUB_TOKEN`, and runs one at a time, so two quick merges can't claim the same tag. Every action is pinned to a commit SHA.
+
+To try the packaging locally, run it in the dev image after a build, from the repo root (it reads tracked files with `git archive`, so commit first):
+
+```powershell
+docker run --rm -v "${PWD}:/workspace" -w /workspace ddl0-sim-dev bash -c "git config --global --add safe.directory /workspace && bash simulator/release/package.sh windows dev-test release-out"
+```
+
+The platform is `windows`, `linux` or `macos-arm64`; an optional fourth argument names the built folder (default `simulator/dist`), so CI packs each platform's download from its own folder into the same `release-out/`.
+
+### The 3D model
+
+There are two models, switchable live with **Model** in the toolbar (`[model] kind` in `simulator/sim.toml` picks the start-up one):
+
+- **Lola**: `simulator/assets/droid.glb`, a detailed model of L0-LA59. It's generated by a Blender script, so it can be rebuilt and edited:
+
+  ```powershell
+  & "E:\Apps\Blender Foundation\Blender 5.1\blender.exe" --background --factory-startup --python simulator\assets\src\build_lola.py -- simulator\assets\droid.glb
+  ```
+
+  (adjust the path to your `blender.exe`). The simulator loads `droid.glb` at start-up, so no rebuild of the app is needed.
+
+  `simulator/assets/src/lola.blend` is the same model as an editable Blender file, with modifiers still live and a camera and lights. It's generated too: add its path as a second argument after `droid.glb` to regenerate it. If you edit the `.blend` by hand, export it to `droid.glb` with *+Y Up* and *Apply Modifiers* ticked, keeping the node names above. The script's output would overwrite those hand edits.
+- **Primitive**: the simple built-in version (`simulator/src/droid.rs`), always available.
+
+Any model can drive the simulator if it has nodes named `wing_right` and `wing_left` (the rear white panels, each with its origin on its hinge line; on Lola that is the front edge of the panel), plus `eye_main`, `eye_small` and `led_white` (the lenses). The meshes inside them must have different names. `simulator/sim.toml` sets how servo angles map onto panel rotation: neutral angle, direction, linkage gain, travel limits and hinge axis per wing. Its `[servo]` section also sets the servos' pulse range and speed.
+
 ## License
-See `LICENSE` file if present, or contact the author for usage terms.
+
+Copyright (C) 2026 Adriano Cafarella.
+
+This project (the firmware in `PropMaker_Feather/` outside `lib/`, and everything in `simulator/`) is licensed under the **GNU Affero General Public License v3.0 or later**. See [`LICENSE`](LICENSE).
+
+Third-party components keep their own licenses:
+- The Adafruit CircuitPython libraries in `PropMaker_Feather/lib/` are MIT-licensed by Adafruit Industries.
+- The embeddable Python that `simulator/build.ps1` bundles into `simulator/dist/` is under the PSF License; its `LICENSE.txt` ships alongside it.
+- Rust crates used by the simulator are under their own licenses (mostly MIT/Apache-2.0).

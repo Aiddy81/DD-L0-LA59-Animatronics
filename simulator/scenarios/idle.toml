@@ -1,0 +1,13 @@
+# Cutting the idle wait short ("Trigger idle now") makes the droid seek
+# attention: attention_animation or a trench run, picked at random.
+description = "Idle trigger plays youWho.wav or trenchRun.wav"
+start = "Boot sequence complete!"
+
+[[step]]
+t = 5.0
+action = "idle"
+
+[[expect]]
+sound = ["youWho.wav", "trenchRun.wav"]
+after = 5.0
+by = 8.0

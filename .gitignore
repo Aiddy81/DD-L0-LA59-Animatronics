@@ -5,3 +5,17 @@
 /.vscode
 **/.vscode/
 
+# Simulator build output
+/simulator/dist/
+/simulator/target/
+/simulator/.python-macos/
+__pycache__/
+/.ci-cache/
+/release-out/
+# Blender backups
+*.blend1
+
+# Robot log files copied back from CIRCUITPY
+/PropMaker_Feather/log.txt
+/PropMaker_Feather/log.old.txt
+/PropMaker_Feather/log_mode
