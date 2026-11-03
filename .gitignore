@@ -8,6 +8,7 @@
 # Simulator build output
 /simulator/dist/
 /simulator/target/
+/simulator/.python-macos/
 __pycache__/
 /.ci-cache/
 /release-out/

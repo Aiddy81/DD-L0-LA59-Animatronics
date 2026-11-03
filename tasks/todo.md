@@ -1,3 +1,31 @@
+# Simulator: macOS Apple Silicon build, all platforms in releases — #93 part 2
+
+Branch `feature/sim-macos` off `Documentation` (has #107 Linux and #108 releases). #92/#93 are the approval to change `.github/`. Windows build and `build.ps1` unchanged.
+
+- [x] `theme.rs`: macOS dark mode (`defaults read -g AppleInterfaceStyle`), *Increase contrast* and *Reduce motion* (`com.apple.universalaccess`) on the background thread Linux uses; parsing unit-tested (unset key = its default, unreadable = app default)
+- [x] `deploy.rs` already looks at `/Volumes/CIRCUITPY` on macOS (from #107)
+- [x] `docker/fetch-python-macos.sh`: python-build-standalone 3.13.5 `20250708` `aarch64-apple-darwin` install_only, SHA-256 pinned, cross-checked against GitHub's asset digest; one pin shared by CI and `build.sh`
+- [x] `docker/build.sh`: `PLATFORM=macos` runs natively; `-L` + rpath `@executable_path/python/lib`; tests with `DYLD_LIBRARY_PATH`; stages trimmed `dist/python/`; `otool -L` check, repoint libpython to `@rpath` with `install_name_tool` if needed, `strip -S`, ad-hoc `codesign -s - -f`, `codesign -v`
+- [x] `simulator/build.sh`: macOS branch (Apple Silicon only; says what's missing: Xcode CLT, rustup, Rust 1.92.0; installs nothing)
+- [x] CI `build-macos` on `macos-14`: Rust 1.92.0 via rustup, fmt, clippy `-D warnings`, unit tests, rpath/sign check (scenario checks skipped, `SCENARIOS=0`: see review), uploads `ddl0-sim-macos-arm64`; no new actions (existing pinned SHAs)
+- [x] `package.sh`: `linux` / `macos-arm64` tar.gz (only the exe executable, owner root), optional dist-dir argument, layout check reads tar too, `SHA256SUMS` over every archive
+- [x] `package` needs every build job and packs all three; `release` attaches zip + tar.gz + `SHA256SUMS`
+- [x] README: per-platform download/run/build, Gatekeeper note, Intel unsupported, CI and Releasing
+- [x] CI green on Windows, Linux and macOS (run 41595437517)
+- [x] A deliberately failing macOS-only test turned `build-macos` red naming it (run 41597260442); Windows/Linux green, `package` skipped; reverted
+- [x] `ddl0-release-preview`: Windows zip (104 entries), Linux tar.gz (693), macOS tar.gz (718), firmware zip, `SHA256SUMS`; `sha256sum -c` OK; repo layout; exe `0755` in both tar.gz; no tests exe, prefs, captures, fs, layouts, shims or `assets/src`
+- [x] `.\simulator\build.ps1 -Test` passes on Windows (154 tests, scenarios)
+- [x] PR into `Documentation`
+- [ ] By a tester on an Apple Silicon Mac (from the preview's tar.gz): Gatekeeper steps, window and 3D view, sound, orbit and boop, hot reload, folder dialog, Follow system (dark / contrast / reduce motion), deploy finds CIRCUITPY, tear-off panel, traceback opens editor, boot with *Board speed* on takes about as long as on Windows, `./simulator/build.sh --test` from a checkout (runs the scenario checks CI skips)
+
+### Review
+- Can't run a Mac here: everything above the tester line was checked in CI (macOS runner) or locally (Windows, dev image).
+- python-build-standalone's macOS libpython: CI's `otool -L` check confirms the exe ends up naming `@rpath/libpython3.13.dylib`, with `LC_RPATH @executable_path/python/lib`, both re-signed ad hoc and `codesign -v` clean.
+- Scenario checks on CI's macOS runner: boot took 60-80 virtual s (12.6 on Linux). Lowering the speed and changing the harness's sleep accounting didn't help (both reverted); a probe step then measured the runner (Apple M1 Virtual) sleeping 5-10x long (16.7 ms took ~87 ms), with `taskpolicy` no better. The harness clock is real time x 40, so the job skips those checks; they're the same Python the firmware and Linux jobs run. Lesson added.
+- The app's own board-speed sleeps (`hw.rs` `charge`) have the same pattern; fine on real Macs (and Windows today), so left alone; the tester checks boot length.
+- `package.sh` takes the build folder as a 4th argument, so CI downloads each platform into `builds/<platform>` and packs them all into one `release-out/`; `SHA256SUMS` covers every archive there.
+- One pin for the macOS Python (`docker/fetch-python-macos.sh`), shared by CI and `build.sh`; on a Mac it downloads into `simulator/.python-macos/` (gitignored), which is a build input, not an install.
+
 # Simulator: Linux x86_64 build — #93 part 1
 
 Branch `feature/sim-linux` off `Documentation`. No packaging or release steps (#92's branch owns those); macOS is part 2. Windows build and `build.ps1` unchanged.

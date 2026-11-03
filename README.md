@@ -97,20 +97,50 @@ Place these files in `PropMaker_Feather/sounds/` with the exact names above. You
 
 ## Simulator
 
-`simulator/` is a desktop app for Windows and Linux (x86_64) that runs `PropMaker_Feather/code.py` (with its modules and `settings.toml`) **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
+`simulator/` is a desktop app for Windows, Linux (x86_64) and macOS (Apple Silicon) that runs `PropMaker_Feather/code.py` (with its modules and `settings.toml`) **unmodified** and shows the droid in 3D, so behaviours can be developed without the robot. A Rust (Bevy) app embeds Python and swaps the CircuitPython hardware modules (`board`, `adafruit_servokit`, `adafruit_lis3dh`, `audiomixer`, ...) for stand-ins that drive the 3D model, the lights and your speakers.
 
 ### Download the simulator
 
-Every update to `main` is published as a release, with the Windows simulator ready to run: no Docker, Rust or Python needed.
+Every update to `main` is published as a release, with the simulator ready to run on Windows, Linux and macOS: no Docker, Rust or Python needed. Each download also holds the firmware (`PropMaker_Feather/`), which the simulator finds on its own. To check a download, compare its SHA-256 with the one in the release notes or `SHA256SUMS`.
+
+**Windows** (x86_64)
 
 1. Download `ddl0-sim-windows-<version>.zip` from the [latest release](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/releases/latest).
-2. Unzip it anywhere and run `simulator\dist\ddl0-sim.exe` inside it. The zip also holds the firmware (`PropMaker_Feather\`), which the simulator finds on its own.
+2. Unzip it anywhere and run `simulator\dist\ddl0-sim.exe` inside it.
 
-The exe isn't code-signed, so Windows SmartScreen may warn the first time: choose *More info* → *Run anyway*. To check the download, compare its SHA-256 with the one in the release notes or `SHA256SUMS`:
+The exe isn't code-signed, so Windows SmartScreen may warn the first time: choose *More info* → *Run anyway*. To check the download:
 
 ```powershell
 Get-FileHash .\ddl0-sim-windows-<version>.zip -Algorithm SHA256
 ```
+
+**Linux** (x86_64; needs the libraries listed under [On Linux](#on-linux))
+
+1. Download `ddl0-sim-linux-<version>.tar.gz` from the latest release.
+2. Unpack it and run the simulator:
+
+```bash
+tar -xzf ddl0-sim-linux-<version>.tar.gz
+```
+
+```bash
+./ddl0-sim-linux-<version>/simulator/dist/ddl0-sim
+```
+
+To check the download: `sha256sum ddl0-sim-linux-<version>.tar.gz`.
+
+**macOS** (Apple Silicon, macOS 11 or later; Intel Macs aren't supported)
+
+1. Download `ddl0-sim-macos-arm64-<version>.tar.gz` from the latest release.
+2. Unpack it (double-click it in Finder, or `tar -xzf` in Terminal) and run `simulator/dist/ddl0-sim` inside it.
+
+The app isn't signed or notarised by Apple, so Gatekeeper blocks it the first time ("can't be opened" or "is damaged"). Either right-click `ddl0-sim` in Finder, choose *Open*, then *Open* again (on macOS 15 and later: try to open it once, then *System Settings* → *Privacy & Security* → *Open Anyway*), or clear the download's quarantine flag on the whole unpacked folder:
+
+```bash
+xattr -dr com.apple.quarantine ddl0-sim-macos-arm64-<version>
+```
+
+To check the download: `shasum -a 256 ddl0-sim-macos-arm64-<version>.tar.gz`.
 
 ### Build and run
 
@@ -140,7 +170,25 @@ The machine running it needs:
 
 A `ddl0-sim-linux` build is attached to every CI run. GitHub's download is a zip, which drops the execute bit: run `chmod +x ddl0-sim` in the unzipped folder first, and put the folder at `simulator/dist/` in a checkout (it loads `simulator/assets`, `sim.toml` and the scenarios from the folder above it).
 
-Known limits on Linux: a panel torn off into its own window opens at the default position rather than under the pointer, and *Follow system* reads GNOME's settings (dark style, high contrast, animations, text scaling factor) through `gsettings`; on other desktops the app's defaults apply. macOS is part 2 of #93.
+Known limits on Linux: a panel torn off into its own window opens at the default position rather than under the pointer, and *Follow system* reads GNOME's settings (dark style, high contrast, animations, text scaling factor) through `gsettings`; on other desktops the app's defaults apply.
+
+#### On macOS
+
+Apple Silicon only (Intel Macs aren't supported). macOS has no Docker step: the build runs natively. It needs [rustup](https://rustup.rs) and Xcode's command line tools (`xcode-select --install`, for the linker and `codesign`); the script installs neither, and tells you what's missing. Then install the Rust version the project uses:
+
+```bash
+rustup toolchain install 1.92.0 --profile minimal -c rustfmt,clippy
+```
+
+```bash
+./simulator/build.sh --run
+```
+
+The script downloads the CPython it bundles (python-build-standalone 3.13.5, SHA-256 checked) into `simulator/.python-macos/` once. `--debug` and `--test` work as on Linux. Output goes to `simulator/dist/`: the `ddl0-sim` binary, which loads Python from `dist/python/` beside it, signed ad hoc (Apple Silicon won't run an unsigned binary). A binary you build yourself isn't quarantined, so Gatekeeper doesn't ask.
+
+A `ddl0-sim-macos-arm64` build is attached to every CI run. Like the Linux one it's a zip without the execute bit: run `chmod +x ddl0-sim` and `xattr -dr com.apple.quarantine .` in the unzipped folder, and put the folder at `simulator/dist/` in a checkout.
+
+Known limits on macOS: a panel torn off into its own window opens at the default position rather than under the pointer. *Follow system* reads dark mode, *Increase contrast* and *Reduce motion* through `defaults`; macOS has no system text size for apps, so the scale starts at 100%.
 
 ### Using it
 
@@ -184,7 +232,7 @@ Known limits on Linux: a panel torn off into its own window opens at the default
   - The 3D view itself takes focus: F6 to its tab, then Tab. While it is focused (the ring goes round the whole view) the arrow keys orbit the camera, Shift+arrows pan, + and − zoom, and Home goes back to the starting view; Tab or Esc leaves. Screen readers call it "3D view".
   - Everything else the mouse does in the view has a key or a control: *B* boops the droid (see Motion below), and the Parts panel's *Add* buttons place parts (see [Placing parts with the mouse](#placing-parts-with-the-mouse)).  See [Accessibility](#accessibility) for screen readers, Voice Access and the full key list.
 - **Audio** (panel): what's playing, with a level meter, and a *Stop* button. *Mute* and the volume slider change only the simulator's output; the firmware's own mixer level still applies. Below that is every WAV in `PropMaker_Feather/sounds/` with its format and a *Play* button (played in the simulator only; `code.py` doesn't see it). A file the board couldn't play is flagged in red: not PCM, not 8- or 16-bit, or a sample rate, channel count or bit depth that differs from the `audiomixer.Mixer` in `hardware.py`. So is any `play_wav("x.wav")` in the firmware whose file isn't there, with the file and line that asks for it.
-- **Deploy to CIRCUITPY** (*⬆ Deploy*, at the right of the toolbar): finds the board's drive by its `CIRCUITPY` label (on Linux, where the desktop mounts it: `/media/$USER/CIRCUITPY`, `/run/media/$USER/CIRCUITPY` or `/media/CIRCUITPY`), lists the files that are new or changed (compared byte for byte) and copies them after you confirm. It copies the top-level `.py` files, `settings.toml`, `behaviours/` and `sounds/`; it never touches `lib/` or `boot_out.txt`, and never deletes anything on the board. `code.py` goes last, so the board restarts once with every file in place. Each copied file is logged as `[sim] deployed ...`. While log mode is on the drive is read-only to the computer, so turn it off first (see [Logging on the robot](#logging-on-the-robot)).
+- **Deploy to CIRCUITPY** (*⬆ Deploy*, at the right of the toolbar): finds the board's drive by its `CIRCUITPY` label (on Linux, where the desktop mounts it: `/media/$USER/CIRCUITPY`, `/run/media/$USER/CIRCUITPY` or `/media/CIRCUITPY`; on macOS, `/Volumes/CIRCUITPY`), lists the files that are new or changed (compared byte for byte) and copies them after you confirm. It copies the top-level `.py` files, `settings.toml`, `behaviours/` and `sounds/`; it never touches `lib/` or `boot_out.txt`, and never deletes anything on the board. `code.py` goes last, so the board restarts once with every file in place. Each copied file is logged as `[sim] deployed ...`. While log mode is on the drive is read-only to the computer, so turn it off first (see [Logging on the robot](#logging-on-the-robot)).
 - **3D view toolbar**: a small bar in the top-right corner of the 3D view holds the camera views (*Front*, *Side*, *Top*, *Eyes*, a close-up of the eyes, and *Reset*, the start-up view), *Light*, *📷 Screenshot*, *⏺ Record* and *Overlays*. It stays there in focus mode. Clicks on the bar or its menus never boop the droid or turn the camera. Tab reaches its buttons like any other control, and every one of them is also in the command palette.
 - **Camera**: left/right drag to orbit, middle drag to pan, scroll to zoom. From the keyboard, with the 3D view focused: arrows orbit (5° a press; up looks down from higher), Shift+arrows pan, + / − zoom, Home resets; holding a key keeps it moving, within the same limits as the mouse. With *Animations* on each key step glides briefly, and off it jumps. A view button glides the camera to that view in about half a second; dragging or scrolling during the glide takes over from where it is.
 - **Overlays** (*Overlays* in the 3D view's toolbar, or type `overlay` in the command palette): readouts drawn on the model, each switched on its own.
@@ -263,7 +311,7 @@ To reach the **3D view**, press F6 until its tab is active, then Tab; a ring goe
 #### Known limits
 
 - Tested with Narrator only through UI Automation (the events it reads), not by ear; NVDA, JAWS and Dragon are untested. Voice Access has been checked through the same calls it makes, not by voice.
-- Screen readers are tested on Windows only. The Linux build exposes the same AccessKit tree, but Orca is untested; macOS (VoiceOver) depends on part 2 of #93.
+- Screen readers are tested on Windows only. The Linux and macOS builds expose the same AccessKit tree, but Orca and VoiceOver are untested.
 - The dock's collapse and close-all buttons, its tab-bar scroll bars and the dividers between panels have no names (each panel's own *Close* button and the command palette do the same jobs), and a slider's number box is unnamed (its slider is named).
 - After Del deletes a part, focus goes back to the window; press F6 to return to a panel.
 - The status line is a live region, not a Tab stop. Read older events in the Log panel.
@@ -414,9 +462,11 @@ The tests for `settings.rs`, `wav.rs` and `deploy.rs` need only `rustc`, so they
 
 `simulator\build.ps1` runs `headless.py` in the dev image as its last step, so a firmware change that breaks a behaviour fails the build. The failing checks and scenarios are listed as `FAIL` lines. The simulator is still built in `simulator\dist\`, so you can open it to see what went wrong.
 
-GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run. When everything passes, a `package` job packs the build into the release zips (see [Releasing](#releasing)) and attaches them to the run as `ddl0-release-preview`, so packaging is checked on every PR.
+GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run. When everything passes, a `package` job packs every platform's build into the release archives (see [Releasing](#releasing)) and attaches them to the run as `ddl0-release-preview`, so packaging is checked on every PR.
 
 A `build-linux` job builds the Linux simulator in the same image (`PLATFORM=linux` for `docker/build.sh`), with rustfmt and clippy, runs the Rust unit tests and the scenario checks there, and attaches the built `ddl0-sim-linux` folder to the run. Locally on Linux, `./simulator/build.sh --test` does the same.
+
+A `build-macos` job builds natively on an Apple Silicon runner (`macos-14`, `PLATFORM=macos`, Rust 1.92 through rustup) with rustfmt, clippy and the Rust unit tests, checks that the binary loads libpython through `@rpath` and is signed, and attaches `ddl0-sim-macos-arm64`. It skips the scenario checks (`SCENARIOS=0`): that runner is a VM whose sleeps run 5-10x long, too slow for their real-time clock, and they're the same Python the other jobs check. On a real Mac, `./simulator/build.sh --test` runs them. `package` waits for every build job.
 
 ### Releasing
 
@@ -426,10 +476,11 @@ Releases are automatic: every push to `main` (a merged `Documentation → main` 
 - **Notes** list every PR merged since the previous tag, grouped by branch prefix (`feature/` Features, `bugfix/` Fixes, `docs/` Docs, `ci/` CI, anything else Other), with title, link, author and the issues each closed, then any commits that came in outside a PR. They're built by `.github/scripts/release_notes.py` from the merge commits, because PRs reach `main` through `Documentation`, so GitHub's own generated notes would list just the one `Documentation → main` PR.
 - **Assets**, built by `simulator/release/package.sh` from tracked files only:
   - `ddl0-sim-windows-<version>.zip`: the repo layout the app expects: `PropMaker_Feather/`, `simulator/` (assets, shims, scenarios, docs, `sim.toml`, `parts.example.toml`) and `simulator/dist/` (exe, bundled Python, MinGW DLLs), plus `README.md` and `LICENSE`. It leaves out the unit-test exe and anything the app saves beside the exe (prefs, captures, `fs/`, layouts, drop-in shims).
+  - `ddl0-sim-linux-<version>.tar.gz` and `ddl0-sim-macos-arm64-<version>.tar.gz`: the same layout, with `ddl0-sim` and its bundled Python in `simulator/dist/`. They're tar.gz so the binary keeps its execute bit.
   - `ddl0-firmware-<version>.zip`: the contents of `PropMaker_Feather/`, to copy to the root of CIRCUITPY.
   - `SHA256SUMS`, also shown as a table in the notes.
 
-  The sound files aren't in the repo, so neither zip has `sounds/`: add your own as described in [Setup & Usage](#setup--usage).
+  The sound files aren't in the repo, so no archive has `sounds/`: add your own as described in [Setup & Usage](#setup--usage).
 - The `release` job is the only one with write access (`contents: write`), uses only `GITHUB_TOKEN`, and runs one at a time, so two quick merges can't claim the same tag. Every action is pinned to a commit SHA.
 
 To try the packaging locally, run it in the dev image after a build, from the repo root (it reads tracked files with `git archive`, so commit first):
@@ -437,6 +488,8 @@ To try the packaging locally, run it in the dev image after a build, from the re
 ```powershell
 docker run --rm -v "${PWD}:/workspace" -w /workspace ddl0-sim-dev bash -c "git config --global --add safe.directory /workspace && bash simulator/release/package.sh windows dev-test release-out"
 ```
+
+The platform is `windows`, `linux` or `macos-arm64`; an optional fourth argument names the built folder (default `simulator/dist`), so CI packs each platform's download from its own folder into the same `release-out/`.
 
 ### The 3D model
 

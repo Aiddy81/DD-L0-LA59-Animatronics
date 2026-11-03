@@ -408,7 +408,8 @@ fn resolve(choice: ThemeChoice, os: &OsPrefs) -> ResolvedTheme {
 }
 
 /// Windows' text size (a percentage, 100–225) as a UI scale; missing or zero
-/// means unset.
+/// means unset. macOS has no such setting.
+#[cfg(any(windows, target_os = "linux", test))]
 fn text_scale(percent: Option<u32>) -> f32 {
     match percent {
         Some(p) if p > 0 => clamp_scale(p as f32 / 100.0),
@@ -448,29 +449,34 @@ fn read_os() -> OsPrefs {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn read_os() -> OsPrefs {
     OsPrefs::default()
 }
 
-/// The GNOME settings, as last read. `gsettings` is a subprocess, too slow
-/// for the frame loop that polls this, so the first call (at startup) reads
-/// it directly and then a background thread keeps the copy current.
-#[cfg(target_os = "linux")]
+/// The desktop settings, as last read. Reading them runs a subprocess
+/// (`gsettings` on Linux, `defaults` on macOS), too slow for the frame loop
+/// that polls this, so the first call (at startup) reads them directly and
+/// then a background thread keeps the copy current.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn read_os() -> OsPrefs {
     use std::sync::{Mutex, OnceLock};
+    #[cfg(target_os = "linux")]
+    let read = read_gsettings;
+    #[cfg(target_os = "macos")]
+    let read = read_defaults;
     static LATEST: OnceLock<Mutex<OsPrefs>> = OnceLock::new();
     let mut found = false;
     let latest = LATEST.get_or_init(|| {
-        let (os, any) = read_gsettings();
+        let (os, any) = read();
         found = any;
         Mutex::new(os)
     });
-    // No GNOME settings at all (another desktop): nothing to follow.
+    // No settings at all (another Linux desktop): nothing to follow.
     if found {
         let poll = move || loop {
             std::thread::sleep(std::time::Duration::from_secs_f64(OS_POLL_S));
-            let (os, _) = read_gsettings();
+            let (os, _) = read();
             if let Ok(mut l) = latest.lock() {
                 *l = os;
             }
@@ -538,6 +544,66 @@ fn parse_gsettings(
         high_contrast: flag(high_contrast).unwrap_or(defaults.high_contrast),
         animations: flag(animations).unwrap_or(defaults.animations),
         text_scale: text_scale(percent),
+    }
+}
+
+/// The macOS settings, and whether any of them could be read. macOS has no
+/// system text size for apps to follow, so the scale stays at 100%.
+#[cfg(target_os = "macos")]
+fn read_defaults() -> (OsPrefs, bool) {
+    // `defaults read` exits non-zero when a key was never set, which for
+    // these keys means its default (light, full motion, normal contrast);
+    // that reads as an empty value. None only if `defaults` didn't run.
+    fn get(args: &[&str]) -> Option<String> {
+        let out = crate::pyhost::command("defaults")
+            .arg("read")
+            .args(args)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        Some(if out.status.success() {
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        } else {
+            String::new()
+        })
+    }
+    const UA: &str = "com.apple.universalaccess";
+    let values = [
+        get(&["-g", "AppleInterfaceStyle"]),
+        get(&[UA, "increaseContrast"]),
+        get(&[UA, "reduceMotion"]),
+    ];
+    let [style, contrast, reduce_motion] = values.each_ref().map(Option::as_deref);
+    let any = values.iter().any(Option::is_some);
+    (parse_defaults(style, contrast, reduce_motion), any)
+}
+
+/// The macOS settings as `defaults read` prints them, an empty value for one
+/// that was never set. One that couldn't be read, or isn't recognised, keeps
+/// its default.
+#[cfg(any(target_os = "macos", test))]
+fn parse_defaults(
+    interface_style: Option<&str>,
+    increase_contrast: Option<&str>,
+    reduce_motion: Option<&str>,
+) -> OsPrefs {
+    let defaults = OsPrefs::default();
+    let flag = |v: Option<&str>| match v.map(str::trim) {
+        Some("1") => Some(true),
+        Some("0" | "") => Some(false),
+        _ => None,
+    };
+    // Set to "Dark" in dark mode (and in Auto while it's dark); unset in light.
+    let dark = match interface_style.map(str::trim) {
+        Some("Dark") => Some(true),
+        Some("") => Some(false),
+        _ => None,
+    };
+    OsPrefs {
+        dark: dark.unwrap_or(defaults.dark),
+        high_contrast: flag(increase_contrast).unwrap_or(defaults.high_contrast),
+        animations: flag(reduce_motion).map_or(defaults.animations, |reduce| !reduce),
+        text_scale: defaults.text_scale,
     }
 }
 
@@ -1136,6 +1202,29 @@ mod tests {
         let scale = |v| parse_gsettings(None, None, None, Some(v)).text_scale;
         assert_eq!(scale("-2.0"), 1.0);
         assert_eq!(scale("5.0"), SCALE_MAX);
+    }
+
+    #[test]
+    fn macos_settings_parse_and_bad_ones_keep_defaults() {
+        let os = parse_defaults(Some("Dark\n"), Some("1\n"), Some("1\n"));
+        assert_eq!(
+            os,
+            OsPrefs {
+                dark: true,
+                high_contrast: true,
+                animations: false,
+                text_scale: 1.0,
+            }
+        );
+        // Keys never set: light mode, normal contrast, full motion.
+        let unset = parse_defaults(Some(""), Some(""), Some(""));
+        assert!(!unset.dark && !unset.high_contrast && unset.animations);
+        assert!(parse_defaults(None, None, Some("0")).animations);
+        assert_eq!(parse_defaults(None, None, None), OsPrefs::default());
+        assert_eq!(
+            parse_defaults(Some("Light"), Some("yes"), Some("2")),
+            OsPrefs::default()
+        );
     }
 
     #[test]
