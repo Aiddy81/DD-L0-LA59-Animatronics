@@ -1,5 +1,7 @@
 # DD-L0-LA59 Animatronics Firmware
 
+📖 **New here? The [project wiki](https://github.com/Aiddy81/DD-L0-LA59-Animatronics/wiki) has step-by-step guides with pictures** for trying the simulator, building the robot and changing how it behaves, for every skill level. This README is the developer reference.
+
 ## Overview
 This project implements interactive animatronic behaviors for a custom device using Adafruit hardware and CircuitPython 9.x. The system features servo-driven wings, RGB LED eyes, sound playback, and motion sensing, all orchestrated with asynchronous code for lifelike, responsive actions.
 
@@ -87,11 +89,13 @@ To check logging before deploying, tick *log_mode* in the simulator and restart;
 | noseBoops.wav    | nose_boops()             | Gentle/loving response to motion          |
 | youWho.wav       | attention_animation()    | Attention-seeking after idle period       |
 | trenchRun.wav    | trench_run()             | Trench run after idle period (a short clip, looped for the whole run) |
-| 001.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 003.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 005.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 007.wav          | play_Wav_task (random)   | General/random sound effect               |
-| 008.wav          | play_Wav_task (random)   | General/random sound effect               |
+| 001.wav          | main() (random)          | General/random sound effect               |
+| 003.wav          | main() (random)          | General/random sound effect               |
+| 005.wav          | main() (random)          | General/random sound effect               |
+| 007.wav          | main() (random)          | General/random sound effect               |
+| 008.wav          | main() (random)          | General/random sound effect               |
+
+After the boot sequence, `main()` in `code.py` plays one WAV picked at random from every file in `sounds/` (the named ones above included), once.
 
 Place these files in `PropMaker_Feather/sounds/` with the exact names above. You can add or replace WAV files for custom effects, but ensure the filenames match those referenced in the code or update the code accordingly.
 
@@ -316,7 +320,6 @@ To reach the **3D view**, press F6 until its tab is active, then Tab; a ring goe
 - After Del deletes a part, focus goes back to the window; press F6 to return to a panel.
 - The status line is a live region, not a Tab stop. Read older events in the Log panel.
 - Text sent by dictation reaches text fields, but dictating into fields has not been tested by voice.
-- The Lola glTF model crashes the app on this Bevy version until the fix in PR #101 is merged; pick *Primitive* under *Model* in the toolbar's Options (or set `model_gltf = false` in the prefs file).
 
 ### Matching the real board
 
@@ -461,6 +464,8 @@ The simulator's Rust unit tests run with `.\simulator\build.ps1 -Test`. The buil
 The tests for `settings.rs`, `wav.rs` and `deploy.rs` need only `rustc`, so they can also be run on their own, which is quicker. For the Settings panel's `settings.toml` reader and writer (`simulator/src/settings.rs`): `docker run --rm -v "${PWD}:/workspace" -w /workspace/simulator ddl0-sim-dev bash -c "rustc --edition 2021 --test src/settings.rs -o /tmp/settings-test && /tmp/settings-test"`. The Audio panel's WAV reader (`src/wav.rs`) and the deploy planner (`src/deploy.rs`, against temporary folders, never a real drive) are tested the same way: swap the file name in that command.
 
 `simulator\build.ps1` runs `headless.py` in the dev image as its last step, so a firmware change that breaks a behaviour fails the build. The failing checks and scenarios are listed as `FAIL` lines. The simulator is still built in `simulator\dist\`, so you can open it to see what went wrong.
+
+The wiki's pages live in `wiki/` and are reviewed in PRs like code; `.github/workflows/wiki-sync.yml` publishes them to the GitHub wiki when `wiki/` changes on `main` (see the wiki's *Contributing and branching* page for when to update it).
 
 GitHub Actions (`.github/workflows/simulator.yml`) runs that test on every PR. It also builds the Windows simulator in the same Docker image, with rustfmt and clippy, and attaches the built `ddl0-sim-windows` folder to the run for download. Then a Windows job downloads that folder and runs every Rust unit test from it (`ddl0-sim-tests.exe`, which is also in the download). A failing test fails the run. When everything passes, a `package` job packs every platform's build into the release archives (see [Releasing](#releasing)) and attaches them to the run as `ddl0-release-preview`, so packaging is checked on every PR.
 
